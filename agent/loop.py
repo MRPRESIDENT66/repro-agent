@@ -46,10 +46,12 @@ STRATEGY — act, don't over-analyze:
   - You have a limited step budget; spend it running, not browsing files.
 
 Watch out (common and real):
-  - dataset download links may be dead (the canonical CIFAR URL 403s) → use a
-    mirror: `datasets.load_dataset('uoft-cs/cifar10', split='test')`.
-  - library APIs drift (dataset ids need a namespace, function signatures change).
-  - torch.hub may prompt to trust the repo → pass trust_repo=True."""
+  - dataset download links may be dead → use a mirror (e.g. HuggingFace `datasets`).
+  - library APIs drift (dataset ids may need a namespace; function signatures change).
+  - a model may need a specific load path (a registration import, a trust flag, a
+    helper library named on its model card) — when unsure, read the card/README.
+  - preprocessing matters (normalization, which label field) — read it from the
+    model/config rather than guessing."""
 
 
 def _truncate(text: str, limit: int = 3000) -> str:

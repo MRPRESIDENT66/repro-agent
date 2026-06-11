@@ -46,9 +46,19 @@ separately, not counted as an agent failure.
 
 Can retrieval locate the eval entry + config in a **large** repo
 (`mmpretrain`, 1858 files)? 5 hint-light queries, gold = the file(s) you must
-land on; metric = recall@k. (mmpretrain's full reproduction is `env_blocked`
-— `mmcv` won't build on Python 3.12 — but navigation is measured on the cloned
-source regardless.)
+land on; metric = recall@k. (mmpretrain's full reproduction is `env_blocked` and
+**navigation is measured on the cloned source regardless** — see below.)
+
+> **mmpretrain env-block, fully chased (a perfect case study):** its core dep
+> **mmcv** won't install on **Python 3.12 anywhere** — Mac *and* Linux Docker —
+> because the build chain uses `pkgutil.ImpImporter`, removed in 3.12. On
+> **Python 3.11** there's no prebuilt wheel for the torch/cpu combo → source
+> build, which fails (numpy-2 ABI). So a popular, well-maintained repo is blocked
+> at the *environment* step across environments. That's the thesis made concrete:
+> getting the env ready is often the hardest, most-blocking step — which is why a
+> reproduction agent + staged measurement is worth building. The `DockerSession`
+> backend is the right vehicle for such repos but can't fix dependency hell; a
+> fully clone-navigate-AND-run oracle remains the reproducibility lottery.
 
 | Rung | recall@5 | recall@10 |
 |---|---|---|

@@ -1,0 +1,19 @@
+# envs
+.venv/
+.venv-*/
+__pycache__/
+*.pyc
+
+# secrets
+.env
+
+# data / weights / cloned repos / per-task workspaces (large, regenerated)
+data/
+checkpoints/
+workspaces/
+repos/
+
+# os / ide
+.DS_Store
+.idea/
+.pytest_cache/

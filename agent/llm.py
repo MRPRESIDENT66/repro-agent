@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from agent.config import CHAT_MODEL, DASHSCOPE_API_KEY, DASHSCOPE_BASE_URL
+from agent.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 
 Message = dict[str, str]  # {"role": "system"|"user"|"assistant", "content": str}
 
@@ -20,19 +20,25 @@ class LLM(Protocol):
     def complete(self, messages: list[Message]) -> str: ...
 
 
-class DashScopeLLM:
-    def __init__(self, model: str = CHAT_MODEL, temperature: float = 0.0) -> None:
+class ChatLLM:
+    """OpenAI-compatible chat LLM (DeepSeek by default; works with any such API)."""
+
+    def __init__(self, model: str = LLM_MODEL, temperature: float = 0.0) -> None:
         from langchain_openai import ChatOpenAI
 
         self._llm = ChatOpenAI(
             model=model,
-            api_key=DASHSCOPE_API_KEY,
-            base_url=DASHSCOPE_BASE_URL,
+            api_key=LLM_API_KEY,
+            base_url=LLM_BASE_URL,
             temperature=temperature,
         )
 
     def complete(self, messages: list[Message]) -> str:
         return self._llm.invoke(messages).content
+
+
+# Back-compat alias (was DashScope-specific).
+DashScopeLLM = ChatLLM
 
 
 class ScriptedLLM:

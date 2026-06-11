@@ -86,6 +86,27 @@ sub-tasks are long/noisy enough that a shared context would degrade — these
 aren't. Reported as-is (the design said: value is isolation, not success;
 report n.s. if so).
 
+## Context compression (M4)
+
+The debug trajectory grows over many repair cycles. Compression keeps
+system+task+the last few turns full and shrinks older observations/tracebacks.
+
+- On a representative 15-step env-hell trajectory: **27.3k → 11.1k chars (−59%)**,
+  recent context untouched (unit-tested).
+- Live ablation on `resnet18_cifar100` was **inconclusive**: both compress on/off
+  reproduced (success unaffected), but the agent happened to solve it in 4–5
+  steps — a *short* trajectory, so compression never engaged. Reported as-is:
+  compression bounds context on **long** debug sequences (env hell); on quick
+  reproductions it's a no-op.
+
+## Repo-search tool wired into the loop
+
+The agent can emit a ` ```search ` block (a natural-language query) once it has
+cloned a large repo; it returns the most relevant files via **BM25 + LLM rerank
+(no embeddings — the ladder showed dense doesn't help)**. Verified standalone on
+mmpretrain ("evaluate resnet18 on cifar10" → the right config ranks #1). Only
+exercised when an oracle requires cloning a large repo (currently env-blocked).
+
 ## Honest caveats
 
 - Small n (5–8 runs/oracle); single model (deepseek-chat). Numbers are

@@ -49,6 +49,22 @@ def test_gives_up_at_budget(tmp_path: Path) -> None:
     assert not r.gave_final and r.steps == 4
 
 
+def test_compress_shrinks_old_keeps_recent() -> None:
+    from agent.loop import _compress
+
+    msgs = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "TASK"}]
+    for i in range(8):
+        msgs.append({"role": "assistant", "content": f"a{i}"})
+        msgs.append({"role": "user", "content": "Observation:\n" + "x" * 1000})
+    out = _compress(msgs, keep_recent=4, max_old=240)
+
+    assert out[0]["content"] == "SYS" and out[1]["content"] == "TASK"  # head full
+    assert out[-4:] == msgs[-4:]                                       # recent full
+    old_blob = next(m["content"] for m in out[2:-4] if "Observation" in m["content"])
+    assert "compressed" in old_blob and len(old_blob) < 1000          # old shrunk
+    assert sum(len(m["content"]) for m in out) < sum(len(m["content"]) for m in msgs)
+
+
 def test_replay_script_records_commands(tmp_path: Path) -> None:
     s = _session(tmp_path)
     llm = ScriptedLLM(["```bash\necho one\n```", "```bash\necho two\n```", "FINAL: 0"])

@@ -21,6 +21,7 @@ from agent.llm import LLM, Message
 from exec.session import Session
 
 _BASH = re.compile(r"```(?:bash|sh)?\s*\n(.*?)```", re.DOTALL)
+_SEARCH = re.compile(r"```search\s*\n(.*?)```", re.DOTALL)
 _FINAL = re.compile(r"FINAL:\s*(.*)", re.DOTALL)
 
 SYSTEM = """You are an ML reproduction agent with a persistent bash shell in a \
@@ -35,6 +36,9 @@ Protocol — every reply is EITHER:
   1. exactly one ```bash code block: a single shell command. Write scripts with a
      heredoc, e.g.   cat > eval.py <<'EOF' ... EOF   then run them.
   2. a line `FINAL: <number>` once you have the reproduced metric.
+  3. if you have cloned a LARGE repo and need to find the eval entry/config, a
+     ```search code block with a natural-language query (e.g. "evaluate resnet18
+     on cifar10") — it returns the most relevant file paths in the repo.
 You only see what commands print — print the metric clearly. Keep each step small.
 
 STRATEGY:
@@ -93,6 +97,23 @@ def _repair(tier: int, obs: str) -> str:
     return base + "Still failing after retries. Abandon this approach and try a different method."
 
 
+def _compress(messages: list[Message], keep_recent: int = 4, max_old: int = 240) -> list[Message]:
+    """Compress the long debug trajectory: keep system+task and the last few turns
+    full, shrink older observations/tracebacks (stale, but the model still wants
+    the gist). Bounds the context as the trajectory grows over many repair cycles.
+    """
+    if len(messages) <= 2 + keep_recent:
+        return messages
+    out = list(messages[:2])  # system + task, always full
+    for m in messages[2:-keep_recent]:
+        c = m["content"]
+        if len(c) > max_old:
+            c = c[:max_old] + f"\n[... {len(c) - max_old} chars compressed]"
+        out.append({"role": m["role"], "content": c})
+    out.extend(messages[-keep_recent:])
+    return out
+
+
 @dataclass
 class AgentResult:
     final_raw: str | None          # the agent's FINAL text (raw)
@@ -101,23 +122,35 @@ class AgentResult:
     ran_eval: bool                 # at least one command produced stdout
     gave_final: bool
     transcript: list[Message] = field(default_factory=list)
+    peak_ctx_chars: int = 0        # largest context actually sent to the LLM
 
 
-def run_agent(task: str, expected: float, session: Session, llm: LLM, max_steps: int = 12) -> AgentResult:
+def run_agent(task: str, expected: float, session: Session, llm: LLM,
+              max_steps: int = 12, compress: bool = False) -> AgentResult:
     messages: list[Message] = [
         {"role": "system", "content": SYSTEM.format(task=task, expected=expected)},
         {"role": "user", "content": "Begin."},
     ]
     errors = consecutive = 0
     ran_eval = False
+    peak = 0
 
     for step in range(1, max_steps + 1):
-        reply = llm.complete(messages)
+        view = _compress(messages) if compress else messages
+        peak = max(peak, sum(len(m["content"]) for m in view))
+        reply = llm.complete(view)
         messages.append({"role": "assistant", "content": reply})
 
         final = _FINAL.search(reply)
         if final:
-            return AgentResult(final.group(1).strip(), step, errors, ran_eval, True, messages)
+            return AgentResult(final.group(1).strip(), step, errors, ran_eval, True, messages, peak)
+
+        sq = _SEARCH.search(reply)
+        if sq:
+            from retrieval.search import search_repo
+            obs = search_repo(sq.group(1).strip(), session.workdir, llm)
+            messages.append({"role": "user", "content": f"Search results:\n{obs}"})
+            continue
 
         m = _BASH.search(reply)
         if not m:
@@ -136,4 +169,4 @@ def run_agent(task: str, expected: float, session: Session, llm: LLM, max_steps:
             consecutive = 0
             messages.append({"role": "user", "content": f"Observation:\n{obs}"})
 
-    return AgentResult(None, max_steps, errors, ran_eval, False, messages)
+    return AgentResult(None, max_steps, errors, ran_eval, False, messages, peak)

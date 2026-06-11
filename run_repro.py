@@ -41,7 +41,7 @@ def main() -> None:
     name = Path(manifest_path).stem
 
     session = Session(ROOT / f"workspaces/{name}", venv_python=REPRO_PY, default_timeout=400)
-    result = run_agent(build_task(m), expected, session, ChatLLM(), max_steps=15)
+    result = run_agent(build_task(m), expected, session, ChatLLM(), max_steps=20)
 
     actual = extract_number(result.final_raw) if result.gave_final else None
     all_stdout = "\n".join(r.stdout for r in session.transcript)

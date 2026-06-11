@@ -37,13 +37,18 @@ Protocol — every reply is EITHER:
   2. a line `FINAL: <number>` once you have the reproduced metric.
 You only see what commands print — print the metric clearly. Keep each step small.
 
-STRATEGY — act, don't over-analyze:
-  - Do NOT try to find the perfect setup before running. Write a complete eval
-    script and RUN it early to get a first number, then iterate on discrepancies.
-  - If your number is close but doesn't match (e.g. you get 92.1 vs 92.6), the
-    cause is usually preprocessing — try standard alternatives (e.g. a different
-    CIFAR normalization) rather than reading source for hours.
-  - You have a limited step budget; spend it running, not browsing files.
+STRATEGY:
+  - For an UNFAMILIAR model, FIRST read its actual card/README PROSE (e.g. curl
+    the raw README.md — not just API metadata) for the official load method.
+  - If a loader reports the model is "not registered" / "unknown model", its
+    architecture is almost certainly provided by a HELPER PACKAGE you must
+    install and IMPORT (the card's usage section names it; importing it registers
+    the model). Do that — do NOT rebuild the architecture by hand, which fails on
+    state-dict key mismatches and burns your budget.
+  - Once you know how to load it, RUN a full eval early to get a first number,
+    then iterate on discrepancies. Don't seek the perfect setup before running.
+  - If your number is close but off (e.g. 92.1 vs 92.6), the cause is usually
+    preprocessing (normalization) — try standard alternatives.
 
 Watch out (common and real):
   - dataset download links may be dead → use a mirror (e.g. HuggingFace `datasets`).

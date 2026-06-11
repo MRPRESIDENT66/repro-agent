@@ -34,15 +34,15 @@ def build_task(m: dict) -> str:
     )
 
 
-def main() -> None:
-    manifest_path = sys.argv[1] if len(sys.argv) > 1 else "evals/benchmark/cifar10_resnet20.yaml"
+def reproduce(manifest_path: str) -> dict:
+    """Run the full agent → verify pipeline on one manifest; return structured result."""
     m = yaml.safe_load((ROOT / manifest_path).read_text())
-    expected = float(m["target"]["expected"])
-    tol = float(m["target"]["tolerance"])
+    expected, tol = float(m["target"]["expected"]), float(m["target"]["tolerance"])
     name = Path(manifest_path).stem
+    task = build_task(m)
 
     session = Session(ROOT / f"workspaces/{name}", venv_python=REPRO_PY, default_timeout=400)
-    result = run_agent(build_task(m), expected, session, ChatLLM(), max_steps=20)
+    result = run_agent(task, expected, session, ChatLLM(), max_steps=20)
 
     actual = extract_number(result.final_raw) if result.gave_final else None
     all_stdout = "\n".join(r.stdout for r in session.transcript)
@@ -50,23 +50,33 @@ def main() -> None:
     v = verify(actual, expected, tol, evidence)
     printed_acc = any(10.0 <= float(n) <= 100.0 for n in re.findall(r"\d+\.\d+", all_stdout))
     stages = {
-        "evaluation_started": len(session.transcript) > 0,
+        "repo_inspected": len(session.transcript) > 0,
         "evaluation_completed": printed_acc,
         "metric_extracted": actual is not None,
         "claim_matched": v.match,
     }
+    scripts = sorted(session.workdir.glob("*.py"), key=lambda p: p.stat().st_mtime)
+    eval_script = scripts[-1].read_text(errors="replace") if scripts else ""
 
-    (session.workdir / "transcript.txt").write_text(
-        "".join(f"\n{'='*70}\n[{x['role'].upper()}]\n{x['content']}\n" for x in result.transcript)
-    )
-    print(f"\n========== {name} ==========")
-    print(f"task: {build_task(m)}")
-    print(f"steps={result.steps} errors={result.errors} gave_final={result.gave_final}")
-    for k, ok in stages.items():
+    return {
+        "name": name, "task": task, "stages": stages, "verdict": v.as_dict(),
+        "steps": result.steps, "errors": result.errors,
+        "commands": [r.command.splitlines()[0][:100] for r in session.transcript],
+        "eval_script": eval_script,
+    }
+
+
+def main() -> None:
+    manifest = sys.argv[1] if len(sys.argv) > 1 else "evals/benchmark/cifar10_resnet20.yaml"
+    r = reproduce(manifest)
+    print(f"\n========== {r['name']} ==========")
+    print(f"task: {r['task']}")
+    print(f"steps={r['steps']} errors={r['errors']}")
+    for k, ok in r["stages"].items():
         print(f"  [{'x' if ok else ' '}] {k}")
-    print(f"verdict: {v.as_dict()}")
-    for i, r in enumerate(session.transcript, 1):
-        print(f"  {i}. [{'OK' if r.ok else 'ERR'}] {r.command.splitlines()[0][:85]}")
+    print(f"verdict: {r['verdict']}")
+    for i, c in enumerate(r["commands"], 1):
+        print(f"  {i}. {c}")
 
 
 if __name__ == "__main__":

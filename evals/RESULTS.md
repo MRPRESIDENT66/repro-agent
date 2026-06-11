@@ -67,6 +67,25 @@ disambiguates the true entry script from look-alikes — retrieval recalls
 candidates, the LLM judges which is the entry. (n=5, illustrative not
 significant.)
 
+## Multi-agent vs single (M5, isolation ablation)
+
+Reproduce 3 CIFAR-10 ResNets (resnet20/32/56) from one repo. Multi-agent: Lead
+splits into 3, each Reproducer runs in an **isolated** context, a deterministic
+Verifier checks each. Single: one agent does all 3 in one shared context.
+
+| mode | agents | matched | max context (msgs / chars) | steps |
+|---|---|---|---|---|
+| multi | 3 | 3/3 | **26 / 21.5k** | 18 |
+| single | 1 | 3/3 | 41 / 26.9k | 20 |
+
+**Finding:** identical success (3/3 both) — multi-agent does **not** improve
+success or speed on independent easy sub-tasks. Its only measurable benefit is
+the designed **isolation**: each agent's context stays ~30–55% smaller than the
+single agent juggling all three. That isolation earns its place only when
+sub-tasks are long/noisy enough that a shared context would degrade — these
+aren't. Reported as-is (the design said: value is isolation, not success;
+report n.s. if so).
+
 ## Honest caveats
 
 - Small n (5–8 runs/oracle); single model (deepseek-chat). Numbers are

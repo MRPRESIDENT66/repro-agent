@@ -1,0 +1,10 @@
+# Multi-result oracle for the multi-agent ablation: reproduce 3 CIFAR-10 ResNets
+# from one repo (chenyaofo/pytorch-cifar-models). All verified, exact.
+repo: "https://github.com/chenyaofo/pytorch-cifar-models"
+dataset: { name: "CIFAR-10 test (10000 images)" }
+metric: top1_accuracy
+tolerance: 0.10
+subtargets:
+  - { model: cifar10_resnet20, expected: 92.60 }
+  - { model: cifar10_resnet32, expected: 93.53 }
+  - { model: cifar10_resnet56, expected: 94.37 }

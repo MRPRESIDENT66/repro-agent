@@ -1,0 +1,42 @@
+# Second verified oracle (2026-06-11). Harder than the cifar10 zoo: a real
+# research artifact (the `detectors` OOD-benchmark library), durable HF-hosted
+# checkpoint, CIFAR-100, with a non-obvious loading mechanism.
+paper: "Dadalto et al., `detectors` library — pretrained CIFAR-100 ResNet-18"
+repo: "https://github.com/edadaltocg/detectors"
+hf_model: "edadaltocg/resnet18_cifar100"
+commit_sha: "main"             # TODO pin before freezing benchmark
+backend: subprocess_mps
+model: resnet18_cifar100
+
+checkpoint:
+  source: "HuggingFace Hub edadaltocg/resnet18_cifar100/pytorch_model.bin (durable)"
+  load: "import detectors; timm.create_model('resnet18_cifar100', pretrained=True)"
+  note: "the `import detectors` registration is required — plain timm.create_model fails (the hard part)"
+dataset:
+  name: "CIFAR-100 test (10000 images)"
+  prep: "datasets.load_dataset('uoft-cs/cifar100', split='test'); use the 'fine_label' field (100 classes)"
+  normalization: "from model.pretrained_cfg: mean=(0.5071,0.4867,0.4408) std=(0.2675,0.2565,0.2761)"
+
+target:
+  metric: top1_accuracy
+  expected: 79.26
+  tolerance: 0.10               # reproduced exactly (79.26)
+
+eligibility: { supported: true, reason: null }
+
+canonical_path:
+  - "pip install detectors timm"
+  - "import detectors; m = timm.create_model('resnet18_cifar100', pretrained=True).eval()"
+  - "data: load_dataset('uoft-cs/cifar100', split='test'), label = 'fine_label'"
+  - "preprocess: Normalize with mean/std from m.pretrained_cfg"
+  - "argmax top-1 over 10000 images → Test Accuracy 79.26%"
+
+gotchas:
+  - { type: nonobvious_loading, detail: "must `import detectors` to register the arch with timm; plain timm fails" }
+  - { type: label_field,        detail: "CIFAR-100 HF has coarse_label + fine_label; the 100-class metric uses fine_label" }
+  - { type: preprocessing,      detail: "CIFAR-100 normalization differs from CIFAR-10; read it from pretrained_cfg" }
+
+# Reproducibility-crisis note: RepDistiller (HobbitLong/RepDistiller, CRD paper)
+# was a stronger navigation candidate but its checkpoint host
+# (shape2prog.csail.mit.edu) is DEAD → outcome=artifact_blocked. Kept as a real
+# eligibility example, not in the success denominator.

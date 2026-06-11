@@ -27,8 +27,9 @@ def build_task(m: dict) -> str:
         model_desc = f"the HuggingFace model '{m['hf_model']}'"
     else:
         model_desc = f"the model '{m['model']}' from the torch.hub repository '{m['repo']}'"
+    metric = m["target"]["metric"].replace("top1_accuracy", "top-1 accuracy").replace("_", " ")
     return (
-        f"Reproduce the published top-1 test accuracy (in percent) of {model_desc} "
+        f"Reproduce the published {metric} (in percent) of {model_desc} "
         f"on the {m['dataset']['name']}."
     )
 

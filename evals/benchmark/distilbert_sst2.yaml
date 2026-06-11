@@ -1,0 +1,33 @@
+# Third verified oracle (2026-06-11). Adds NLP domain diversity.
+paper: "HuggingFace distilbert-base-uncased-finetuned-sst-2-english (model card model-index)"
+repo: "https://huggingface.co/distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+hf_model: "distilbert-base-uncased-finetuned-sst-2-english"
+commit_sha: "main"
+backend: subprocess_mps
+model: distilbert-sst2
+domain: nlp
+
+checkpoint:
+  source: "HuggingFace Hub model.safetensors (durable)"
+  load: "transformers AutoModelForSequenceClassification.from_pretrained(name)"
+dataset:
+  name: "SST-2 validation set (GLUE, 872 examples)"
+  prep: "datasets.load_dataset('nyu-mll/glue', 'sst2', split='validation'); fields 'sentence' + 'label'"
+
+target:
+  metric: accuracy
+  expected: 91.06
+  tolerance: 0.10               # reproduced exactly (91.06)
+
+eligibility: { supported: true, reason: null }
+
+canonical_path:
+  - "pip install transformers datasets torch"
+  - "tok+model = AutoTokenizer / AutoModelForSequenceClassification.from_pretrained('distilbert-base-uncased-finetuned-sst-2-english')"
+  - "data: load_dataset('nyu-mll/glue','sst2',split='validation'); text='sentence', gold='label'"
+  - "tokenize (padding+truncation), logits.argmax(1) vs label → accuracy 91.06%"
+
+gotchas:
+  - { type: dataset_id,    detail: "GLUE needs namespace+config: load_dataset('nyu-mll/glue','sst2')" }
+  - { type: label_mapping, detail: "model LABEL_0=neg LABEL_1=pos aligns with SST-2 label 0/1 (no remap needed)" }
+  - { type: tokenization,  detail: "must tokenize with the model's own tokenizer (padding/truncation)" }

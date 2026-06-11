@@ -1,0 +1,36 @@
+# First verified oracle (established by hand 2026-06-11). The Agent's M1 target.
+paper: "chenyaofo/pytorch-cifar-models — CIFAR model zoo (README results table)"
+repo: "https://github.com/chenyaofo/pytorch-cifar-models"
+commit_sha: "master"            # TODO pin to a SHA before freezing the benchmark
+backend: subprocess_mps         # Mac; ~1 min eval on MPS
+model: cifar10_resnet20
+
+checkpoint:
+  source: "torch.hub (pretrained=True) → GitHub release cifar10_resnet20-4118986f.pt"
+  # loads fine once trust_repo=True is passed
+dataset:
+  name: "CIFAR-10 test (10000 images)"
+  prep: "via HuggingFace datasets load_dataset('uoft-cs/cifar10', split='test')"
+  note: "canonical toronto URL (cs.toronto.edu) returns HTTP 403 → artifact_blocked; HF mirror used"
+
+target:
+  metric: top1_accuracy
+  expected: 92.60
+  tolerance: 0.10               # exact reproduction achieved (92.60); tight on purpose
+
+eligibility: { supported: true, reason: null }
+
+# Human-verified reproduction (the oracle). Reproduced value = 92.60 (exact match).
+canonical_path:
+  - "load model: torch.hub.load('chenyaofo/pytorch-cifar-models','cifar10_resnet20',pretrained=True,trust_repo=True)"
+  - "load data: datasets.load_dataset('uoft-cs/cifar10', split='test')"
+  - "preprocess: ToTensor + Normalize(mean=[0.4914,0.4822,0.4465], std=[0.2023,0.1994,0.2010])"
+  - "eval argmax top-1 over 10000 images → Acc@1 92.60"
+
+# Gotchas hit while establishing this oracle — the failure modes the Agent must
+# self-repair, and seeds for the failure taxonomy.
+gotchas:
+  - { type: interactive_prompt, detail: "torch.hub prompts to trust repo on stdin → EOFError; fix: trust_repo=True" }
+  - { type: dataset_link_dead, detail: "toronto CIFAR-10 URL 403 Forbidden; fix: HF mirror" }
+  - { type: api_deprecation,   detail: "load_dataset('cifar10') rejected; needs namespace id 'uoft-cs/cifar10'" }
+  - { type: preprocessing,     detail: "wrong CIFAR std → 92.12 not 92.60; fix: classic std (0.2023,0.1994,0.2010)" }

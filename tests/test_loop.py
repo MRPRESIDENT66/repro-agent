@@ -1,0 +1,56 @@
+"""Agent loop + session mechanics, driven by ScriptedLLM over a real shell.
+
+No LLM cost, no torch — just proves the ReAct-over-shell loop runs commands,
+recovers from errors, and that the session persists on-disk state across steps.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from agent.llm import ScriptedLLM
+from agent.loop import run_agent
+from exec.session import Session
+
+
+def _session(tmp_path: Path) -> Session:
+    return Session(tmp_path / "ws", default_timeout=30)
+
+
+def test_happy_path(tmp_path: Path) -> None:
+    llm = ScriptedLLM(["```bash\necho hello\n```", "FINAL: 42"])
+    r = run_agent("echo a greeting", 42.0, _session(tmp_path), llm)
+    assert r.gave_final and r.final_raw == "42"
+    assert r.ran_eval and r.errors == 0
+    assert r.steps == 2
+
+
+def test_error_then_recover(tmp_path: Path) -> None:
+    llm = ScriptedLLM(["```bash\nexit 7\n```", "```bash\necho ok\n```", "FINAL: 1"])
+    r = run_agent("t", 1.0, _session(tmp_path), llm)
+    assert r.errors == 1  # the exit 7 was observed, not fatal
+    assert r.gave_final and r.steps == 3
+
+
+def test_session_state_persists(tmp_path: Path) -> None:
+    s = _session(tmp_path)
+    # write a file in one step, read it in the next → state persists across commands
+    llm = ScriptedLLM(
+        ["```bash\necho persisted > note.txt\n```", "```bash\ncat note.txt\n```", "FINAL: 0"]
+    )
+    run_agent("t", 0.0, s, llm)
+    assert "persisted" in s.read_file("note.txt")
+    assert s.transcript[-1].stdout.strip() == "persisted"  # second cmd saw the file
+
+
+def test_gives_up_at_budget(tmp_path: Path) -> None:
+    llm = ScriptedLLM(["```bash\necho loop\n```"] * 12)
+    r = run_agent("t", 0.0, _session(tmp_path), llm, max_steps=4)
+    assert not r.gave_final and r.steps == 4
+
+
+def test_replay_script_records_commands(tmp_path: Path) -> None:
+    s = _session(tmp_path)
+    llm = ScriptedLLM(["```bash\necho one\n```", "```bash\necho two\n```", "FINAL: 0"])
+    run_agent("t", 0.0, s, llm)
+    assert s.replay_script() == "echo one\necho two"

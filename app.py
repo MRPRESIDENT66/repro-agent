@@ -1,7 +1,7 @@
 """Gradio demo: pick an ML artifact, watch the agent reproduce its published
 metric — and see the deterministic verdict + the replayable evidence it leaves.
 
-    python app.py     # (run with an env that has gradio + langchain-openai)
+    python app.py     # (run with an env that has gradio + openai)
 """
 
 from __future__ import annotations
@@ -40,9 +40,9 @@ with gr.Blocks(title="Repro Agent") as demo:
     gr.Markdown(
         "# Repro Agent\n"
         "Pick an ML artifact. The agent is told only **what** to reproduce (model + "
-        "dataset + the published number) — never **how**. It sets up the env, writes "
-        "and runs the eval, self-repairs, and the result is verified by code (not the "
-        "LLM). Runs live — takes ~1–5 min."
+        "dataset + metric), never **how** or the private published value. It sets up "
+        "the env, writes and runs the eval, self-repairs, and command evidence is "
+        "verified by code (not the LLM). Runs live — takes ~1–5 min."
     )
     with gr.Row():
         manifest = gr.Dropdown(MANIFESTS, value=MANIFESTS[0] if MANIFESTS else None, label="Artifact")

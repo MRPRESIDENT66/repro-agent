@@ -12,6 +12,7 @@ checkpoint:
   load: "transformers AutoModelForSequenceClassification.from_pretrained(name)"
 dataset:
   name: "SST-2 validation set (GLUE, 872 examples)"
+  num_examples: 872
   prep: "datasets.load_dataset('nyu-mll/glue', 'sst2', split='validation'); fields 'sentence' + 'label'"
 
 target:

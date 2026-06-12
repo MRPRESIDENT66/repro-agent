@@ -1,7 +1,7 @@
 """The reproduction agent — a ReAct loop over shell actions.
 
 Each turn the LLM sees the task + the transcript and emits **either** one bash
-command (it writes scripts via heredoc) **or** ``FINAL: <number>``. We run the
+command (it writes scripts via heredoc) **or** ``FINAL: done``. We run the
 command in the persistent :class:`~exec.session.Session`, feed back a truncated
 observation, and repeat. On failure, repair escalates by consecutive error
 (traceback → re-state environment → change approach) — the same tiered idea
@@ -22,7 +22,7 @@ from exec.session import Session
 
 _BASH = re.compile(r"```(?:bash|sh)?\s*\n(.*?)```", re.DOTALL)
 _SEARCH = re.compile(r"```search\s*\n(.*?)```", re.DOTALL)
-_FINAL = re.compile(r"FINAL:\s*(.*)", re.DOTALL)
+_FINAL = re.compile(r"^\s*FINAL:\s*(.*?)\s*$", re.DOTALL)
 
 SYSTEM = """You are an ML reproduction agent with a persistent bash shell in a \
 fresh working directory. A Python env with torch, torchvision and the \
@@ -30,12 +30,18 @@ fresh working directory. A Python env with torch, torchvision and the \
 anything you install persist across steps.
 
 TASK: {task}
-The repo's published value is {expected}. Reproduce it.
+Reproduce the metric without access to the private published value.
 
 Protocol — every reply is EITHER:
   1. exactly one ```bash code block: a single shell command. Write scripts with a
      heredoc, e.g.   cat > eval.py <<'EOF' ... EOF   then run them.
-  2. a line `FINAL: <number>` once you have the reproduced metric.
+  2. a line `FINAL: done` only after an executed command printed a
+     machine-readable result line (one per evaluated target):
+     REPRO_RESULT {{"metric":"<metric_name>","actual":<number>,"num_examples":<int>}}
+     For a multi-model task, also include "target":"<model_name>".
+     The evaluation program itself must print this line; do not echo/printf it
+     afterward. For percentage tasks, actual uses percentage points (91.06, not
+     0.9106).
   3. if you have cloned a LARGE repo and need to find the eval entry/config, a
      ```search code block with a natural-language query (e.g. "evaluate resnet18
      on cifar10") — it returns the most relevant file paths in the repo.
@@ -125,10 +131,10 @@ class AgentResult:
     peak_ctx_chars: int = 0        # largest context actually sent to the LLM
 
 
-def run_agent(task: str, expected: float, session: Session, llm: LLM,
+def run_agent(task: str, session: Session, llm: LLM,
               max_steps: int = 12, compress: bool = False) -> AgentResult:
     messages: list[Message] = [
-        {"role": "system", "content": SYSTEM.format(task=task, expected=expected)},
+        {"role": "system", "content": SYSTEM.format(task=task)},
         {"role": "user", "content": "Begin."},
     ]
     errors = consecutive = 0
@@ -154,7 +160,7 @@ def run_agent(task: str, expected: float, session: Session, llm: LLM,
 
         m = _BASH.search(reply)
         if not m:
-            messages.append({"role": "user", "content": "Reply with one ```bash block or `FINAL: <number>`."})
+            messages.append({"role": "user", "content": "Reply with one ```bash block or `FINAL: done`."})
             continue
 
         r = session.shell(m.group(1).strip())

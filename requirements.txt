@@ -1,9 +1,9 @@
 # Repro Agent — the AGENT's deps. Reproduced repos get their own per-task venv
 # (with their own torch/etc.), so torch is intentionally NOT pinned here.
 
-# Orchestration + LLM
+# LLM
 langgraph==1.1.3
-langchain-openai==1.1.12
+openai==2.41.0
 
 # Retrieval (repo navigation — added in M3)
 qdrant-client==1.17.1

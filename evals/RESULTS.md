@@ -1,29 +1,39 @@
 # Benchmark results
 
 Agent: deepseek-chat (OpenAI-compatible) · execution: persistent subprocess
-session (MPS) · every match is **anti-hardcode gated** (the eval script must
-load the dataset and predict over it, not print a literal) and spot-verified by
-re-running the agent's own script independently.
+session (MPS) · every match is **blind + provenance-gated** (see protocol below):
+the agent never sees the target, and a match requires structured evidence from a
+real eval that loads data and predicts.
 
-## Reproduction reliability (hint-light tasks)
+> **Blind verification V1:** expected/tolerance stay private; the agent never
+> sees the target value. Only successful-command stdout containing a structured
+> `REPRO_RESULT` line (metric, actual, num_examples) — from a real eval (not an
+> `echo`/`printf` relay), with eval-script/command provenance — can match.
+> (Tightening it surfaced + fixed a unit ambiguity `0.91055` vs `91.055` and an
+> echo relay.) The numbers below are measured under this blind protocol; they are
+> development tasks, **not held-out**.
 
-The agent is told only *what* to reproduce (model + dataset + that a published
-value exists) — never *how* (loading mechanism, dataset id, normalization).
+## Reproduction reliability — blind, N=5 each (deepseek-chat)
+
+The agent is told only *what* to reproduce, never *how*, and **never the target
+value**.
 
 | Oracle | Domain | Difficulty | matched | avg steps | avg errors |
 |---|---|---|---|---|---|
-| `cifar10_resnet20` (92.60) | vision | easy — torch.hub | **8/8 = 100%** | 2.1 | 0.0 |
-| `distilbert_sst2` (91.06) | NLP | medium — transformers | **5/5 = 100%** | 4.0 | 0.0 |
-| `resnet18_cifar100` (79.26) | vision | hard — `import detectors` + timm | **4/5 = 80%** | 13.0 | 5.2 |
+| `cifar10_resnet20` (92.60) | vision | easy — torch.hub | **5/5 = 100%** | 4.8 | 0.0 |
+| `distilbert_sst2` (91.06) | NLP | medium — transformers | **5/5 = 100%** | 5.8 | 0.2 |
+| `resnet18_cifar100` (79.26) | vision | hard — `import detectors` + timm | **4/5 = 80%** | 9.6 | 1.6 |
 
-All matched runs reproduced the published value **exactly** (abs_diff = 0.0).
+All matched runs reproduced the published value **exactly**. The blind rates
+**match the earlier non-blind baseline** — the agent reproduces just as reliably
+without seeing the target, so it never relied on knowing the answer.
 
 ## Difficulty is the variable, not luck
 
 - Easy/medium artifacts (standard loaders) are reproduced **reliably in 2–4
   steps with no errors**.
 - The hard artifact (a non-obvious registration-via-helper-library load) costs
-  **~13 steps, ~5 errors, and fails 1/5** — the agent must read the model card,
+  **~10 steps, ~2 errors, and fails 1/5** — the agent must read the model card,
   discover it needs `import detectors`, and avoid rabbit-holing into manual
   architecture reconstruction. A targeted, *transferable* strategy fix (read the
   README prose; "not registered" → install+import the helper) moved this oracle

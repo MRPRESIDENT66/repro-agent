@@ -9,21 +9,24 @@ from __future__ import annotations
 
 class DashScopeEmbedder:
     def __init__(self) -> None:
-        from langchain_openai import OpenAIEmbeddings
+        from openai import OpenAI
 
         from agent.config import DASHSCOPE_API_KEY, DASHSCOPE_BASE_URL, EMBEDDING_MODEL
 
         self.dim = 1024
         self._batch = 10  # DashScope caps embedding batch at 10/request
-        self._emb = OpenAIEmbeddings(
-            model=EMBEDDING_MODEL,
+        self._client = OpenAI(
             api_key=DASHSCOPE_API_KEY,
             base_url=DASHSCOPE_BASE_URL,
-            check_embedding_ctx_length=False,
         )
+        self._model = EMBEDDING_MODEL
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         out: list[list[float]] = []
         for i in range(0, len(texts), self._batch):
-            out.extend(self._emb.embed_documents(texts[i : i + self._batch]))
+            response = self._client.embeddings.create(
+                model=self._model,
+                input=texts[i : i + self._batch],
+            )
+            out.extend(item.embedding for item in response.data)
         return out

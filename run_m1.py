@@ -1,13 +1,13 @@
 """M1 runner — let the agent autonomously reproduce one oracle, end to end.
 
-Orchestrator (this process) needs langchain-openai; the agent's shell uses a
+Orchestrator (this process) needs the OpenAI-compatible client; the agent's shell uses a
 SEPARATE per-task env (the oracle venv with torch/datasets) — exactly the
 design's orchestrator-env ≠ repro-env split.
 """
 
 from __future__ import annotations
 
-import re
+import shutil
 from pathlib import Path
 
 import yaml
@@ -15,7 +15,7 @@ import yaml
 from agent.llm import DashScopeLLM
 from agent.loop import run_agent
 from exec.session import Session
-from verify.check import extract_number, find_evidence, verify
+from verify.check import verify_run
 
 ROOT = Path(__file__).resolve().parent
 REPRO_PY = ROOT / ".venv-oracle" / "bin" / "python"
@@ -24,7 +24,8 @@ TASK = (
     "Reproduce the published top-1 test accuracy (in percent) of the pretrained "
     "model 'cifar10_resnet20' from the torch.hub repository "
     "'chenyaofo/pytorch-cifar-models', evaluated on the full CIFAR-10 test set "
-    "(10000 images)."
+    "(10000 images). Use the machine-readable metric id 'top1_accuracy' in "
+    "REPRO_RESULT."
 )
 
 
@@ -33,23 +34,24 @@ def main() -> None:
     expected = float(m["target"]["expected"])
     tol = float(m["target"]["tolerance"])
 
-    session = Session(ROOT / "workspaces/m1_run", venv_python=REPRO_PY, default_timeout=300)
-    result = run_agent(TASK, expected, session, DashScopeLLM(), max_steps=15)
+    workdir = ROOT / "workspaces/m1_run"
+    shutil.rmtree(workdir, ignore_errors=True)
+    session = Session(workdir, venv_python=REPRO_PY, default_timeout=300)
+    result = run_agent(TASK, session, DashScopeLLM(), max_steps=15)
 
-    actual = extract_number(result.final_raw) if result.gave_final else None
-    all_stdout = "\n".join(r.stdout for r in session.transcript)
-    evidence = find_evidence(all_stdout, actual) if actual is not None else None
-    v = verify(actual, expected, tol, evidence)
-
-    # an accuracy-like float (10..100) was actually printed by some command
-    printed_acc = any(
-        10.0 <= float(n) <= 100.0 for n in re.findall(r"\d+\.\d+", all_stdout)
+    v = verify_run(
+        session.transcript,
+        session.workdir,
+        expected=expected,
+        tolerance=tol,
+        metric=m["target"]["metric"],
+        expected_num_examples=int(m["dataset"]["num_examples"]),
     )
     # 7-stage progress (M1 subset: the env is pre-provisioned)
     stages = {
         "evaluation_started": len(session.transcript) > 0,
-        "evaluation_completed": printed_acc,
-        "metric_extracted": actual is not None,
+        "evaluation_completed": v.evidence_line is not None,
+        "metric_extracted": v.actual is not None,
         "claim_matched": v.match,
     }
 

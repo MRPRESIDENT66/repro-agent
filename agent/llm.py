@@ -24,17 +24,22 @@ class ChatLLM:
     """OpenAI-compatible chat LLM (DeepSeek by default; works with any such API)."""
 
     def __init__(self, model: str = LLM_MODEL, temperature: float = 0.0) -> None:
-        from langchain_openai import ChatOpenAI
+        from openai import OpenAI
 
-        self._llm = ChatOpenAI(
-            model=model,
+        self._client = OpenAI(
             api_key=LLM_API_KEY,
             base_url=LLM_BASE_URL,
-            temperature=temperature,
         )
+        self._model = model
+        self._temperature = temperature
 
     def complete(self, messages: list[Message]) -> str:
-        return self._llm.invoke(messages).content
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            temperature=self._temperature,
+        )
+        return response.choices[0].message.content or ""
 
 
 # Back-compat alias (was DashScope-specific).

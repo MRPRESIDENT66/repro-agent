@@ -6,7 +6,8 @@ manifest's model/dataset/claim only — never the loading mechanism or gotchas.
 
 from __future__ import annotations
 
-import re
+import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import yaml
 from agent.llm import ChatLLM
 from agent.loop import run_agent
 from exec.session import Session
-from verify.check import extract_number, find_evidence, verify
+from verify.check import verify_run
 
 ROOT = Path(__file__).resolve().parent
 REPRO_PY = ROOT / ".venv-oracle" / "bin" / "python"
@@ -27,10 +28,12 @@ def build_task(m: dict) -> str:
         model_desc = f"the HuggingFace model '{m['hf_model']}'"
     else:
         model_desc = f"the model '{m['model']}' from the torch.hub repository '{m['repo']}'"
-    metric = m["target"]["metric"].replace("top1_accuracy", "top-1 accuracy").replace("_", " ")
+    metric_id = m["target"]["metric"]
+    metric = metric_id.replace("top1_accuracy", "top-1 accuracy").replace("_", " ")
     return (
         f"Reproduce the published {metric} (in percent) of {model_desc} "
-        f"on the {m['dataset']['name']}."
+        f"on the {m['dataset']['name']}. Use the machine-readable metric id "
+        f"'{metric_id}' in REPRO_RESULT."
     )
 
 
@@ -41,29 +44,42 @@ def reproduce(manifest_path: str) -> dict:
     name = Path(manifest_path).stem
     task = build_task(m)
 
-    session = Session(ROOT / f"workspaces/{name}", venv_python=REPRO_PY, default_timeout=400)
-    result = run_agent(task, expected, session, ChatLLM(), max_steps=20)
+    workdir = ROOT / f"workspaces/{name}"
+    # A prior run's audit files contain the private verdict. Start clean so the
+    # next Agent cannot discover the expected value from stale workspace state.
+    shutil.rmtree(workdir, ignore_errors=True)
+    session = Session(workdir, venv_python=REPRO_PY, default_timeout=400)
+    result = run_agent(task, session, ChatLLM(), max_steps=20)
 
-    actual = extract_number(result.final_raw) if result.gave_final else None
-    all_stdout = "\n".join(r.stdout for r in session.transcript)
-    evidence = find_evidence(all_stdout, actual) if actual is not None else None
-    v = verify(actual, expected, tol, evidence)
-    printed_acc = any(10.0 <= float(n) <= 100.0 for n in re.findall(r"\d+\.\d+", all_stdout))
+    v = verify_run(
+        session.transcript,
+        session.workdir,
+        expected=expected,
+        tolerance=tol,
+        metric=m["target"]["metric"],
+        expected_num_examples=int(m["dataset"]["num_examples"]),
+    )
     stages = {
         "repo_inspected": len(session.transcript) > 0,
-        "evaluation_completed": printed_acc,
-        "metric_extracted": actual is not None,
+        "evaluation_completed": v.evidence_line is not None,
+        "metric_extracted": v.actual is not None,
         "claim_matched": v.match,
     }
     scripts = sorted(session.workdir.glob("*.py"), key=lambda p: p.stat().st_mtime)
     eval_script = scripts[-1].read_text(errors="replace") if scripts else ""
 
-    return {
+    output = {
         "name": name, "task": task, "stages": stages, "verdict": v.as_dict(),
         "steps": result.steps, "errors": result.errors,
         "commands": [r.command.splitlines()[0][:100] for r in session.transcript],
         "eval_script": eval_script,
     }
+    (session.workdir / "result.json").write_text(json.dumps(output, indent=2))
+    (session.workdir / "commands.sh").write_text(session.replay_script() + "\n")
+    with (session.workdir / "transcript.jsonl").open("w") as f:
+        for message in result.transcript:
+            f.write(json.dumps(message) + "\n")
+    return output
 
 
 def main() -> None:

@@ -14,6 +14,7 @@ checkpoint:
   note: "the `import detectors` registration is required — plain timm.create_model fails (the hard part)"
 dataset:
   name: "CIFAR-100 test (10000 images)"
+  num_examples: 10000
   prep: "datasets.load_dataset('uoft-cs/cifar100', split='test'); use the 'fine_label' field (100 classes)"
   normalization: "from model.pretrained_cfg: mean=(0.5071,0.4867,0.4408) std=(0.2675,0.2565,0.2761)"
 

@@ -18,16 +18,16 @@ def _session(tmp_path: Path) -> Session:
 
 
 def test_happy_path(tmp_path: Path) -> None:
-    llm = ScriptedLLM(["```bash\necho hello\n```", "FINAL: 42"])
-    r = run_agent("echo a greeting", 42.0, _session(tmp_path), llm)
-    assert r.gave_final and r.final_raw == "42"
+    llm = ScriptedLLM(["```bash\necho hello\n```", "FINAL: done"])
+    r = run_agent("echo a greeting", _session(tmp_path), llm)
+    assert r.gave_final and r.final_raw == "done"
     assert r.ran_eval and r.errors == 0
     assert r.steps == 2
 
 
 def test_error_then_recover(tmp_path: Path) -> None:
     llm = ScriptedLLM(["```bash\nexit 7\n```", "```bash\necho ok\n```", "FINAL: 1"])
-    r = run_agent("t", 1.0, _session(tmp_path), llm)
+    r = run_agent("t", _session(tmp_path), llm)
     assert r.errors == 1  # the exit 7 was observed, not fatal
     assert r.gave_final and r.steps == 3
 
@@ -38,14 +38,14 @@ def test_session_state_persists(tmp_path: Path) -> None:
     llm = ScriptedLLM(
         ["```bash\necho persisted > note.txt\n```", "```bash\ncat note.txt\n```", "FINAL: 0"]
     )
-    run_agent("t", 0.0, s, llm)
+    run_agent("t", s, llm)
     assert "persisted" in s.read_file("note.txt")
     assert s.transcript[-1].stdout.strip() == "persisted"  # second cmd saw the file
 
 
 def test_gives_up_at_budget(tmp_path: Path) -> None:
     llm = ScriptedLLM(["```bash\necho loop\n```"] * 12)
-    r = run_agent("t", 0.0, _session(tmp_path), llm, max_steps=4)
+    r = run_agent("t", _session(tmp_path), llm, max_steps=4)
     assert not r.gave_final and r.steps == 4
 
 
@@ -68,5 +68,20 @@ def test_compress_shrinks_old_keeps_recent() -> None:
 def test_replay_script_records_commands(tmp_path: Path) -> None:
     s = _session(tmp_path)
     llm = ScriptedLLM(["```bash\necho one\n```", "```bash\necho two\n```", "FINAL: 0"])
-    run_agent("t", 0.0, s, llm)
+    run_agent("t", s, llm)
     assert s.replay_script() == "echo one\necho two"
+
+
+def test_agent_prompt_does_not_contain_expected(tmp_path: Path) -> None:
+    llm = ScriptedLLM(["FINAL: done"])
+    run_agent("blind task", _session(tmp_path), llm)
+    prompt = "\n".join(m["content"] for m in llm.calls[0])
+    assert "92.60" not in prompt
+    assert "private published value" in prompt
+
+
+def test_final_text_inside_bash_does_not_end_agent(tmp_path: Path) -> None:
+    llm = ScriptedLLM(["```bash\necho 'FINAL: 92.60'\n```", "FINAL: done"])
+    result = run_agent("blind task", _session(tmp_path), llm)
+    assert result.steps == 2
+    assert result.final_raw == "done"

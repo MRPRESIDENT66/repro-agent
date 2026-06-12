@@ -10,6 +10,7 @@ checkpoint:
   # loads fine once trust_repo=True is passed
 dataset:
   name: "CIFAR-10 test (10000 images)"
+  num_examples: 10000
   prep: "via HuggingFace datasets load_dataset('uoft-cs/cifar10', split='test')"
   note: "canonical toronto URL (cs.toronto.edu) returns HTTP 403 → artifact_blocked; HF mirror used"
 

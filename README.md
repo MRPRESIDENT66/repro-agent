@@ -20,23 +20,42 @@ Real artifacts are messy: dead dataset links, drifted APIs, non-obvious load
 mechanisms, environments that won't build. So the interesting output isn't
 pass/fail — it's **how far the agent gets** (7 stages) and **why it stops**.
 
-## Results (deepseek-chat, hint-light, anti-hardcode gated)
+## Blind verification protocol V1
 
-The agent is told only *what* to reproduce, never *how*. Every "match" requires
-the eval script to actually load the data and predict over it (no hardcoded
-print), spot-checked by re-running the agent's own script independently.
+The Agent task/prompt contains only the public task (`model + dataset + metric`);
+the expected value and tolerance stay in the external verifier. A result counts
+only when a successful command prints structured evidence:
+
+```text
+REPRO_RESULT {"metric":"top1_accuracy","actual":92.6,"num_examples":10000}
+```
+
+The independent verifier checks that evidence against the private claim.
+Assistant `FINAL` text, unstructured numbers, and direct `echo/printf` result
+relays are ignored. A provenance gate also requires a generated eval script
+that loads data, predicts, and emits the evidence. Each run writes
+`result.json`, `commands.sh`, and `transcript.jsonl` for audit/replay.
+
+## Results — blind verification, reliability (deepseek-chat)
+
+Each oracle run **N=5**, every match gated by the blind protocol above
+(structured evidence from a real eval command; `num_examples` = full set;
+provenance). The agent never sees the target value (development tasks, **not
+held-out**).
 
 | Oracle | Domain | Difficulty | Reproduced | avg steps |
 |---|---|---|---|---|
-| `cifar10_resnet20` (92.60) | vision | easy — torch.hub | **8/8 = 100%** | 2.1 |
-| `distilbert_sst2` (91.06) | NLP | medium — transformers | **5/5 = 100%** | 4.0 |
-| `resnet18_cifar100` (79.26) | vision | hard — registration helper + timm | **4/5 = 80%** | 13.0 |
+| `cifar10_resnet20` (92.60) | vision | easy — torch.hub | **5/5 = 100%** | 4.8 |
+| `distilbert_sst2` (91.06) | NLP | medium — transformers | **5/5 = 100%** | 5.8 |
+| `resnet18_cifar100` (79.26) | vision | hard — registration helper + timm | **4/5 = 80%** | 9.6 |
 
-All matched runs reproduced the published number **exactly** (abs_diff = 0).
-**Difficulty, not luck, is the variable.** The hard oracle first failed 0/2
-(rabbit-holing into manual architecture reconstruction); a *transferable*
-strategy fix — read the model card prose; "not registered" → install+import the
-helper — moved it **0 → 80%**.
+All matched runs reproduced the published number **exactly**. The blind rates
+**match the earlier non-blind baseline** — the agent reproduces just as reliably
+*without seeing the target*, so it was never relying on knowing the answer.
+**Difficulty, not luck, is the variable:** the hard oracle once failed (1/5,
+rabbit-holing into manual architecture reconstruction); the rest land it via a
+*transferable* fix — read the model-card prose; "not registered" → install+import
+the helper.
 
 ### Retrieval ladder for large-repo navigation
 
@@ -71,8 +90,9 @@ manifest (model + dataset + claim)
 
 - **Execution** is a persistent subprocess session (state persists across
   steps; secrets scrubbed). LLM = DeepSeek; embeddings = DashScope.
-- **Verification** is deterministic: the LLM extracts the number (with the log
-  line as evidence), but the comparison is plain code.
+- **Verification** is blind and deterministic: only structured stdout from a
+  successful evaluation with provenance is accepted; the private comparison is
+  plain code.
 - **Evaluation** reports staged pass rates (`repo_inspected → … → claim_matched`)
   + a failure taxonomy; `eligibility` vs `outcome` are separated so a task can't
   be moved out of the denominator after the agent fails.
@@ -102,7 +122,7 @@ pip install -r requirements.txt
 python run_repro.py evals/benchmark/cifar10_resnet20.yaml   # reproduce one oracle
 python run_reliability.py evals/benchmark/resnet18_cifar100.yaml 5
 python -m retrieval.eval_nav --dense                        # the navigation ladder
-pytest tests/
+pytest -q
 ```
 
 ## Honest status & caveats
@@ -114,5 +134,11 @@ pytest tests/
   blocked by the above. Navigation is measured on the cloned source instead.
 - Small n (5–8 runs/oracle), single model — effect sizes + staged rates, not
   significance claims.
-- Execution is a subprocess session, **not** the Docker/VM isolation untrusted
-  repos need (security debt, deferred). Don't point it at code you don't trust.
+- The default execution is a subprocess session (fast, MPS); for **untrusted**
+  repos a pluggable `exec/docker_session.py` backend adds container isolation,
+  resource caps, and a **two-phase network** (provision online → `go_offline()` →
+  execution offline). The benchmark above ran on the subprocess backend (reviewed
+  repos). Don't point the subprocess backend at code you don't trust.
+- Blind V1 removes the expected value from the Agent prompt and clears stale
+  run artifacts, but subprocess execution is not a filesystem security boundary.
+  A strict held-out run should use Docker and expose only the public task.

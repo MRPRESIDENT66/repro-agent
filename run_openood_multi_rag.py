@@ -136,8 +136,17 @@ def _combined_usage(*llms: ChatLLM) -> dict:
 
 
 def _extract_python(text: str) -> str:
-    match = re.search(r"```(?:python)?\s*\n(.*?)```", text, re.DOTALL)
-    return (match.group(1) if match else text).strip() + "\n"
+    """Pull the actual eval script out of a model reply — model-agnostic.
+
+    Some models preface the script with prose and an illustrative snippet in a
+    separate fence, so the FIRST code block can be the wrong one. Prefer the
+    block that prints the result line; otherwise the largest block (the full
+    script). Falls back to the whole text when there is no fence."""
+    blocks = re.findall(r"```(?:python)?\s*\n(.*?)```", text, re.DOTALL)
+    if not blocks:
+        return text.strip() + "\n"
+    candidates = [b for b in blocks if "REPRO_RESULT" in b] or blocks
+    return max(candidates, key=len).strip() + "\n"
 
 
 def _submit_tool(name: str, description: str) -> dict:

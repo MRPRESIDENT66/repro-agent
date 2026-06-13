@@ -421,6 +421,24 @@ print("REPRO_RESULT " + json.dumps({}))
         _validate_code(code)
 
 
+def test_extract_python_picks_the_real_script_not_a_preface_snippet() -> None:
+    # Regression for attempt 033 (qwen3-max): the model prefaced the script with
+    # prose + an illustrative snippet in a separate fence; extracting the FIRST
+    # block false-rejected valid code as "missing markers".
+    from run_openood_multi_rag import _extract_python
+
+    reply = (
+        "Here is the EBO idea:\n\n"
+        "```python\nscore = logsumexp(logits)  # illustrative snippet\n```\n\n"
+        "Now the full evaluation script:\n\n"
+        "```python\nimport json\n# ... full eval ...\n"
+        "print('REPRO_RESULT ' + json.dumps(result))\n```\n"
+    )
+    code = _extract_python(reply)
+    assert "REPRO_RESULT" in code and "json.dumps" in code
+    assert "illustrative snippet" not in code
+
+
 def test_code_validator_rejects_syntax_error_before_execution() -> None:
     with pytest.raises(ValueError, match="syntactically valid"):
         _validate_code(_valid_code() + "\nif True print('broken')\n")

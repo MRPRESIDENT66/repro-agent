@@ -1,0 +1,15 @@
+Looking at the execution log and reviewer finding, I need to fix the score polarity in `compute_ebo_scores`. The official EBO postprocessor returns positive energy as confidence (higher = more ID-like), but the current code negates it. The AUROC values are inverted as a result.
+
+The fix is to remove the negation so that `scores = energy` instead of `scores = -energy`.
+
+```json
+{
+  "edits": [
+    {
+      "old": "            # EBO uses negative energy as OOD score\n            scores = -energy",
+      "new": "            # EBO uses energy as confidence (higher = more ID-like)\n            scores = energy"
+    }
+  ],
+  "rationale": "The official EBOPostprocessor returns positive energy as confidence (higher = more ID-like). The current code negates it, inverting the AUROC. Removing the negation aligns with the official semantics."
+}
+```

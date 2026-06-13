@@ -1,0 +1,11 @@
+```json
+{
+  "edits": [
+    {
+      "old": "    # Build ID dataset (CIFAR-10 test split)\n    id_imglist = os.path.join(imglist_root, id_data_name, 'test.txt')\n    id_dataset = ImglistDataset(\n        name='id',\n        imglist_pth=id_imglist,\n        data_dir=data_root,\n        num_classes=10,\n        preprocessor=transform,\n        data_aux_preprocessor=transform,\n    )\n    id_loader = DataLoader(id_dataset, batch_size=batch_size, shuffle=False, num_workers=0)\n\n    results = {}\n    for ood_name in ood_datasets:\n        ood_imglist = os.path.join(imglist_root, ood_name, 'test.txt')",
+      "new": "    # Build ID dataset (CIFAR-10 test split)\n    id_imglist = os.path.join(imglist_root, id_data_name, f'test_{id_data_name}.txt')\n    id_dataset = ImglistDataset(\n        name='id',\n        imglist_pth=id_imglist,\n        data_dir=data_root,\n        num_classes=10,\n        preprocessor=transform,\n        data_aux_preprocessor=transform,\n    )\n    id_loader = DataLoader(id_dataset, batch_size=batch_size, shuffle=False, num_workers=0)\n\n    results = {}\n    for ood_name in ood_datasets:\n        ood_imglist = os.path.join(imglist_root, ood_name, f'test_{ood_name}.txt')"
+    }
+  ],
+  "rationale": "The execution log shows FileNotFoundError for './data/benchmark_imglist/cifar10/test.txt'. The repository search confirms that the actual image list files are named test_cifar10.txt, test_cifar100.txt, and test_tin.txt (not test.txt). This single edit changes both the ID and OOD image list path constructions to use the correct filenames with the f'test_{dataset_name}.txt' pattern."
+}
+```

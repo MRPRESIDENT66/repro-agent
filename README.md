@@ -48,6 +48,7 @@ held-out**).
 | `cifar10_resnet20` (92.60) | vision | easy — torch.hub | **5/5 = 100%** | 4.8 |
 | `distilbert_sst2` (91.06) | NLP | medium — transformers | **5/5 = 100%** | 5.8 |
 | `resnet18_cifar100` (79.26) | vision | hard — registration helper + timm | **4/5 = 80%** | 9.6 |
+| `mmpretrain_resnet18_cifar10` (94.82) | vision | **clone-and-navigate** — 1858-file repo, Docker | **2/3 = 67%** (exact) | 10–11 |
 
 All matched runs reproduced the published number **exactly**. The blind rates
 **match the earlier non-blind baseline** — the agent reproduces just as reliably
@@ -56,6 +57,17 @@ All matched runs reproduced the published number **exactly**. The blind rates
 rabbit-holing into manual architecture reconstruction); the rest land it via a
 *transferable* fix — read the model-card prose; "not registered" → install+import
 the helper.
+
+The fourth oracle is the **main act**: not a library load but a true
+**clone → navigate → run → verify** on mmpretrain (**2/3 blind → 94.82 exact**;
+the 1/3 failure rabbit-holes offline into `datasets.load_dataset`). The agent
+uses `search_repo` to find `tools/test.py` + the cifar10 config in a 1858-file
+repo, then runs the repo's **own** eval harness (the env-block — `mmcv` — is
+pre-provisioned in the `repro-mmpretrain` Docker image; see `evals/RESULTS.md`),
+all behind a two-phase network. It also surfaced two honest verification
+findings: a provenance-gate blind spot for *delegation* (fixed + re-verified
+offline), and a clean demonstration that the gate **rejects an `echo` of the
+right number** and forces a real eval.
 
 ### Retrieval ladder for large-repo navigation
 
@@ -90,6 +102,13 @@ manifest (model + dataset + claim)
 
 - **Execution** is a persistent subprocess session (state persists across
   steps; secrets scrubbed). LLM = DeepSeek; embeddings = DashScope.
+- **Transport** is native function calling (`bash` / `search_repo` / `finish`
+  tool schemas). The original text protocol (regex-parsed ```bash blocks) is
+  kept behind `--no-fc` as the ablation twin — "tool calls vs text parsing" is
+  a measurable comparison, not a fashion choice.
+- **Cost accounting** is built in: each run's `result.json` reports tokens
+  (prompt / cached / completion), peak context in real tokens, and yuan cost
+  (prices configurable via `.env`).
 - **Verification** is blind and deterministic: only structured stdout from a
   successful evaluation with provenance is accepted; the private comparison is
   plain code.
@@ -100,12 +119,14 @@ manifest (model + dataset + claim)
 ## Repo layout
 
 ```
-agent/       LLM + ReAct loop + tiered self-repair
+agent/       LLM (function calling + cost accounting) + ReAct loop + self-repair
+agents/      multi-agent Lead/Reproducer/Verifier (isolation + concurrency ablations)
 exec/        persistent session (shell/file actions, replay log)
 verify/      deterministic metric extraction + comparison
 retrieval/   navigation ladder: corpus · keyword/BM25/dense/hybrid/rerank
 evals/       benchmark manifests · significance (clustered bootstrap) · RESULTS.md
-run_repro.py · run_reliability.py   # run one manifest / measure reliability
+serve_mcp.py  MCP server: verify_evidence_line · navigate_repo · reproduce_artifact
+run_repro.py · run_reliability.py · run_multiagent.py
 ```
 
 ## Setup & run
@@ -119,19 +140,35 @@ pip install -r requirements.txt
 # .env:  LLM_API_KEY=…  LLM_BASE_URL=https://api.deepseek.com/v1  LLM_MODEL=deepseek-chat
 #        DASHSCOPE_API_KEY=…  DASHSCOPE_BASE_URL=…  EMBEDDING_MODEL=text-embedding-v4
 
-python run_repro.py evals/benchmark/cifar10_resnet20.yaml   # reproduce one oracle
-python run_reliability.py evals/benchmark/resnet18_cifar100.yaml 5
+python run_repro.py evals/benchmark/cifar10_resnet20.yaml   # reproduce one oracle (function calling)
+python run_repro.py evals/benchmark/cifar10_resnet20.yaml --no-fc   # text-protocol ablation twin
+python run_reliability.py evals/benchmark/resnet18_cifar100.yaml 5 --workers 3  # N trials, concurrent
+python run_multiagent.py                                    # isolation + parallel-vs-serial ablation
 python -m retrieval.eval_nav --dense                        # the navigation ladder
+python serve_mcp.py                                         # MCP server (stdio) for any MCP client
 pytest -q
+```
+
+**The clone-and-navigate oracle (mmpretrain)** runs inside a *pre-provisioned*
+Docker image — the agent navigates + runs the eval; the `mmcv` env-block is
+solved once in the image (it is **not** the agent's job; see `docs/DESIGN.md`).
+Build it once, then run:
+
+```bash
+docker build --platform linux/amd64 -f docker/mmpretrain.Dockerfile -t repro-mmpretrain:latest .
+python run_repro.py evals/benchmark/mmpretrain_resnet18_cifar10.yaml   # blind clone→navigate→run→verify
 ```
 
 ## Honest status & caveats
 
 - **Reproducibility crisis, as data:** `RepDistiller` = `artifact_blocked` (dead
-  checkpoint host); `mmpretrain` full reproduction = `env_blocked` (mmcv won't
-  build on Py3.12) — both reported, neither counted as agent failure.
-- Oracles so far are **library-load**; a true clone-and-navigate reproduction is
-  blocked by the above. Navigation is measured on the cloned source instead.
+  checkpoint host) — reported, not counted as agent failure. `mmpretrain` was
+  `env_blocked` (mmcv won't build on Py3.12) until the Docker amd64 +
+  prebuilt-wheel recipe **unblocked it** — now a real clone-and-navigate oracle.
+- Three oracles are **library-load**; the fourth (`mmpretrain`) is a true
+  **clone-and-navigate-and-run** (Docker backend, two-phase network). The
+  retrieval ladder is still measured on the cloned source for the algorithm
+  comparison.
 - Small n (5–8 runs/oracle), single model — effect sizes + staged rates, not
   significance claims.
 - The default execution is a subprocess session (fast, MPS); for **untrusted**

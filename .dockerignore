@@ -1,0 +1,14 @@
+# The mmpretrain Dockerfile COPYs nothing, so keep the build context tiny —
+# never ship venvs, cloned repos, per-task workspaces, or caches to the daemon.
+.venv/
+.venv-*/
+__pycache__/
+*.pyc
+workspaces/
+repos/
+data/
+checkpoints/
+.git/
+.idea/
+.pytest_cache/
+.DS_Store

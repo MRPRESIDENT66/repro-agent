@@ -135,3 +135,43 @@ def test_inline_eval_command_counts_as_provenance(tmp_path) -> None:
         expected_num_examples=10000,
     )
     assert verdict.match
+
+
+def test_delegating_to_repo_eval_entry_counts_as_provenance(tmp_path) -> None:
+    # Clone-and-navigate: the agent runs the repo's OWN eval entry (tools/test.py)
+    # against the checkpoint and parses its output. The argmax lives in the repo's
+    # library code, not the agent's command — so the inline-marker heuristic would
+    # false-negative this *correct* behaviour. Delegation provenance must catch it.
+    (tmp_path / "repo" / "tools").mkdir(parents=True)
+    (tmp_path / "repo" / "tools" / "test.py").write_text("# the repo's real eval entry\n")
+    line = 'REPRO_RESULT {"metric":"top1_accuracy","actual":94.82,"num_examples":10000}'
+    cmd = (
+        "cd repo && python -c \"import subprocess, re, sys; "
+        "out = subprocess.run([sys.executable, 'tools/test.py', 'configs/r18.py', "
+        "'../ckpt.pth'], capture_output=True, text=True).stdout; "
+        "print('REPRO_RESULT {\\\"metric\\\":\\\"top1_accuracy\\\",...}')\""
+    )
+    verdict = verify_run(
+        [_run(line, command=cmd)],
+        tmp_path,
+        expected=94.82,
+        tolerance=0.10,
+        metric="top1_accuracy",
+        expected_num_examples=10000,
+    )
+    assert verdict.match
+
+
+def test_echo_without_real_eval_still_rejected(tmp_path) -> None:
+    # The gate's purpose survives the delegation extension: a bare echo of the
+    # line, with no eval script on disk and no markers, must NOT pass provenance.
+    line = 'REPRO_RESULT {"metric":"top1_accuracy","actual":94.82,"num_examples":10000}'
+    verdict = verify_run(
+        [_run(line, command="echo 'REPRO_RESULT ...'")],
+        tmp_path,
+        expected=94.82,
+        tolerance=0.10,
+        metric="top1_accuracy",
+        expected_num_examples=10000,
+    )
+    assert not verdict.match and verdict.reason in {"no_valid_structured_evidence", "no_eval_provenance"}

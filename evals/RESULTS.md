@@ -5,6 +5,43 @@ session (MPS) · every match is **blind + provenance-gated** (see protocol below
 the agent never sees the target, and a match requires structured evidence from a
 real eval that loads data and predicts.
 
+> New difficult oracle: the strict-blind Agent independently reproduced OpenOOD
+> CIFAR-10 EBO **Near-OOD AUROC 87.582277**, matching the private target `87.58`
+> across two datasets and three checkpoints. A 30-step attempt failed before
+> evaluation; a 60-step attempt passed numerically but did not call `finish`.
+> See [`OPENOOD_EBO.md`](OPENOOD_EBO.md) for the isolation protocol, full record,
+> compatibility findings, hashes, and saved transcripts.
+
+> **OpenOOD Multi-Agent + RAG repair result:** the initial unconstrained
+> three-role run failed with 97 duplicated commands and no evidence. After
+> replacing free exploration with bounded RAG handoffs and a fail-closed
+> Reviewer-to-Repair feedback loop, strict-blind attempt `010` passed:
+> the first generated script failed on data-path resolution, Reviewer diagnosed
+> it, Repair Agent corrected it, and the second real CPU evaluation reproduced
+> **87.582279** with `collaboration_pass=true`. The passing run used 15 real RAG
+> calls, 6 isolated role calls, 2 executed evaluations, and CNY 0.1700. Both the
+> initial negative result and repaired result are recorded in
+> [`OPENOOD_EBO.md`](OPENOOD_EBO.md).
+
+> **Dynamic-RAG follow-up:** fixed retrieval queries were then removed. In
+> strict-blind attempt `016`, 12 isolated role calls generated 36 repository
+> queries at runtime in response to the task, generated code, and successive
+> execution errors. The query chain adapted from missing local CIFAR data, to
+> an unavailable `faiss` dependency, to the required `ImglistDataset`
+> constructor arguments. The run still failed to produce valid numerical
+> evidence and cost CNY 0.6270. This establishes that retrieval is genuinely
+> adaptive and auditable, but does **not** establish a success-rate benefit over
+> the fixed-query attempt `010`.
+
+> **Retrieval/Repair hardening follow-up:** attempt `017` reduced dynamic RAG
+> calls from 36 to 25 and cost from CNY 0.6270 to CNY 0.5250. Its first
+> structured patch fixed the data path and enabled a complete three-checkpoint
+> evaluation, but invalid dataset counts and later semantic regressions still
+> prevented valid evidence. Attempt `018` failed fast on a broad import that
+> pulled optional `faiss`. Deterministic public-contract diagnostics,
+> diff-scoped patch validation, confirmed-code regression protection, and
+> broad-import gates were added afterward; a new real run remains pending.
+
 > **Blind verification V1:** expected/tolerance stay private; the agent never
 > sees the target value. Only successful-command stdout containing a structured
 > `REPRO_RESULT` line (metric, actual, num_examples) — from a real eval (not an
@@ -28,6 +65,27 @@ All matched runs reproduced the published value **exactly**. The blind rates
 **match the earlier non-blind baseline** — the agent reproduces just as reliably
 without seeing the target, so it never relied on knowing the answer.
 
+## Transport ablation — native function calling vs text protocol
+
+Same loop, same evidence rules, two transports: native tool calls (`bash` /
+`search_repo` / `finish` schemas) vs the original regex-parsed ```bash text
+protocol (`--no-fc`). `cifar10_resnet20`, blind, N=5 each. `fmt_errors` =
+turns the model violated the action protocol (text: unparseable reply; FC:
+no/empty/hallucinated tool call).
+
+| transport | matched | avg steps | avg errors | **avg fmt_errors** | avg cost | wall |
+|---|---|---|---|---|---|---|
+| **function calling** | 5/5 | **4.0** | 0.0 | **0.00** | **¥0.0050** | 158s |
+| text protocol | 5/5 | 8.8 | 0.4 | **1.00** | ¥0.0143 | 224s |
+
+**Finding:** function calling does **not** change *whether* the agent
+reproduces the number (both 5/5) — the honest null result. What it changes is
+*how cleanly*: the text protocol drops into an unparseable reply **once every
+single run** (1.00 fmt_errors), and pays for it in **2.2× the steps and ~2.9×
+the cost** (¥0.0143 vs ¥0.0050). FC removes a whole failure mode (format
+parsing) and is materially cheaper — the right default; the text path is kept
+as the measured ablation twin, not deleted. (n=5, illustrative.)
+
 ## Difficulty is the variable, not luck
 
 - Easy/medium artifacts (standard loaders) are reproduced **reliably in 2–4
@@ -38,6 +96,41 @@ without seeing the target, so it never relied on knowing the answer.
   architecture reconstruction. A targeted, *transferable* strategy fix (read the
   README prose; "not registered" → install+import the helper) moved this oracle
   from **0 → 80%**.
+
+## Clone-and-navigate reproduction — mmpretrain ResNet-18 CIFAR-10 (the main act)
+
+The first oracle that is **not** a one-line library load. The agent is dropped
+into the **cloned 1858-file mmpretrain repo** (env pre-provisioned in the
+`repro-mmpretrain` Docker image — the irreducible mmcv hell, see above) and must
+**navigate** to the eval entry + config, run it, and report the number — blind,
+behind a **two-phase network** (provision online → `go_offline()` → eval offline).
+
+| | result |
+|---|---|
+| reproduced | **2/3 blind runs → 94.82 / 94.82 exact** over the full 10000-example test set |
+| winning trajectory | 10–11 steps, 0 errors; `search_repo` + `cat`s to find `tools/test.py` + the cifar10 config, then ran the repo's **own** eval harness via a wrapper |
+| failure mode | 1/3 rabbit-holed **offline**: tried `datasets.load_dataset` / `pip install` (no network) instead of the on-disk data → 4 errors, no evidence |
+| cost | ¥0.025–0.034 / run (peak ctx ~8.5k tok) |
+| isolation | amd64 Docker sandbox, network cut before the eval |
+
+**The provenance gate, doing its job (two honest findings):**
+
+1. **Delegation is the right behaviour — and the V1 gate under-credited it.** The
+   agent did **not** reinvent the eval; it wrote a wrapper that
+   **subprocess-invokes the repo's own `tools/test.py <config> <checkpoint>`**
+   (data-load + argmax live in mmpretrain's library code) and parsed
+   `accuracy/top1`. The V1 gate, calibrated for *inline-eval* oracles (agent
+   writes a self-contained `eval.py` with `argmax`), **false-negatived** this —
+   the emitting command has no `argmax`/`dataset` literal. Fix: provenance now
+   also accepts **delegation** (evidence from a command that ran the repo's eval
+   entry against the checkpoint). Re-verified the **same saved transcript**
+   offline → match; no eval re-run.
+2. **The gate is not foolable by an echo, even when the agent knows the value.**
+   In one winning run the agent — having already run `test.py` and seen 94.82 —
+   first tried `echo 'REPRO_RESULT …94.82…'`. The gate **rejected the echo**
+   (`_is_direct_result_echo`), forcing the agent to emit the number from a
+   **real eval** (`run_eval.py` → `tools/test.py`) instead. The blind protocol
+   converts "knowing the answer" into "having to actually run it."
 
 ## Failure taxonomy (observed)
 
@@ -59,16 +152,18 @@ Can retrieval locate the eval entry + config in a **large** repo
 land on; metric = recall@k. (mmpretrain's full reproduction is `env_blocked` and
 **navigation is measured on the cloned source regardless** — see below.)
 
-> **mmpretrain env-block, fully chased (a perfect case study):** its core dep
-> **mmcv** won't install on **Python 3.12 anywhere** — Mac *and* Linux Docker —
-> because the build chain uses `pkgutil.ImpImporter`, removed in 3.12. On
-> **Python 3.11** there's no prebuilt wheel for the torch/cpu combo → source
-> build, which fails (numpy-2 ABI). So a popular, well-maintained repo is blocked
-> at the *environment* step across environments. That's the thesis made concrete:
-> getting the env ready is often the hardest, most-blocking step — which is why a
-> reproduction agent + staged measurement is worth building. The `DockerSession`
-> backend is the right vehicle for such repos but can't fix dependency hell; a
-> fully clone-navigate-AND-run oracle remains the reproducibility lottery.
+> **mmpretrain env-block, fully chased — then SOLVED (2026-06-12):** its core
+> dep **mmcv** won't build on **Python 3.12** (`pkgutil.ImpImporter`, removed in
+> 3.12) and has **no arm64 prebuilt wheel** → native source build fails (numpy-2
+> ABI). The fix that the `DockerSession` backend makes possible: run a
+> **`linux/amd64`** image (qemu-emulated on the arm64 Mac) and install mmcv's
+> **prebuilt x86_64 wheel** — `torch==2.1.0-cpu` + `mmcv==2.1.0` via `mim`, the
+> opencv system libs, and `numpy==1.26` pinned **last** (mmpretrain's deps
+> re-upgrade it to 2.x and break the torch ABI). Baked into image
+> `repro-mmpretrain:latest`. The env-block was never fundamental — it was a
+> wheel/platform/ABI puzzle, and the right *isolation backend* is what let us
+> pin the exact combo. **This converts the oracle from `env_blocked` to a real
+> clone-and-navigate reproduction** (next section).
 
 | Rung | recall@5 | recall@10 |
 |---|---|---|
@@ -87,24 +182,37 @@ disambiguates the true entry script from look-alikes — retrieval recalls
 candidates, the LLM judges which is the entry. (n=5, illustrative not
 significant.)
 
-## Multi-agent vs single (M5, isolation ablation)
+## Multi-agent — isolation AND concurrency ablation (M5)
 
 Reproduce 3 CIFAR-10 ResNets (resnet20/32/56) from one repo. Multi-agent: Lead
-splits into 3, each Reproducer runs in an **isolated** context, a deterministic
-Verifier checks each. Single: one agent does all 3 in one shared context.
+splits into 3, each Reproducer runs in an **isolated** context (own session, own
+LLM client), a deterministic Verifier checks each. Single: one agent does all 3
+in one shared context. Multi is run both **parallel** (thread pool) and
+**serial** to isolate the concurrency effect from the isolation effect.
 
-| mode | agents | matched | max context (msgs / chars) | steps |
-|---|---|---|---|---|
-| multi | 3 | 3/3 | **26 / 21.5k** | 18 |
-| single | 1 | 3/3 | 41 / 26.9k | 20 |
+| mode | agents | matched | max ctx (chars) | steps | cost | **wall** |
+|---|---|---|---|---|---|---|
+| multi-parallel | 3 | 2/3 | **17.8k** | 20 | ¥0.040 | **34.9s** |
+| multi-serial | 3 | 2/3 | 20.1k | 28 | ¥0.057 | 112.3s |
+| single | 1 | 3/3 | 25.9k | 18 | ¥0.042 | 108.6s |
 
-**Finding:** identical success (3/3 both) — multi-agent does **not** improve
-success or speed on independent easy sub-tasks. Its only measurable benefit is
-the designed **isolation**: each agent's context stays ~30–55% smaller than the
-single agent juggling all three. That isolation earns its place only when
-sub-tasks are long/noisy enough that a shared context would degrade — these
-aren't. Reported as-is (the design said: value is isolation, not success;
-report n.s. if so).
+**Three honest findings, each measured:**
+
+1. **Concurrency is a real ~3.2× win — and it overturns my own prediction.** The
+   design *predicted* single-box MPS/RAM contention would eat the parallel
+   advantage. It didn't: parallel **34.9s vs serial 112.3s ≈ 3.2× ≈ N**, near
+   linear. For light CIFAR evals the bottleneck is LLM I/O + load, not GPU
+   contention — so the thread pool scales. (Heavier evals could still contend;
+   reported for *this* workload.)
+2. **Isolation holds:** each Reproducer's peak context stays **~18–20k vs 25.9k**
+   for the single agent juggling all three (~25–30% smaller) — the designed
+   property, as a number.
+3. **Multi-agent does NOT improve success.** Single got **3/3**; multi got
+   **2/3** (one isolated Reproducer flaked — the same per-agent stochasticity the
+   solo oracles show). On independent *easy* sub-tasks, multi-agent buys
+   parallelism + isolation, **not** reliability. Reported as-is — the design
+   said value is isolation/concurrency, not success, and that's what the data
+   shows.
 
 ## Context compression (M4)
 
@@ -136,3 +244,17 @@ exercised when an oracle requires cloning a large repo (currently env-blocked).
   the best candidate (RepDistiller) was artifact-blocked.
 - Execution is a subprocess session (MPS), not the Docker/VM isolation the
   design specifies for untrusted repos (security debt, deferred).
+
+## Dynamic OpenOOD Multi-Agent + RAG status
+
+Attempts `019-024` are recorded in detail in `evals/OPENOOD_EBO.md`. The best
+dynamic run, `022`, completed all three checkpoints after evidence-grounded
+repairs and emitted strict structured evidence with correct counts and run
+shape, but produced `87.09` rather than `87.58`. Attempt `024` then failed
+before execution because a raw substring validator rejected a forbidden class
+name appearing only in a comment.
+
+Current conclusion: dynamic RAG and role isolation are meaningful and
+observable, but end-to-end reliability is now limited mainly by repair
+selection and brittle validator feedback, not by insufficient retrieval calls.
+Experiments were paused after `024`.

@@ -1,0 +1,44 @@
+# Fourth oracle (2026-06-12) — the first TRUE clone-and-navigate-and-run.
+# Unlike the torch.hub/HF oracles (one-line library load), here the agent is
+# dropped into a cloned 1800+-file research repo (mmpretrain) and must NAVIGATE
+# to the eval entry (tools/test.py) + the right config, then run it. This is the
+# RAG/navigation thesis actually exercised end-to-end, not measured offline.
+#
+# Env note (the documented block, now solved): mmcv won't build on Py3.12 and has
+# no arm64 prebuilt wheel. The Docker backend runs a linux/amd64 image with
+# torch2.1.0-cpu + the prebuilt mmcv 2.1.0 wheel baked in — so the agent's job is
+# the navigation + run + gotchas, while the irreducible env-hell (mmcv) is
+# pre-provisioned in the image. Blind: the agent never sees 94.82.
+paper: "mmpretrain model zoo — ResNet-18 b16x8 CIFAR-10 (mmclassification v0)"
+repo: "https://github.com/open-mmlab/mmpretrain"
+commit_sha: "main"             # TODO pin before freezing benchmark
+backend: docker
+docker_image: "repro-mmpretrain:latest"
+local_repo: "repos/mmpretrain"  # copied into the session workdir for navigation
+model: resnet18_8xb16_cifar10
+
+checkpoint:
+  source: "https://download.openmmlab.com/mmclassification/v0/resnet/resnet18_b16x8_cifar10_20210528-bd6371c8.pth (durable, openmmlab-hosted)"
+  load: "python tools/test.py configs/resnet/resnet18_8xb16_cifar10.py <checkpoint>"
+  note: "the agent must find tools/test.py + the cifar10 config by navigating the repo"
+dataset:
+  name: "CIFAR-10 test (10000 images)"
+  num_examples: 10000
+  prep: "mmpretrain auto-downloads CIFAR-10 to data/cifar10 (pre-provisioned offline)"
+
+target:
+  metric: top1_accuracy
+  expected: 94.82
+  tolerance: 0.10
+
+eligibility: { supported: true, reason: null }
+
+canonical_path:
+  - "navigate: locate tools/test.py (the eval entry) + configs/resnet/resnet18_8xb16_cifar10.py"
+  - "run: python tools/test.py <config> <checkpoint>  (CPU, in the amd64 container)"
+  - "parse mmpretrain's printed accuracy/top1 → emit REPRO_RESULT top1_accuracy=94.82 num_examples=10000"
+
+gotchas:
+  - { type: navigation,    detail: "1858-file repo; the entry tools/test.py is drowned by slurm_test.sh / mim_dist_test.sh look-alikes (the M3 finding)" }
+  - { type: env_blocked,   detail: "mmcv: no Py3.12 build, no arm64 wheel — solved by the pre-provisioned amd64 image, not by the agent" }
+  - { type: output_format, detail: "tools/test.py prints mmengine metrics, not REPRO_RESULT; the agent must parse the top-1 and emit the evidence line" }

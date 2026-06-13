@@ -12,6 +12,9 @@ rank-bm25==0.2.2
 # Execution backend
 docker==7.1.0
 
+# MCP server (expose the agent's tools — verify / navigate / reproduce — to any MCP client)
+mcp==1.27.2
+
 # Misc
 python-dotenv==1.2.2
 PyYAML==6.0.3

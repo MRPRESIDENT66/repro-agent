@@ -402,7 +402,7 @@ def _apply_code_patch(
         raise ValueError("patch does not preserve enough working code")
     for block in protected_blocks or set():
         if block in current and block not in updated:
-            raise ValueError("patch changes code already confirmed by a successful execution")
+            raise ValueError("patch changes code already confirmed by a reviewer-endorsed execution")
     if required_change_terms:
         changed = "\n".join(changed_fragments).lower()
         if not any(term.lower() in changed for term in required_change_terms):
@@ -925,6 +925,17 @@ def _review_requires_repair(path: Path) -> bool:
     return "REVIEW_STATUS: PASS" not in path.read_text(errors="replace")
 
 
+def _round_code_is_endorsed(run_ok: bool, review_path: Path) -> bool:
+    """Whether a repair round's new code should be frozen against later edits.
+
+    Endorsement requires BOTH a successful execution AND the independent
+    Reviewer's PASS. A bare exit-0 is not enough in blind mode: a successful run
+    can still print a structurally-valid but semantically-wrong number (e.g. an
+    inverted EBO/AUROC sign) that the public contract cannot detect — and which a
+    later Repair must remain free to fix."""
+    return run_ok and not _review_requires_repair(review_path)
+
+
 def _execute_eval(session: DockerSession):
     syntax = session.shell("python -m py_compile eval_ebo.py", timeout=120)
     if not syntax.ok:
@@ -1141,9 +1152,10 @@ replacement `new` code; do not submit the complete file.
 
 The deterministic public-contract audit is authoritative. When it lists a
 failure, the patch must directly change the code responsible for that failure.
-Do not alter code blocks already confirmed by a successful execution.
-Fix only the latest blocking execution error in this round. Submit at most two
-small edits; defer unrelated concerns until the next execution result.
+Do not revert code blocks already endorsed by the independent Reviewer; but code
+the Reviewer still disputes (e.g. a suspected EBO/AUROC sign) may and should be
+changed. Fix only the latest blocking execution error in this round. Submit at
+most two small edits; defer unrelated concerns until the next execution result.
 
 Preserve working behavior and the public contract: percentage AUROC, correct
 EBO/AUROC direction, exact dataset counts, s0/s1/s2 dataset-then-run mean,
@@ -1184,8 +1196,6 @@ Do not guess or mention the private target.""",
             )
             start = len(session.transcript)
             repaired_run = _execute_eval(session)
-            if repaired_run.ok:
-                protected_code_blocks.update(accepted_new_blocks)
             roles[f"repair_{round_index}"]["errors"] = 0 if repaired_run.ok else 1
             roles[f"repair_{round_index}"]["command_indexes"] = [
                 start + 1,
@@ -1196,6 +1206,15 @@ Do not guess or mention the private target.""",
                 _public_log(session, execution_start),
             )
             review_current(round_index)
+            # Freeze this round's new code only once the INDEPENDENT REVIEWER
+            # endorses the result (REVIEW_STATUS: PASS), not on a bare exit-0: a
+            # successful run can still print a structurally-valid but semantically
+            # wrong number (e.g. an inverted EBO/AUROC sign the blind public
+            # contract cannot detect). Reviewer-endorsed code is protected from
+            # silent regression; code the reviewer still disputes stays editable
+            # so a later Repair can revisit it.
+            if _round_code_is_endorsed(repaired_run.ok, WORKDIR / "review_report.md"):
+                protected_code_blocks.update(accepted_new_blocks)
     except Exception as exc:
         workflow_error = f"{type(exc).__name__}: {exc}"
     finally:

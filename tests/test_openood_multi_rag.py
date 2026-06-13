@@ -16,6 +16,7 @@ from run_openood_multi_rag import (
     _public_contract_diagnostics,
     _public_contract_passes,
     _review_requires_repair,
+    _round_code_is_endorsed,
     _validate_code,
     _validate_review,
 )
@@ -161,6 +162,22 @@ def test_missing_path_hint_walks_up_to_real_ancestor_on_wrong_root(
     # actual contents ground the agent toward images_classic/.
     assert any("images_classic" in hint for hint in hints)
     assert all(hint.startswith("data/") for hint in hints)
+
+
+def test_round_code_endorsement_requires_reviewer_pass(tmp_path: Path) -> None:
+    # Regression for attempt 026: a successful eval that prints a structurally
+    # valid but sign-inverted AUROC must NOT freeze its code — the Reviewer
+    # flagged REPAIR_REQUIRED, so a later Repair has to stay free to fix the sign.
+    review = tmp_path / "review_report.md"
+
+    review.write_text("The EBO energy sign looks inverted.\nREVIEW_STATUS: REPAIR_REQUIRED\n")
+    assert not _round_code_is_endorsed(True, review)  # exit-0 but disputed → editable
+
+    review.write_text("Implementation matches repository semantics.\nREVIEW_STATUS: PASS\n")
+    assert _round_code_is_endorsed(True, review)        # exit-0 + endorsed → frozen
+
+    assert not _round_code_is_endorsed(False, review)   # failed execution → never frozen
+    assert not _round_code_is_endorsed(True, tmp_path / "missing.md")  # no review → not endorsed
 
 
 def test_review_status_fails_closed(tmp_path: Path) -> None:

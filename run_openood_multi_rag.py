@@ -987,15 +987,21 @@ def _review_requires_repair(path: Path) -> bool:
     return "REVIEW_STATUS: PASS" not in path.read_text(errors="replace")
 
 
-def _round_code_is_endorsed(run_ok: bool, review_path: Path) -> bool:
+def _round_code_is_endorsed(run_ok: bool, contract_passes: bool, review_path: Path) -> bool:
     """Whether a repair round's new code should be frozen against later edits.
 
-    Endorsement requires BOTH a successful execution AND the independent
-    Reviewer's PASS. A bare exit-0 is not enough in blind mode: a successful run
-    can still print a structurally-valid but semantically-wrong number (e.g. an
-    inverted EBO/AUROC sign) that the public contract cannot detect — and which a
-    later Repair must remain free to fix."""
-    return run_ok and not _review_requires_repair(review_path)
+    Endorsement requires ALL THREE signals to agree: a successful execution, the
+    deterministic public contract passing, AND the independent Reviewer's PASS.
+    Any one disputing keeps the code editable:
+      * a bare exit-0 is not enough — a run can print a structurally-valid but
+        wrong number (e.g. an inverted EBO/AUROC sign), attempt 026;
+      * a Reviewer PASS is not enough either — the Reviewer can miss a mismatch
+        the contract still reports (e.g. a short TinyImageNet count), attempt 028.
+    Because full agreement also ends the repair loop, this protection is dormant
+    during active repair by construction; the anti-regression defense for an
+    endorsed fix rests on the patch guards (required_change_terms, minimum
+    preservation ratio, unique exact replacement, no-op rejection)."""
+    return run_ok and contract_passes and not _review_requires_repair(review_path)
 
 
 def _execute_eval(session: DockerSession):
@@ -1272,7 +1278,11 @@ Do not guess or mention the private target.""",
             # contract cannot detect). Reviewer-endorsed code is protected from
             # silent regression; code the reviewer still disputes stays editable
             # so a later Repair can revisit it.
-            if _round_code_is_endorsed(repaired_run.ok, WORKDIR / "review_report.md"):
+            if _round_code_is_endorsed(
+                repaired_run.ok,
+                _public_contract_passes(session),
+                WORKDIR / "review_report.md",
+            ):
                 protected_code_blocks.update(accepted_new_blocks)
     except Exception as exc:
         workflow_error = f"{type(exc).__name__}: {exc}"

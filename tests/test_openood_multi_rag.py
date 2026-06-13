@@ -164,20 +164,28 @@ def test_missing_path_hint_walks_up_to_real_ancestor_on_wrong_root(
     assert all(hint.startswith("data/") for hint in hints)
 
 
-def test_round_code_endorsement_requires_reviewer_pass(tmp_path: Path) -> None:
-    # Regression for attempt 026: a successful eval that prints a structurally
-    # valid but sign-inverted AUROC must NOT freeze its code — the Reviewer
-    # flagged REPAIR_REQUIRED, so a later Repair has to stay free to fix the sign.
+def test_round_code_endorsement_requires_all_three_signals(tmp_path: Path) -> None:
+    # Freezing a repair round's code needs run_ok AND contract_passes AND a
+    # Reviewer PASS — any one disputing keeps it editable.
     review = tmp_path / "review_report.md"
+    passing = tmp_path / "pass.md"
+    passing.write_text("Matches repository semantics.\nREVIEW_STATUS: PASS\n")
 
+    # Regression 026: exit-0, contract passes, but the Reviewer flagged the sign.
     review.write_text("The EBO energy sign looks inverted.\nREVIEW_STATUS: REPAIR_REQUIRED\n")
-    assert not _round_code_is_endorsed(True, review)  # exit-0 but disputed → editable
+    assert not _round_code_is_endorsed(True, True, review)
 
-    review.write_text("Implementation matches repository semantics.\nREVIEW_STATUS: PASS\n")
-    assert _round_code_is_endorsed(True, review)        # exit-0 + endorsed → frozen
+    # Regression 028: exit-0 and Reviewer PASS, but the deterministic contract
+    # still reports a mismatch (e.g. a short TinyImageNet count) → not endorsed.
+    assert not _round_code_is_endorsed(True, False, passing)
 
-    assert not _round_code_is_endorsed(False, review)   # failed execution → never frozen
-    assert not _round_code_is_endorsed(True, tmp_path / "missing.md")  # no review → not endorsed
+    # Failed execution is never endorsed, regardless of the rest.
+    assert not _round_code_is_endorsed(False, True, passing)
+
+    # All three agree → frozen.
+    assert _round_code_is_endorsed(True, True, passing)
+    # Missing review file fails closed.
+    assert not _round_code_is_endorsed(True, True, tmp_path / "missing.md")
 
 
 def test_review_status_fails_closed(tmp_path: Path) -> None:

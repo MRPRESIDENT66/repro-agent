@@ -1,0 +1,103 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+Evaluating s0...
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 249, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 216, in main
+    metrics_dict = evaluate_run(checkpoint_path, id_dataset, OOD_DATASETS)
+  File "/workspace/eval_ebo.py", line 139, in evaluate_run
+    id_dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: './data/benchmark_imglist/cifar10/test.txt'
+
+```
+
+## Command 3
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 4
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+Evaluating s0...
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 247, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 214, in main
+    metrics_dict = evaluate_run(checkpoint_path, id_dataset, OOD_DATASETS)
+  File "/workspace/eval_ebo.py", line 139, in evaluate_run
+    imglist_pth=id_dataset['imglist'],
+  File "/workspace/openood/datasets/base_dataset.py", line 19, in __getitem__
+    index = int(index)
+ValueError: invalid literal for int() with base 10: 'imglist'
+
+```
+
+## Command 5
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 6
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=0 timed_out=False
+
+```text
+Evaluating s0...
+Evaluating s1...
+Evaluating s2...
+REPRO_RESULT {"metric": "near_ood_auroc", "actual": 92.4551852585733, "datasets": {"cifar100": 9000, "tin": 7793}, "run_metrics": {"s0": {"cifar100": 85.5468864197531, "tin": 98.50266335885482}, "s1": {"cifar100": 86.8782148148148, "tin": 98.63676661391277}, "s2": {"cifar100": 86.65678950617284, "tin": 98.50979083793148}}, "aggregation": "dataset_mean_then_run_mean"}
+
+
+```

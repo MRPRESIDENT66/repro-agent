@@ -222,6 +222,13 @@ def _validate_review(content: str) -> str:
     return f"{body}\n\nREVIEW_STATUS: {matches[-1]}\n"
 
 
+# ============================ PER-ORACLE CONTRACT ============================
+# Everything below is OpenOOD-specific *configuration*, not general capability.
+# The validation/diagnosis MECHANISMS (`_forbidden_contract_violations`,
+# `_normalization_diagnostics_for_code`, ...) are oracle-agnostic and read these
+# constants; a different oracle would supply its own. Kept declarative and in one
+# place so the capability code carries no task literals.
+#
 # Module-path prefixes whose package initializers pull unrelated optional deps.
 _FORBIDDEN_IMPORT_PREFIXES = (
     "openood.evaluation_api",
@@ -241,6 +248,21 @@ _FORBIDDEN_USE_NAMES = {"UnsafeLoader"}
 # mention in a comment, docstring, or plain string is allowed: it is not part of
 # the executed contract.
 _FORBIDDEN_CALL_ARG_MARKERS = ("config.yml", "--checkpoint_root")
+# Where the repository declares its normalization constants, and the dataset key
+# the generated code must match (used by the normalization mismatch check).
+NORMALIZATION_SOURCE_REL = "openood/preprocessors/transform.py"
+NORMALIZATION_DICT_VAR = "normalization_dict"
+NORMALIZATION_KEY = "cifar10"
+# General contract-format markers every emitted eval must contain. These are the
+# evidence FORMAT (a printed strict-JSON REPRO_RESULT), not an implementation
+# shape — the oracle-specific model/CLI/loader choices are enforced by execution
+# and the blind verifier, not pre-required here.
+_REQUIRED_CONTRACT_MARKERS = ("REPRO_RESULT", "json.dumps")
+# The metric id the evidence line must carry, and the checkpoint directory the
+# harness points the eval at (where the official s0/s1/s2 runs live).
+METRIC = "near_ood_auroc"
+CHECKPOINT_ROOT = "results/cifar10_resnet18_32x32_base_e100_lr0.1_default"
+# =============================================================================
 
 
 def _call_arg_constant_ids(tree: ast.AST) -> set[int]:
@@ -326,11 +348,8 @@ def _validate_code(content: str) -> str:
         tree = ast.parse(code)
     except SyntaxError as exc:
         raise ValueError(f"code is not syntactically valid: {exc}") from exc
-    required = (
-        "REPRO_RESULT", "json.dumps", "DataLoader", "--root", "from openood.networks",
-    )
-    if not all(marker in code for marker in required):
-        missing = [marker for marker in required if marker not in code]
+    if not all(marker in code for marker in _REQUIRED_CONTRACT_MARKERS):
+        missing = [marker for marker in _REQUIRED_CONTRACT_MARKERS if marker not in code]
         raise ValueError(f"code is missing required public-contract markers: {missing}")
     violations = _forbidden_contract_violations(tree)
     if violations:
@@ -339,7 +358,7 @@ def _validate_code(content: str) -> str:
         )
     normalization_issues = _normalization_diagnostics_for_code(
         code,
-        WORKDIR / "openood" / "preprocessors" / "transform.py",
+        WORKDIR / NORMALIZATION_SOURCE_REL,
     )
     if normalization_issues:
         raise ValueError(normalization_issues[0])
@@ -356,6 +375,26 @@ def _extract_json_object(text: str) -> dict:
     if not isinstance(value, dict):
         raise ValueError("patch must be a JSON object")
     return value
+
+
+def _closest_existing_lines(source: str, target: str, window: int = 8) -> str:
+    """When a patch's `old` text isn't in the file, surface the real code most
+    similar to it (with line numbers) so the next attempt copies an exact
+    snippet. A general code-editing aid — no repo-specific knowledge: it anchors
+    on the most similar existing line and shows a window around it."""
+    source_lines = source.splitlines()
+    target_lines = [line for line in target.splitlines() if line.strip()]
+    if not source_lines or not target_lines:
+        return ""
+    anchor = target_lines[0].strip()
+    best_index, best_ratio = 0, -1.0
+    for index, line in enumerate(source_lines):
+        ratio = SequenceMatcher(None, line.strip(), anchor).ratio()
+        if ratio > best_ratio:
+            best_ratio, best_index = ratio, index
+    lo = max(0, best_index - 2)
+    hi = min(len(source_lines), best_index + window)
+    return "\n".join(f"{i + 1:>4}: {source_lines[i]}" for i in range(lo, hi))
 
 
 def _apply_code_patch(
@@ -381,6 +420,16 @@ def _apply_code_patch(
         if not isinstance(old, str) or not isinstance(new, str) or len(old) < 5:
             raise ValueError(f"edit {index} requires non-trivial old/new strings")
         occurrences = updated.count(old)
+        if occurrences == 0:
+            nearby = _closest_existing_lines(updated, old)
+            hint = (
+                f"\nClosest actual code currently in the file:\n{nearby}" if nearby else ""
+            )
+            raise ValueError(
+                f"edit {index} old text was not found in the current file — it is "
+                f"stale or paraphrased. Copy an EXACT snippet from the current "
+                f"file as `old`.{hint}"
+            )
         if occurrences != 1:
             raise ValueError(
                 f"edit {index} old text must occur exactly once; found {occurrences}"
@@ -420,7 +469,9 @@ def _apply_code_patch(
 
 def _search_evidence(context: str) -> str:
     traceback_paths = re.findall(r'File "/workspace/([^"]+\.py)"', context)
-    mentioned_paths = re.findall(r"\b((?:openood|scripts)/[A-Za-z0-9_./-]+\.py)\b", context)
+    # Any repo-relative source path mentioned in the error context (oracle-agnostic
+    # — a directory-qualified .py token, not a specific project's folder names).
+    mentioned_paths = re.findall(r"\b([A-Za-z0-9_][A-Za-z0-9_./-]*/[A-Za-z0-9_./-]+\.py)\b", context)
     failures = re.findall(
         r"(?m)^(?:[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception)|"
         r"ModuleNotFoundError|RuntimeError|TypeError|ValueError):.*$",
@@ -738,28 +789,37 @@ def _public_contract_passes(session: DockerSession) -> bool:
 def _latest_public_evidence(session: DockerSession):
     return extract_structured_evidence(
         session.transcript,
-        metric="near_ood_auroc",
+        metric=METRIC,
         expected_num_examples=None,
     )
 
 
-def _normalization_diagnostics_for_code(code: str, source: Path) -> list[str]:
-    """Compare generated hardcoded normalization against repository source."""
+def _normalization_diagnostics_for_code(
+    code: str,
+    source: Path,
+    *,
+    dict_var: str = NORMALIZATION_DICT_VAR,
+    key: str = NORMALIZATION_KEY,
+) -> list[str]:
+    """Compare generated hardcoded normalization against repository source.
+
+    The mechanism is oracle-agnostic; which source variable and dataset key hold
+    the reference normalization is passed in (per-oracle config)."""
     if not source.is_file():
         return []
     try:
         source_tree = ast.parse(source.read_text(errors="replace"))
         generated_tree = ast.parse(code)
-        normalization_dict = next(
+        reference_dict = next(
             ast.literal_eval(node.value)
             for node in source_tree.body
             if isinstance(node, ast.Assign)
             and any(
-                isinstance(target, ast.Name) and target.id == "normalization_dict"
+                isinstance(target, ast.Name) and target.id == dict_var
                 for target in node.targets
             )
         )
-        expected_mean, expected_std = normalization_dict["cifar10"]
+        expected_mean, expected_std = reference_dict[key]
     except (StopIteration, KeyError, SyntaxError, ValueError):
         return []
 
@@ -822,7 +882,7 @@ def _normalization_diagnostics(workdir: Path | None = None) -> list[str]:
         return []
     return _normalization_diagnostics_for_code(
         generated.read_text(errors="replace"),
-        workdir / "openood" / "preprocessors" / "transform.py",
+        workdir / NORMALIZATION_SOURCE_REL,
     )
 
 
@@ -906,11 +966,13 @@ def _diagnostic_change_terms(diagnostics: list[str]) -> set[str]:
     if "aggregation mismatch" in joined or "does not match dataset_mean" in joined:
         terms.update({"aggregation", "actual", "run_metrics"})
     if "run names mismatch" in joined or "dataset keys" in joined:
-        terms.update({"run_metrics", "s0", "s1", "s2"})
+        terms.update({"run_metrics", *EXPECTED_RUNS})
     if "percentage points" in joined:
         terms.update({"actual", "run_metrics", "100"})
     if "normalization mismatch" in joined:
-        terms.update({"normalize", "std", "0.247", "0.2435", "0.2616"})
+        # Generic constructs a normalization fix must touch — never the specific
+        # (answer-adjacent) constant values, which the diagnostic already names.
+        terms.update({"normalize", "std", "mean"})
     if "not valid strict json" in joined:
         terms.update({"json.dumps", "repro_result"})
     missing = re.findall(r"FileNotFoundError:.*?['\"]([^'\"]+)['\"]", joined)
@@ -940,10 +1002,7 @@ def _execute_eval(session: DockerSession):
     syntax = session.shell("python -m py_compile eval_ebo.py", timeout=120)
     if not syntax.ok:
         return syntax
-    return session.shell(
-        "python eval_ebo.py "
-        "--root results/cifar10_resnet18_32x32_base_e100_lr0.1_default"
-    )
+    return session.shell(f"python eval_ebo.py --root {CHECKPOINT_ROOT}")
 
 
 def main() -> None:
@@ -1225,7 +1284,7 @@ Do not guess or mention the private target.""",
         session.workdir,
         expected=EXPECTED,
         tolerance=TOLERANCE,
-        metric="near_ood_auroc",
+        metric=METRIC,
         expected_num_examples=None,
         expected_datasets=EXPECTED_DATASETS,
         expected_runs=EXPECTED_RUNS,
@@ -1233,7 +1292,7 @@ Do not guess or mention the private target.""",
     )
     public_evidence = extract_structured_evidence(
         session.transcript,
-        metric="near_ood_auroc",
+        metric=METRIC,
         expected_num_examples=None,
         expected_datasets=EXPECTED_DATASETS,
         expected_runs=EXPECTED_RUNS,

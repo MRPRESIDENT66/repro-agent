@@ -552,6 +552,29 @@ def test_code_patch_rejects_ambiguous_or_whole_file_replacement(tmp_path: Path) 
         _apply_code_patch(code_path, whole_file)
 
 
+def test_code_patch_shows_closest_real_code_when_old_text_missing(tmp_path: Path) -> None:
+    # Regression for attempt 027: repairs repeatedly failed because the patch
+    # `old` text did not exist in the file (stale/paraphrased). The error should
+    # now surface the closest ACTUAL lines so the next attempt copies exact code.
+    code_path = tmp_path / "eval_ebo.py"
+    code_path.write_text(
+        _valid_code()
+        + "\nnum_samples = len(loader.dataset)\n"
+        + "datasets = {'cifar100': num_samples}\n"
+    )
+    # The agent patches against a paraphrased line that isn't literally present.
+    stale = json.dumps({
+        "edits": [{"old": "datasets = {'cifar100': n_samples}", "new": "datasets = {'cifar100': count}"}],
+        "rationale": "fix the dataset count source",
+    })
+    with pytest.raises(ValueError) as exc:
+        _apply_code_patch(code_path, stale)
+    message = str(exc.value)
+    assert "was not found" in message
+    assert "Closest actual code" in message
+    assert "datasets = {'cifar100': num_samples}" in message  # the real line is shown
+
+
 def test_code_patch_protects_confirmed_block_and_enforces_diagnostic_scope(
     tmp_path: Path,
 ) -> None:

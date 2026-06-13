@@ -21,10 +21,13 @@ def _rank_candidates(query: str, docs: list[Doc], k: int = 25) -> list[str]:
     bm25_rank = {path: rank for rank, path in enumerate(bm25)}
     q_lower = query.lower().replace("\\", "/")
     q_tokens = set(_tok(query))
+    # Generic query-noise words only — never a specific repo/project name. A name
+    # that occurs in (almost) every file is already downweighted by BM25's IDF,
+    # so the ranker stays repo-agnostic without hardcoding any corpus.
     identifiers = {
         token
         for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", query)
-        if token.lower() not in {"error", "file", "line", "openood", "python"}
+        if token.lower() not in {"error", "file", "line", "python", "code", "function"}
     }
     scored: list[tuple[float, str]] = []
     for doc in docs:

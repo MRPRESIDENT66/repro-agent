@@ -1030,6 +1030,19 @@ def _round_code_is_endorsed(run_ok: bool, contract_passes: bool, review_path: Pa
     return run_ok and contract_passes and not _review_requires_repair(review_path)
 
 
+def _repair_loop_should_continue(contract_passes: bool) -> bool:
+    """Keep repairing only while the deterministic public contract still FAILS.
+
+    Once it fully passes (counts, runs, aggregation, above-chance sanity,
+    composite consistency, normalization) the loop stops — a paranoid Reviewer
+    must not push further repairs that can only break a contract-validated result
+    (observed in 029/030: the agent reached the correct value, then a later round
+    risked flipping it back). The Reviewer still drives repairs while the contract
+    is failing, which is its real value; it just loses the power to keep mutating
+    an already-validated result."""
+    return not contract_passes
+
+
 def _execute_eval(session: DockerSession):
     syntax = session.shell("python -m py_compile eval_ebo.py", timeout=120)
     if not syntax.ok:
@@ -1209,10 +1222,7 @@ Do not guess or mention the private target.""",
 
         review_current(0)
         for round_index in (1, 2, 3, 4):
-            if (
-                _public_contract_passes(session)
-                and not _review_requires_repair(WORKDIR / "review_report.md")
-            ):
+            if not _repair_loop_should_continue(_public_contract_passes(session)):
                 break
             diagnostics = _public_contract_diagnostics(session)
             repair_context = (

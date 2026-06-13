@@ -202,6 +202,17 @@ def test_round_code_endorsement_requires_all_three_signals(tmp_path: Path) -> No
     assert not _round_code_is_endorsed(True, True, tmp_path / "missing.md")
 
 
+def test_repair_loop_stops_once_contract_passes_regardless_of_reviewer() -> None:
+    # Regression for 029/030: once the deterministic contract fully passes, the
+    # loop must stop so a paranoid Reviewer cannot drive a repair that breaks an
+    # already-validated result.
+    from run_openood_multi_rag import _repair_loop_should_continue
+
+    assert not _repair_loop_should_continue(_public_contract_passes(_session(87.58, 87.58)))
+    # An inverted (below-chance) result still fails the contract → keep repairing.
+    assert _repair_loop_should_continue(_public_contract_passes(_session(12.42, 12.42)))
+
+
 def test_review_status_fails_closed(tmp_path: Path) -> None:
     report = tmp_path / "review.md"
     assert _review_requires_repair(report)

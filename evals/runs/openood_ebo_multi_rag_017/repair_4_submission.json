@@ -1,0 +1,11 @@
+```json
+{
+  "edits": [
+    {
+      "old": "    ROOT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')\n    data_root = os.path.join(ROOT_DIR, 'data')",
+      "new": "    script_dir = os.path.dirname(os.path.abspath(__file__))\n    # If script is in project root, data is at ./data\n    # If script is in a subdirectory, data is at ../data\n    if os.path.exists(os.path.join(script_dir, 'data', 'benchmark_imglist')):\n        data_root = os.path.join(script_dir, 'data')\n    else:\n        data_root = os.path.join(os.path.dirname(script_dir), 'data')"
+    }
+  ],
+  "rationale": "The original ROOT_DIR computation assumed the script was in a subdirectory of the project root, but when run from /workspace/, os.path.join('/workspace', '..') resolves to '/', making data_root='/data/' instead of '/workspace/data/'. The fix checks whether the data directory exists relative to the script's own location, falling back to the parent directory if needed, matching the actual repository layout where data/benchmark_imglist/cifar10/test_cifar10.txt exists at /workspace/data/benchmark_imglist/cifar10/."
+}
+```

@@ -1,0 +1,16 @@
+## Command 1
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default --device cpu
+```
+
+exit=2 timed_out=False
+
+```text
+
+usage: eval_ebo.py [-h] --root ROOT [--data-dir DATA_DIR]
+                   [--imglist-dir IMGLIST_DIR] [--temperature TEMPERATURE]
+                   [--batch-size BATCH_SIZE]
+eval_ebo.py: error: unrecognized arguments: --device cpu
+
+```

@@ -1,0 +1,1395 @@
+## Command 2
+
+```bash
+cat navigator_report.md 2>/dev/null || echo "NOT FOUND"
+```
+
+exit=0 timed_out=False
+
+```text
+# Navigator Handoff for Reproducer
+
+## Task
+Reproduce CIFAR-10 EBO OOD evaluation using OpenOOD v0.5.1, including near-OOD (CIFAR-100, TinyImageNet) and far-OOD (MNIST, SVHN, Texture, Places365) benchmarks, with AUROC aggregation across multiple training runs.
+
+---
+
+## Exact Source Paths
+
+| Component | Path |
+|-----------|------|
+| Entry script (single run) | `scripts/ood/ebo/cifar10_test_ood_ebo.sh` |
+| Entry script (multi-run) | `scripts/eval_ood.py` |
+| EBO postprocessor | `openood/postprocessors/ebo_postprocessor.py` |
+| EBO config | `configs/postprocessors/ebo.yml` |
+| Dataset definitions | `openood/evaluation_api/datasets.py` |
+| Preprocessing | `openood/evaluation_api/preprocessor.py` |
+| Metrics | `openood/evaluators/metrics.py` |
+| Network loading | `openood/networks/utils.py` |
+| Config parsing | `openood/utils/config.py` |
+
+---
+
+## EBO Formula
+
+From `openood/postprocessors/ebo_postprocessor.py`:
+
+```python
+conf = self.temperature * torch.logsumexp(output / self.temperature, dim=1)
+```
+
+Where:
+- `output` = logits from the network (shape `[batch, num_classes]`)
+- `temperature` = hyperparameter (default 1.0, configurable via `postprocessor_args.temperature`)
+- `conf` = energy score (higher = more in-distribution)
+- Prediction is standard argmax of softmax
+
+---
+
+## CIFAR-10 / Near-OOD Data & Preprocessing
+
+### Dataset structure (from `openood/evaluation_api/datasets.py`)
+
+| Split | Datasets |
+|-------|----------|
+| ID test | CIFAR-10 |
+| Near-OOD | CIFAR-100, TinyImageNet (TIN) |
+| Far-OOD | MNIST, SVHN, Texture, Places365 |
+
+### Preprocessing (from `openood/evaluation_api/preprocessor.py`)
+
+All test images use `TestStandardPreProcessor`:
+1. Convert to RGB
+2. Resize to 32×32 (bilinear interpolation)
+3. CenterCrop to 32×32
+4. ToTensor
+5. Normalize with CIFAR-10 stats: `mean=[0.4914, 0.4822, 0.4465]`, `std=[0.2470, 0.2435, 0.2616]`
+
+**Important**: All OOD datasets (including MNIST, SVHN) are converted to RGB 3-channel and resized to 32×32.
+
+### Data loading
+- Uses `ImglistDataset` with `.txt` imglist files
+- Batch size: 200 (from configs)
+- No data augmentation for test/OOD
+
+---
+
+## Checkpoint / Model Loading
+
+### Single run (from `cifar10_test_ood_ebo.sh`)
+...[1799 chars omitted]...
+ Risks
+
+### CUDA dependency
+- `scripts/eval_ood.py` uses `torch.cuda` implicitly via model `.to(device)`
+- **No CPU fallback** in the current code
+- To run on CPU: modify `scripts/eval_ood.py` to set `device = 'cpu'` and remove `.cuda()` calls
+
+### Dependencies
+- PyTorch (with CUDA recommended)
+- torchvision ≥ 0.13 (for `InterpolationMode.BILINEAR`)
+- NumPy, Pandas, pickle
+- OpenOOD package (local import from `openood/`)
+
+### Potential issues
+1. **CUDA out of memory**: Batch size 200 may be large for some GPUs
+2. **Missing imglist files**: Ensure `./data/benchmark_imglist/` exists
+3. **Checkpoint path**: Must match exactly (including `s0/` subdirectory)
+4. **torchvision version**: `InterpolationMode` requires torchvision ≥ 0.13
+
+---
+
+## Minimal Implementation Plan
+
+### Step 1: Environment Setup
+```bash
+git clone https://github.com/Jingkang50/OpenOOD.git
+cd OpenOOD
+pip install -r requirements.txt
+```
+
+### Step 2: Data Preparation
+- Download CIFAR-10, CIFAR-100, TinyImageNet, MNIST, SVHN, Texture, Places365
+- Place in `./data/images_classic/`
+- Ensure imglist files in `./data/benchmark_imglist/cifar10/`
+
+### Step 3: Get Checkpoint
+- Train CIFAR-10 ResNet18_32x32 baseline (100 epochs, lr=0.1)
+- Or download pre-trained checkpoint to:
+  `results/cifar10_resnet18_32x32_base_e100_lr0.1_default/s0/best.ckpt`
+
+### Step 4: Single Run Test
+```bash
+bash scripts/ood/ebo/cifar10_test_ood_ebo.sh
+```
+
+### Step 5: Multi-Run Evaluation
+```bash
+python scripts/eval_ood.py \
+    --id-data cifar10 \
+    --root ./results/cifar10_resnet18_32x32_base_e100_lr0.1_default \
+    --postprocessor ebo \
+    --save-score --save-csv
+```
+
+### Step 6: CPU Adaptation (if needed)
+- Modify `scripts/eval_ood.py` line ~150: change `device = 'cuda'` to `device = 'cpu'`
+- Remove `.cuda()` calls on model and data
+
+### Step 7: Verify Output
+- Check printed metrics table (AUROC, AUPR, FPR@95)
+- Verify CSV saved to `{root}/ood/ebo.csv`
+
+---
+
+## Key Parameters
+
+| Parameter | Value |
+|-----------|-------|
+| Temperature | 1.0 |
+| Batch size | 200 |
+| Image size | 32×32 |
+| Normalization | CIFAR-10 mean/std |
+| Number of runs | All subdirectories in `--root` |
+| Checkpoint file | `best.ckpt` per run directory |
+
+
+```
+
+## Command 3
+
+```bash
+cat reproducer_public_log.txt 2>/dev/null || echo "NOT FOUND"
+```
+
+exit=0 timed_out=False
+
+```text
+## Command 1
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default --device cpu
+```
+
+exit=2 timed_out=False
+
+```text
+
+usage: eval_ebo.py [-h] --root ROOT [--data-dir DATA_DIR]
+                   [--imglist-dir IMGLIST_DIR] [--temperature TEMPERATURE]
+                   [--batch-size BATCH_SIZE]
+eval_ebo.py: error: unrecognized arguments: --device cpu
+
+```
+
+
+```
+
+## Command 4
+
+```bash
+cat eval_ebo.py 2>/dev/null || echo "NOT FOUND"
+```
+
+exit=0 timed_out=False
+
+```text
+#!/usr/bin/env python3
+"""CPU-safe EBO OOD evaluation for CIFAR-10 using OpenOOD checkpoints."""
+
+import os
+import sys
+import json
+import argparse
+from glob import glob
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torchvision.transforms as tvs_trans
+from PIL import Image, ImageFile
+
+# Fix truncated images
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# Import OpenOOD's exact ResNet18_32x32 implementation
+from openood.networks import ResNet18_32x32
+
+# ---------------------------------------------------------------------------
+# EBO postprocessor (from openood/postprocessors/ebo_postprocessor.py)
+# ---------------------------------------------------------------------------
+class EBOPostprocessor:
+    def __init__(self, temperature=1.0):
+        self.temperature = temperature
+
+    def __call__(self, logits):
+        # energy score: temperature * logsumexp(logits / temperature)
+        conf = self.temperature * torch.logsumexp(logits / self.temperature, dim=1)
+        return conf  # higher = more in-distribution
+
+
+# ---------------------------------------------------------------------------
+# Dataset loading (from openood/datasets/imglist_dataset.py)
+# ---------------------------------------------------------------------------
+class ImglistDataset(torch.utils.data.Dataset):
+    def __init__(self, imglist_pth, data_dir, transform):
+        with open(imglist_pth) as f:
+            self.imglist = f.readlines()
+        self.data_dir = data_dir
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.imglist)
+
+    def __getitem__(self, index):
+        line = self.imglist[index].strip()
+        tokens = line.split(' ', 1)
+        image_name = tokens[0]
+        path = os.path.join(self.data_dir, image_name)
+        with open(path, 'rb') as f:
+            img = Image.open(f).convert('RGB')
+        img = self.transform(img)
+        return img
+
+
+# ---------------------------------------------------------------------------
+# Preprocessing (from openood/evaluation_api/preprocessor.py)
+# ---------------------------------------------------------------------------
+def get_cifar10_test_transform():
+    return tvs_trans.Compose([
+      
+...[4366 chars omitted]...
+ implementation
+    model = ResNet18_32x32(num_classes=10)
+    
+    all_results = []
+    run_names = []
+    
+    for run_dir in run_dirs:
+        run_name = os.path.basename(run_dir)
+        run_names.append(run_name)
+        checkpoint_path = os.path.join(run_dir, 'best.ckpt')
+        if not os.path.exists(checkpoint_path):
+            print(f"Warning: Checkpoint not found at {checkpoint_path}", file=sys.stderr)
+            continue
+        
+        results = evaluate_run(
+            model=model,
+            checkpoint_path=checkpoint_path,
+            temperature=args.temperature,
+            batch_size=args.batch_size,
+            data_dir=args.data_dir,
+            imglist_dir=args.imglist_dir)
+        all_results.append(results)
+    
+    if not all_results:
+        print("Error: No successful evaluations", file=sys.stderr)
+        sys.exit(1)
+    
+    # Compute aggregation: dataset mean within each run, then mean of runs
+    # First, compute per-run dataset means
+    run_dataset_means = []
+    for results in all_results:
+        dataset_values = list(results.values())
+        run_mean = np.mean(dataset_values)
+        run_dataset_means.append(run_mean)
+    
+    # Then mean of runs
+    actual = np.mean(run_dataset_means)
+    
+    # Build output
+    # Count datasets per run
+    dataset_counts = {}
+    for results in all_results:
+        for dataset_name in results:
+            dataset_counts[dataset_name] = dataset_counts.get(dataset_name, 0) + 1
+    
+    # Build run_metrics
+    run_metrics = {}
+    for i, run_name in enumerate(run_names):
+        if i < len(all_results):
+            run_metrics[run_name] = {
+                'cifar100': float(all_results[i].get('cifar100', 0)),
+                'tin': float(all_results[i].get('tin', 0))
+            }
+    
+    output = {
+        'metric': 'near_ood_auroc',
+        'actual': float(actual),
+        'datasets': {
+            'cifar100': dataset_counts.get('cifar100', 0),
+            'tin': dataset_counts.get('tin', 0)
+        },
+        'run_metrics': run_metrics,
+        'aggregation': 'dataset_mean_then_run_mean'
+    }
+    
+    print(f'REPRO_RESULT {json.dumps(output)}')
+
+
+if __name__ == '__main__':
+    main()
+
+
+```
+
+## Command 5
+
+```bash
+ls -la
+```
+
+exit=0 timed_out=False
+
+```text
+total 788
+drwxr-xr-x 23 root root    736 Jun 12 21:51 .
+drwxr-xr-x  1 root root   4096 Jun 12 23:40 ..
+drwxr-xr-x  3 root root     96 Jun 12 21:15 .github
+-rw-r--r--  1 root root   2399 Jun 12 21:15 .gitignore
+-rw-r--r--  1 root root    892 Jun 12 21:15 .pre-commit-config.yaml
+-rw-r--r--  1 root root   5227 Jun 12 21:15 CODE_OF_CONDUCT.md
+-rw-r--r--  1 root root   3077 Jun 12 21:15 CONTRIBUTING.md
+-rw-r--r--  1 root root   1070 Jun 12 21:15 LICENSE
+-rw-r--r--  1 root root  38941 Jun 12 21:15 README.md
+-rw-r--r--  1 root root   2129 Jun 12 23:41 builder_rag_packet.md
+-rw-r--r--  1 root root     21 Jun 12 21:15 codespell_ignored.txt
+drwxr-xr-x  7 root root    224 Jun 12 21:15 configs
+-rw-r--r--  1 root root   8766 Jun 12 23:42 critic_candidate.py
+-rw-r--r--  1 root root   2006 Jun 12 23:41 critic_rag_packet.md
+-rw-r--r--  1 root root 108160 Jun 12 23:42 critic_transcript.jsonl
+drwxr-xr-x  4 root root    128 Jun 12 21:30 data
+-rw-r--r--  1 root root  23842 Jun 12 21:15 easy_dev.ipynb
+-rw-r--r--  1 root root   8766 Jun 12 23:42 eval_ebo.py
+-rw-r--r--  1 root root   1296 Jun 12 21:15 imglist_generator.py
+-rw-r--r--  1 root root   1114 Jun 12 21:15 main.py
+-rw-r--r--  1 root root   2500 Jun 12 23:40 navigator_rag_packet.md
+-rw-r--r--  1 root root   6209 Jun 12 23:41 navigator_report.md
+-rw-r--r--  1 root root  36359 Jun 12 23:41 navigator_transcript.jsonl
+drwxr-xr-x 16 root root    512 Jun 12 23:42 openood
+-rw-r--r--  1 root root 425138 Jun 12 21:15 poetry.lock
+-rw-r--r--  1 root root   2310 Jun 12 21:15 pyproject.toml
+-rw-r--r--  1 root root    394 Jun 12 23:42 reproducer_public_log.txt
+-rw-r--r--  1 root root  64691 Jun 12 23:41 reproducer_transcript.jsonl
+drwxr-xr-x  3 root root     96 Jun 12 21:20 results
+-rw-r--r--  1 root root   1105 Jun 12 23:40 reviewer_rag_packet.md
+drwxr-xr-x 15 root root    480 Jun 12 21:15 scripts
+-rw-r--r--  1 root root   1164 Jun 12 21:15 setup.py
+drwxr-xr-x  7 root root    224 Jun 12 21:15 tests
+drwxr-xr-x  5 root root    160 Jun 12 21:15 tools
+
+
+```
+
+## Command 6
+
+```bash
+python -c "import openood; print(openood.__version__)" 2>&1
+```
+
+exit=1 timed_out=False
+
+```text
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+AttributeError: module 'openood' has no attribute '__version__'
+
+
+```
+
+## Command 7
+
+```bash
+ls results/ 2>/dev/null; echo "---"; ls data/ 2>/dev/null; echo "---"; pip show openood 2>&1 | head -5
+```
+
+exit=0 timed_out=False
+
+```text
+cifar10_resnet18_32x32_base_e100_lr0.1_default
+---
+benchmark_imglist
+images_classic
+---
+WARNING: Package(s) not found: openood
+
+
+```
+
+## Command 8
+
+```bash
+ls results/cifar10_resnet18_32x32_base_e100_lr0.1_default/
+```
+
+exit=0 timed_out=False
+
+```text
+s0
+s1
+s2
+
+
+```
+
+## Command 9
+
+```bash
+python -c "import openood; print(dir(openood))" 2>&1
+```
+
+exit=0 timed_out=False
+
+```text
+['__builtins__', '__cached__', '__doc__', '__file__', '__loader__', '__name__', '__package__', '__path__', '__spec__']
+
+
+```
+
+## Command 10
+
+```bash
+ls results/cifar10_resnet18_32x32_base_e100_lr0.1_default/s0/
+```
+
+exit=0 timed_out=False
+
+```text
+best.ckpt
+best_epoch96_acc0.9470.ckpt
+config.yml
+last_epoch100_acc0.9430.ckpt
+log.txt
+
+
+```
+
+## Command 11
+
+```bash
+ls results/cifar10_resnet18_32x32_base_e100_lr0.1_default/s1/
+```
+
+exit=0 timed_out=False
+
+```text
+best.ckpt
+best_epoch95_acc0.9500.ckpt
+config.yml
+last_epoch100_acc0.9490.ckpt
+log.txt
+
+
+```
+
+## Command 12
+
+```bash
+ls results/cifar10_resnet18_32x32_base_e100_lr0.1_default/s2/
+```
+
+exit=0 timed_out=False
+
+```text
+best.ckpt
+best_epoch99_acc0.9450.ckpt
+config.yml
+last_epoch100_acc0.9420.ckpt
+log.txt
+
+
+```
+
+## Command 13
+
+```bash
+find / -path "*/openood*" -name "*.py" 2>/dev/null | head -20
+```
+
+exit=0 timed_out=False
+
+```text
+/workspace/openood/losses/focal.py
+/workspace/openood/losses/ssim.py
+/workspace/openood/losses/sce.py
+/workspace/openood/losses/__init__.py
+/workspace/openood/losses/rd4ad_loss.py
+/workspace/openood/losses/kdad_losses.py
+/workspace/openood/losses/draem_loss.py
+/workspace/openood/losses/reweight.py
+/workspace/openood/preprocessors/draem_preprocessor.py
+/workspace/openood/preprocessors/cider_preprocessor.py
+/workspace/openood/preprocessors/csi_preprocessor.py
+/workspace/openood/preprocessors/__init__.py
+/workspace/openood/preprocessors/randaugment_preprocessor.py
+/workspace/openood/preprocessors/palm_preprocessor.py
+/workspace/openood/preprocessors/utils.py
+/workspace/openood/preprocessors/transform.py
+/workspace/openood/preprocessors/test_preprocessor.py
+/workspace/openood/preprocessors/cutout_preprocessor.py
+/workspace/openood/preprocessors/cutpaste_preprocessor.py
+/workspace/openood/preprocessors/pixmix_preprocessor.py
+
+
+```
+
+## Command 14
+
+```bash
+ls /workspace/openood/
+```
+
+exit=0 timed_out=False
+
+```text
+__init__.py
+__pycache__
+attacks
+datasets
+evaluation_api
+evaluators
+losses
+networks
+pipelines
+postprocessors
+preprocessors
+recorders
+trainers
+utils
+
+
+```
+
+## Command 15
+
+```bash
+ls /workspace/openood/postprocessors/
+```
+
+exit=0 timed_out=False
+
+```text
+__init__.py
+adascale_postprocessor.py
+ash_postprocessor.py
+base_postprocessor.py
+cfood_postprocessor.py
+cider_postprocessor.py
+conf_branch_postprocessor.py
+cutpaste_postprocessor.py
+dice_postprocessor.py
+draem_postprocessor.py
+dropout_postprocessor.py
+dsvdd_postprocessor.py
+ebo_postprocessor.py
+ensemble_postprocessor.py
+fdbd_postprocessor.py
+gen_postprocessor.py
+gmm_postprocessor.py
+godin_postprocessor.py
+gradnorm_postprocessor.py
+gram_postprocessor.py
+grood.py
+info.py
+iodin_postprocessor.py
+kl_matching_postprocessor.py
+knn_postprocessor.py
+maxlogit_postprocessor.py
+mcd_postprocessor.py
+mcm_postprocessor.py
+mds_ensemble_postprocessor.py
+mds_postprocessor.py
+mos_postprocessor.py
+nci_postprocessor.py
+nnguide_postprocessor.py
+npos_postprocessor.py
+odin_postprocessor.py
+opengan_postprocessor.py
+openmax_postprocessor.py
+patchcore_postprocessor.py
+rankfeat_postprocessor.py
+rd4ad_postprocessor.py
+react_postprocessor.py
+relation_postprocessor.py
+residual_postprocessor.py
+reweightood_postprocessor.py
+rmds_postprocessor.py
+rotpred_postprocessor.py
+rts_postprocessor.py
+scale_postprocessor.py
+she_postprocessor.py
+ssd_postprocessor.py
+t2fnorm_postprocessor.py
+temp_scaling_postprocessor.py
+utils.py
+vim_postprocessor.py
+vra_postprocessor.py
+
+
+```
+
+## Command 16
+
+```bash
+cat /workspace/openood/postprocessors/ebo_postprocessor.py
+```
+
+exit=0 timed_out=False
+
+```text
+from typing import Any
+
+import torch
+import torch.nn as nn
+
+from .base_postprocessor import BasePostprocessor
+
+
+class EBOPostprocessor(BasePostprocessor):
+    def __init__(self, config):
+        super().__init__(config)
+        self.args = self.config.postprocessor.postprocessor_args
+        self.temperature = self.args.temperature
+        self.args_dict = self.config.postprocessor.postprocessor_sweep
+
+    @torch.no_grad()
+    def postprocess(self, net: nn.Module, data: Any):
+        output = net(data)
+        score = torch.softmax(output, dim=1)
+        _, pred = torch.max(score, dim=1)
+        conf = self.temperature * torch.logsumexp(output / self.temperature,
+                                                  dim=1)
+        return pred, conf
+
+    def set_hyperparam(self, hyperparam: list):
+        self.temperature = hyperparam[0]
+
+    def get_hyperparam(self):
+        return self.temperature
+
+
+```
+
+## Command 17
+
+```bash
+cat /workspace/openood/evaluators/__init__.py
+```
+
+exit=0 timed_out=False
+
+```text
+from .utils import get_evaluator
+
+
+```
+
+## Command 18
+
+```bash
+cat /workspace/openood/evaluators/utils.py
+```
+
+exit=0 timed_out=False
+
+```text
+from openood.evaluators.mos_evaluator import MOSEvaluator
+from openood.utils import Config
+
+from .ad_evaluator import ADEvaluator
+from .arpl_evaluator import ARPLEvaluator
+from .base_evaluator import BaseEvaluator
+from .ece_evaluator import ECEEvaluator
+from .fsood_evaluator import FSOODEvaluator
+from .ood_evaluator import OODEvaluator
+from .osr_evaluator import OSREvaluator
+from .patchcore_evaluator import PatchCoreEvaluator
+
+
+def get_evaluator(config: Config):
+    evaluators = {
+        'base': BaseEvaluator,
+        'ood': OODEvaluator,
+        'fsood': FSOODEvaluator,
+        'patch': PatchCoreEvaluator,
+        'arpl': ARPLEvaluator,
+        'ad': ADEvaluator,
+        'mos': MOSEvaluator,
+        'ece': ECEEvaluator,
+        'osr': OSREvaluator
+    }
+    return evaluators[config.evaluator.name](config)
+
+
+```
+
+## Command 19
+
+```bash
+cat /workspace/openood/evaluators/ood_evaluator.py
+```
+
+exit=0 timed_out=False
+
+```text
+import csv
+import os
+from typing import Dict, List
+
+import numpy as np
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+from openood.postprocessors import BasePostprocessor
+from openood.utils import Config
+
+from .base_evaluator import BaseEvaluator
+from .metrics import compute_all_metrics
+
+
+class OODEvaluator(BaseEvaluator):
+    def __init__(self, config: Config):
+        """OOD Evaluator.
+
+        Args:
+            config (Config): Config file from
+        """
+        super(OODEvaluator, self).__init__(config)
+        self.id_pred = None
+        self.id_conf = None
+        self.id_gt = None
+
+    def eval_ood(self,
+                 net: nn.Module,
+                 id_data_loaders: Dict[str, DataLoader],
+                 ood_data_loaders: Dict[str, Dict[str, DataLoader]],
+                 postprocessor: BasePostprocessor,
+                 fsood: bool = False):
+        if type(net) is dict:
+            for subnet in net.values():
+                subnet.eval()
+        else:
+            net.eval()
+        assert 'test' in id_data_loaders, \
+            'id_data_loaders should have the key: test!'
+        dataset_name = self.config.dataset.name
+
+        if self.config.postprocessor.APS_mode:
+            assert 'val' in id_data_loaders
+            assert 'val' in ood_data_loaders
+            self.hyperparam_search(net, id_data_loaders['val'],
+                                   ood_data_loaders['val'], postprocessor)
+
+        print(f'Performing inference on {dataset_name} dataset...', flush=True)
+        id_pred, id_conf, id_gt = postprocessor.inference(
+            net, id_data_loaders['test'])
+        if self.config.recorder.save_scores:
+            self._save_scores(id_pred, id_conf, id_gt, dataset_name)
+
+        if fsood:
+            # load csid data and compute confidence
+            for dataset_name, csid_dl in ood_data_loaders['csid'].items():
+                print(f'Performing inference on {dataset_name} dataset...',
+                      flush=True)
+                csid_pred, csid_conf, csid_gt = postprocessor.inference(
+                    net, csid_dl)
+                if self.config.recorder.save_scores:
+                    self._save_scores(cs
+...[6911 chars omitted]...
+        print('Starting automatic parameter search...')
+        aps_dict = {}
+        max_auroc = 0
+        hyperparam_names = []
+        hyperparam_list = []
+        count = 0
+        for name in postprocessor.args_dict.keys():
+            hyperparam_names.append(name)
+            count += 1
+        for name in hyperparam_names:
+            hyperparam_list.append(postprocessor.args_dict[name])
+        hyperparam_combination = self.recursive_generator(
+            hyperparam_list, count)
+        for hyperparam in hyperparam_combination:
+            postprocessor.set_hyperparam(hyperparam)
+            id_pred, id_conf, id_gt = postprocessor.inference(
+                net, id_data_loader)
+            ood_pred, ood_conf, ood_gt = postprocessor.inference(
+                net, ood_data_loader)
+            ood_gt = -1 * np.ones_like(ood_gt)  # hard set to -1 as ood
+            pred = np.concatenate([id_pred, ood_pred])
+            conf = np.concatenate([id_conf, ood_conf])
+            label = np.concatenate([id_gt, ood_gt])
+            ood_metrics = compute_all_metrics(conf, label, pred)
+            index = hyperparam_combination.index(hyperparam)
+            aps_dict[index] = ood_metrics[1]
+            print('Hyperparam:{}, auroc:{}'.format(hyperparam,
+                                                   aps_dict[index]))
+            if ood_metrics[1] > max_auroc:
+                max_auroc = ood_metrics[1]
+        for key in aps_dict.keys():
+            if aps_dict[key] == max_auroc:
+                postprocessor.set_hyperparam(hyperparam_combination[key])
+        print('Final hyperparam: {}'.format(postprocessor.get_hyperparam()))
+        return max_auroc
+
+    def recursive_generator(self, list, n):
+        if n == 1:
+            results = []
+            for x in list[0]:
+                k = []
+                k.append(x)
+                results.append(k)
+            return results
+        else:
+            results = []
+            temp = self.recursive_generator(list, n - 1)
+            for x in list[n - 1]:
+                for y in temp:
+                    k = y.copy()
+                    k.append(x)
+                    results.append(k)
+            return results
+
+
+```
+
+## Command 20
+
+```bash
+cat /workspace/openood/evaluators/metrics.py
+```
+
+exit=0 timed_out=False
+
+```text
+import numpy as np
+from sklearn import metrics
+
+
+def compute_all_metrics(conf, label, pred):
+    np.set_printoptions(precision=3)
+    recall = 0.95
+    auroc, aupr_in, aupr_out, fpr = auc_and_fpr_recall(conf, label, recall)
+
+    accuracy = acc(pred, label)
+
+    results = [fpr, auroc, aupr_in, aupr_out, accuracy]
+
+    return results
+
+
+# accuracy
+def acc(pred, label):
+    ind_pred = pred[label != -1]
+    ind_label = label[label != -1]
+
+    num_tp = np.sum(ind_pred == ind_label)
+    acc = num_tp / len(ind_label)
+
+    return acc
+
+
+# fpr_recall
+def fpr_recall(conf, label, tpr):
+    gt = np.ones_like(label)
+    gt[label == -1] = 0
+
+    fpr_list, tpr_list, threshold_list = metrics.roc_curve(gt, conf)
+    fpr = fpr_list[np.argmax(tpr_list >= tpr)]
+    thresh = threshold_list[np.argmax(tpr_list >= tpr)]
+    return fpr, thresh
+
+
+# auc
+def auc_and_fpr_recall(conf, label, tpr_th):
+    # following convention in ML we treat OOD as positive
+    ood_indicator = np.zeros_like(label)
+    ood_indicator[label == -1] = 1
+
+    # in the postprocessor we assume ID samples will have larger
+    # "conf" values than OOD samples
+    # therefore here we need to negate the "conf" values
+    fpr_list, tpr_list, thresholds = metrics.roc_curve(ood_indicator, -conf)
+    fpr = fpr_list[np.argmax(tpr_list >= tpr_th)]
+
+    precision_in, recall_in, thresholds_in \
+        = metrics.precision_recall_curve(1 - ood_indicator, conf)
+
+    precision_out, recall_out, thresholds_out \
+        = metrics.precision_recall_curve(ood_indicator, -conf)
+
+    auroc = metrics.auc(fpr_list, tpr_list)
+    aupr_in = metrics.auc(recall_in, precision_in)
+    aupr_out = metrics.auc(recall_out, precision_out)
+
+    return auroc, aupr_in, aupr_out, fpr
+
+
+# ccr_fpr
+def ccr_fpr(conf, fpr, pred, label):
+    ind_conf = conf[label != -1]
+    ind_pred = pred[label != -1]
+    ind_label = label[label != -1]
+
+    ood_conf = conf[label == -1]
+
+    num_ind = len(ind_conf)
+    num_ood = len(ood_conf)
+
+    fp_num = int(np.ceil(fpr * num_ood))
+    thresh = np.sort(ood_conf)[-fp_num]
+    num_tp = np.sum((ind_conf > thresh) * (ind_pred == ind_label))
+    ccr = num_tp / num_ind
+
+    return ccr
+
+
+def detection(ind_confidences,
+              ood_confidences,
+              n_iter=100000,
+              return_data=False):
+    # calculate the minimum detection error
+    Y1 = ood_confidences
+    X1 = ind_confidences
+
+    start = np.min([np.min(X1), np.min(Y1)])
+    end = np.max([np.max(X1), np.max(Y1)])
+    gap = (end - start) / n_iter
+
+    best_error = 1.0
+    best_delta = None
+    all_thresholds = []
+    all_errors = []
+    for delta in np.arange(start, end, gap):
+        tpr = np.sum(np.sum(X1 < delta)) / np.float(len(X1))
+        error2 = np.sum(np.sum(Y1 > delta)) / np.float(len(Y1))
+        detection_error = (tpr + error2) / 2.0
+
+        if return_data:
+            all_thresholds.append(delta)
+            all_errors.append(detection_error)
+
+        if detection_error < best_error:
+            best_error = np.minimum(best_error, detection_error)
+            best_delta = delta
+
+    if return_data:
+        return best_error, best_delta, all_errors, all_thresholds
+    else:
+        return best_error, best_delta
+
+
+```
+
+## Command 21
+
+```bash
+cat eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+#!/usr/bin/env python3
+"""CPU-safe EBO OOD evaluation for CIFAR-10 using OpenOOD checkpoints."""
+
+import os
+import sys
+import json
+import argparse
+from glob import glob
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torchvision.transforms as tvs_trans
+from PIL import Image, ImageFile
+
+# Fix truncated images
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# Import OpenOOD's exact ResNet18_32x32 implementation
+from openood.networks import ResNet18_32x32
+
+# ---------------------------------------------------------------------------
+# EBO postprocessor (from openood/postprocessors/ebo_postprocessor.py)
+# ---------------------------------------------------------------------------
+class EBOPostprocessor:
+    def __init__(self, temperature=1.0):
+        self.temperature = temperature
+
+    def __call__(self, logits):
+        # energy score: temperature * logsumexp(logits / temperature)
+        conf = self.temperature * torch.logsumexp(logits / self.temperature, dim=1)
+        return conf  # higher = more in-distribution
+
+
+# ---------------------------------------------------------------------------
+# Dataset loading (from openood/datasets/imglist_dataset.py)
+# ---------------------------------------------------------------------------
+class ImglistDataset(torch.utils.data.Dataset):
+    def __init__(self, imglist_pth, data_dir, transform):
+        with open(imglist_pth) as f:
+            self.imglist = f.readlines()
+        self.data_dir = data_dir
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.imglist)
+
+    def __getitem__(self, index):
+        line = self.imglist[index].strip()
+        tokens = line.split(' ', 1)
+        image_name = tokens[0]
+        path = os.path.join(self.data_dir, image_name)
+        with open(path, 'rb') as f:
+            img = Image.open(f).convert('RGB')
+        img = self.transform(img)
+        return img
+
+
+# ---------------------------------------------------------------------------
+# Preprocessing (from openood/evaluation_api/preprocessor.py)
+# ---------------------------------------------------------------------------
+def get_cifar10_test_transform():
+    return tvs_trans.Compose([
+      
+...[4366 chars omitted]...
+ implementation
+    model = ResNet18_32x32(num_classes=10)
+    
+    all_results = []
+    run_names = []
+    
+    for run_dir in run_dirs:
+        run_name = os.path.basename(run_dir)
+        run_names.append(run_name)
+        checkpoint_path = os.path.join(run_dir, 'best.ckpt')
+        if not os.path.exists(checkpoint_path):
+            print(f"Warning: Checkpoint not found at {checkpoint_path}", file=sys.stderr)
+            continue
+        
+        results = evaluate_run(
+            model=model,
+            checkpoint_path=checkpoint_path,
+            temperature=args.temperature,
+            batch_size=args.batch_size,
+            data_dir=args.data_dir,
+            imglist_dir=args.imglist_dir)
+        all_results.append(results)
+    
+    if not all_results:
+        print("Error: No successful evaluations", file=sys.stderr)
+        sys.exit(1)
+    
+    # Compute aggregation: dataset mean within each run, then mean of runs
+    # First, compute per-run dataset means
+    run_dataset_means = []
+    for results in all_results:
+        dataset_values = list(results.values())
+        run_mean = np.mean(dataset_values)
+        run_dataset_means.append(run_mean)
+    
+    # Then mean of runs
+    actual = np.mean(run_dataset_means)
+    
+    # Build output
+    # Count datasets per run
+    dataset_counts = {}
+    for results in all_results:
+        for dataset_name in results:
+            dataset_counts[dataset_name] = dataset_counts.get(dataset_name, 0) + 1
+    
+    # Build run_metrics
+    run_metrics = {}
+    for i, run_name in enumerate(run_names):
+        if i < len(all_results):
+            run_metrics[run_name] = {
+                'cifar100': float(all_results[i].get('cifar100', 0)),
+                'tin': float(all_results[i].get('tin', 0))
+            }
+    
+    output = {
+        'metric': 'near_ood_auroc',
+        'actual': float(actual),
+        'datasets': {
+            'cifar100': dataset_counts.get('cifar100', 0),
+            'tin': dataset_counts.get('tin', 0)
+        },
+        'run_metrics': run_metrics,
+        'aggregation': 'dataset_mean_then_run_mean'
+    }
+    
+    print(f'REPRO_RESULT {json.dumps(output)}')
+
+
+if __name__ == '__main__':
+    main()
+
+
+```
+
+## Command 22
+
+```bash
+ls data/benchmark_imglist/ 2>/dev/null
+```
+
+exit=0 timed_out=False
+
+```text
+cifar10
+cifar100
+covid
+imagenet
+imagenet200
+mnist
+osr_cifar50
+osr_cifar6
+osr_mnist6
+osr_tin20
+
+
+```
+
+## Command 23
+
+```bash
+ls data/benchmark_imglist/cifar10/
+```
+
+exit=0 timed_out=False
+
+```text
+fractals_fvis.txt
+test_cifar10.txt
+test_cifar100.txt
+test_cifar100_full.txt
+test_cifar100c.txt
+test_cifar10_full.txt
+test_cifar10_mos.txt
+test_cifar10c.txt
+test_fashionmnist.txt
+test_imagenet10.txt
+test_mnist.txt
+test_places365.txt
+test_svhn.txt
+test_texture.txt
+test_tin.txt
+train_cifar10.txt
+train_cifar10_mos.txt
+train_tin597.txt
+val_cifar10.txt
+val_cifar10_mos.txt
+val_tin.txt
+
+
+```
+
+## Command 24
+
+```bash
+ls data/images_classic/
+```
+
+exit=0 timed_out=False
+
+```text
+cifar10
+cifar100
+tin
+
+
+```
+
+## Command 25
+
+```bash
+head -3 data/benchmark_imglist/cifar10/test_cifar10.txt
+```
+
+exit=0 timed_out=False
+
+```text
+cifar10/test/airplane/0298.png 0
+cifar10/test/airplane/0267.png 0
+cifar10/test/airplane/0501.png 0
+
+
+```
+
+## Command 26
+
+```bash
+head -3 data/benchmark_imglist/cifar10/test_cifar100.txt
+```
+
+exit=0 timed_out=False
+
+```text
+cifar100/test/streetcar/0065.png -1
+cifar100/test/streetcar/0071.png -1
+cifar100/test/streetcar/0059.png -1
+
+
+```
+
+## Command 27
+
+```bash
+head -3 data/benchmark_imglist/cifar10/test_tin.txt
+```
+
+exit=0 timed_out=False
+
+```text
+tin/val/images/val_0.JPEG -1
+tin/val/images/val_1.JPEG -1
+tin/val/images/val_3.JPEG -1
+
+
+```
+
+## Command 28
+
+```bash
+ls data/images_classic/cifar10/
+```
+
+exit=0 timed_out=False
+
+```text
+test
+train
+
+
+```
+
+## Command 29
+
+```bash
+ls data/images_classic/cifar100/
+```
+
+exit=0 timed_out=False
+
+```text
+test
+train
+
+
+```
+
+## Command 30
+
+```bash
+ls data/images_classic/tin/
+```
+
+exit=0 timed_out=False
+
+```text
+test
+train
+val
+wnids.txt
+words.txt
+
+
+```
+
+## Command 31
+
+```bash
+ls data/images_classic/cifar10/test/ | head -5
+```
+
+exit=0 timed_out=False
+
+```text
+airplane
+automobile
+bird
+cat
+deer
+
+
+```
+
+## Command 32
+
+```bash
+ls data/images_classic/cifar100/test/ | head -5
+```
+
+exit=0 timed_out=False
+
+```text
+apple
+aquarium_fish
+baby
+bear
+beaver
+
+
+```
+
+## Command 33
+
+```bash
+ls /workspace/openood/networks/
+```
+
+exit=0 timed_out=False
+
+```text
+__init__.py
+__pycache__
+adascale_net.py
+arpl_net.py
+ascood_net.py
+ash_net.py
+bit.py
+cider_net.py
+clip.py
+conf_branch_net.py
+csi_net.py
+de_resnet18_256x256.py
+densenet.py
+dinov2.py
+draem_net.py
+dropout_net.py
+dsvdd_net.py
+godin_net.py
+lenet.py
+mcd_net.py
+mmcls_featext.py
+net_utils_.py
+npos_net.py
+opengan.py
+openmax_net.py
+palm_net.py
+patchcore_net.py
+projection_net.py
+react_net.py
+regnet_y_16gf.py
+resnet18_224x224.py
+resnet18_256x256.py
+resnet18_32x32.py
+resnet18_64x64.py
+resnet50.py
+rot_net.py
+rts_net.py
+scale_net.py
+simclr_net.py
+swin_t.py
+t2fnorm_net.py
+temp.py
+udg_net.py
+utils.py
+vit.py
+vit_b_16.py
+wrn.py
+
+
+```

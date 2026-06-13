@@ -1,0 +1,241 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+Loading CIFAR-10 test set...
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 205, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 146, in main
+    id_loader = get_id_loader(args.data_root, args.batch_size)
+  File "/workspace/eval_ebo.py", line 56, in get_id_loader
+    dataset = datasets.CIFAR10(root=data_root, train=False, download=False,
+  File "/usr/local/lib/python3.10/site-packages/torchvision/datasets/cifar.py", line 69, in __init__
+    raise RuntimeError("Dataset not found or corrupted. You can use download=True to download it")
+RuntimeError: Dataset not found or corrupted. You can use download=True to download it
+
+```
+
+## Command 3
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 4
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 21, in <module>
+    from openood.evaluation_api.datasets import DATA_INFO, data_setup
+  File "/workspace/openood/evaluation_api/__init__.py", line 1, in <module>
+    from .evaluator import Evaluator
+  File "/workspace/openood/evaluation_api/evaluator.py", line 11, in <module>
+    from openood.evaluators.metrics import compute_all_metrics
+  File "/workspace/openood/evaluators/__init__.py", line 1, in <module>
+    from .utils import get_evaluator
+  File "/workspace/openood/evaluators/utils.py", line 1, in <module>
+    from openood.evaluators.mos_evaluator import MOSEvaluator
+  File "/workspace/openood/evaluators/mos_evaluator.py", line 13, in <module>
+    from openood.postprocessors import BasePostprocessor
+  File "/workspace/openood/postprocessors/__init__.py", line 5, in <module>
+    from .cider_postprocessor import CIDERPostprocessor
+  File "/workspace/openood/postprocessors/cider_postprocessor.py", line 3, in <module>
+    import faiss
+ModuleNotFoundError: No module named 'faiss'
+
+```
+
+## Command 5
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 6
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 21, in <module>
+    from openood.evaluation_api.datasets import DATA_INFO, data_setup
+  File "/workspace/openood/evaluation_api/__init__.py", line 1, in <module>
+    from .evaluator import Evaluator
+  File "/workspace/openood/evaluation_api/evaluator.py", line 11, in <module>
+    from openood.evaluators.metrics import compute_all_metrics
+  File "/workspace/openood/evaluators/__init__.py", line 1, in <module>
+    from .utils import get_evaluator
+  File "/workspace/openood/evaluators/utils.py", line 1, in <module>
+    from openood.evaluators.mos_evaluator import MOSEvaluator
+  File "/workspace/openood/evaluators/mos_evaluator.py", line 13, in <module>
+    from openood.postprocessors import BasePostprocessor
+  File "/workspace/openood/postprocessors/__init__.py", line 5, in <module>
+    from .cider_postprocessor import CIDERPostprocessor
+  File "/workspace/openood/postprocessors/cider_postprocessor.py", line 3, in <module>
+    import faiss
+ModuleNotFoundError: No module named 'faiss'
+
+```
+
+## Command 7
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 8
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+Loading datasets...
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/urllib/request.py", line 1348, in do_open
+    h.request(req.get_method(), req.selector, req.data, headers,
+  File "/usr/local/lib/python3.10/http/client.py", line 1303, in request
+    self._send_request(method, url, body, headers, encode_chunked)
+  File "/usr/local/lib/python3.10/http/client.py", line 1349, in _send_request
+    self.endheaders(body, encode_chunked=encode_chunked)
+  File "/usr/local/lib/python3.10/http/client.py", line 1298, in endheaders
+    self._send_output(message_body, encode_chunked=encode_chunked)
+  File "/usr/local/lib/python3.10/http/client.py", line 1058, in _send_output
+    self.send(msg)
+  File "/usr/local/lib/python3.10/http/client.py", line 996, in send
+    self.connect()
+  File "/usr/local/lib/python3.10/http/client.py", line 1468, in connect
+    super().connect()
+  File "/usr/local/lib/python3.10/http/client.py", line 962, in connect
+    self.sock = self._create_connection(
+  File "/usr/local/lib/python3.10/socket.py", line 836, in create_connection
+    for res in getaddrinfo(host, port, 0, SOCK_STREAM):
+  File "/usr/local/lib/python3.10/socket.py", line 967, in getaddrinfo
+    for res in _socket.getaddrinfo(host, port, family, type, proto, flags):
+socket.gaierror: [Errno -3] Temporary failure in name resolution
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 224, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 169, in main
+    id_loader, ood_loaders = get_dataloaders(args.data_root, args.batch_size)
+  File "/workspace/eval_ebo.py", line 71, in get_dataloaders
+    id_dataset = CIFAR10(root=data_root, train=False, download=True,
+  File "/usr/local/lib/python3.10/site-packages/torchvision/datasets/cifar.py", line 66, in __init__
+    self.download()
+  File "/usr/local/lib/python3.10/site-packages/torchvision/datasets/cifar.py", line 139, in download
+    download_and_extract_archive(self.url, self.root, filename=self.filename, md5=self.tgz_md5)
+  File "/usr/local/lib/python3.10/site-packages/torchvision/datasets/utils.py", line 388, in download_and_extract_archive
+    download_url(url, download_root, filename, md5)
+  File "/usr/local/lib/python3.10/site-packages/torchvision/datasets/utils.py", line 118, in download_url
+    url = _get_redirect_url(url, max_hops=max_redirect_hops)
+  File "/usr/local/lib/python3.10/site-packages/torchvision/datasets/utils.py", line 63, in _get_redirect_url
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:
+  File "/usr/local/lib/python3.10/urllib/request.py", line 216, in urlopen
+    return opener.open(url, data, timeout)
+  File "/usr/local/lib/python3.10/urllib/request.py", line 519, in open
+    response = self._open(req, data)
+  File "/usr/local/lib/python3.10/urllib/request.py", line 536, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+  File "/usr/local/lib/python3.10/urllib/request.py", line 496, in _call_chain
+    result = func(*args)
+  File "/usr/local/lib/python3.10/urllib/request.py", line 1391, in https_open
+    return self.do_open(http.client.HTTPSConnection, req,
+  File "/usr/local/lib/python3.10/urllib/request.py", line 1351, in do_open
+    raise URLError(err)
+urllib.error.URLError: <urlopen error [Errno -3] Temporary failure in name resolution>
+
+```
+
+## Command 9
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 10
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+Loading datasets...
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 231, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 176, in main
+    id_loader, ood_loaders = get_dataloaders(args.data_root, args.batch_size)
+  File "/workspace/eval_ebo.py", line 72, in get_dataloaders
+    id_dataset = ImglistDataset(
+TypeError: ImglistDataset.__init__() missing 1 required positional argument: 'data_aux_preprocessor'
+
+```

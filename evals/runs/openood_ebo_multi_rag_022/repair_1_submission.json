@@ -1,0 +1,1 @@
+{"edits": [{"old": "    id_imglist = os.path.join(data_dir, 'benchmark_imglist', 'cifar10', 'test.txt')", "new": "    id_imglist = os.path.join(data_dir, 'benchmark_imglist', 'cifar10', 'test_cifar10.txt')"}], "rationale": "The ID imglist file is named test_cifar10.txt (confirmed by repo listing), not test.txt. This was the exact error blocking execution."}

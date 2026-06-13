@@ -1,0 +1,14 @@
+## Command 1
+
+```bash
+python eval_ebo.py
+```
+
+exit=2 timed_out=False
+
+```text
+
+usage: eval_ebo.py [-h] --root ROOT [--device DEVICE]
+eval_ebo.py: error: the following arguments are required: --root
+
+```

@@ -1,0 +1,11 @@
+```json
+{
+  "edits": [
+    {
+      "old": "from openood.evaluators.metrics import compute_all_metrics",
+      "new": "import numpy as np\nfrom sklearn import metrics\n\n\ndef compute_all_metrics(conf, label, pred):\n    np.set_printoptions(precision=3)\n    recall = 0.95\n    auroc, aupr_in, aupr_out, fpr = auc_and_fpr_recall(conf, label, recall)\n    accuracy = acc(pred, label)\n    results = [fpr, auroc, aupr_in, aupr_out, accuracy]\n    return results\n\n\ndef acc(pred, label):\n    ind_pred = pred[label != -1]\n    ind_label = label[label != -1]\n    num_tp = np.sum(ind_pred == ind_label)\n    acc = num_tp / len(ind_label)\n    return acc\n\n\ndef fpr_recall(conf, label, tpr):\n    gt = np.ones_like(label)\n    gt[label == -1] = 0\n    fpr_list, tpr_list, threshold_list = metrics.roc_curve(gt, conf)\n    fpr = fpr_list[np.argmax(tpr_list >= tpr)]\n    thresh = threshold_list[np.argmax(tpr_list >= tpr)]\n    return fpr, thresh\n\n\ndef auc_and_fpr_recall(conf, label, tpr_th):\n    ood_indicator = np.zeros_like(label)\n    ood_indicator[label == -1] = 1\n    fpr_list, tpr_list, thresholds = metrics.roc_curve(ood_indicator, -conf)\n    fpr = fpr_list[np.argmax(tpr_list >= tpr_th)]\n    precision_in, recall_in, thresholds_in = metrics.precision_recall_curve(1 - ood_indicator, conf)\n    precision_out, recall_out, thresholds_out = metrics.precision_recall_curve(ood_indicator, -conf)\n    auroc = metrics.auc(fpr_list, tpr_list)\n    aupr_in = metrics.auc(recall_in, precision_in)\n    aupr_out = metrics.auc(recall_out, precision_out)\n    return auroc, aupr_in, aupr_out, fpr"
+    }
+  ],
+  "rationale": "The import `from openood.evaluators.metrics import compute_all_metrics` triggers a transitive dependency chain that imports `faiss`, which is not installed. The `compute_all_metrics` function and its helper functions (`acc`, `fpr_recall`, `auc_and_fpr_recall`) only depend on `numpy` and `sklearn.metrics`, both of which are available. By inlining these functions directly into `eval_ebo.py`, we eliminate the problematic import chain entirely while preserving the exact same metric computation logic."
+}
+```

@@ -1,0 +1,76 @@
+{
+  "task": "Reproduce the official EBO Near-OOD AUROC for CIFAR-10 using the\nofficial s0, s1, and s2 CrossEntropy ResNet-18 checkpoints and both Near-OOD\ndatasets, CIFAR-100 and TinyImageNet. The fixed OpenOOD repository, data, and\ncheckpoints are already present. The environment is CPU-only and offline.\nPreserve repository evaluation semantics and report percentage AUROC.",
+  "blind_workspace_checked": true,
+  "agents": 1,
+  "attempt": "020",
+  "roles": {
+    "navigator": {
+      "steps": 4,
+      "errors": 0,
+      "format_errors": 6,
+      "gave_final": true,
+      "usage": {
+        "llm_calls": 4,
+        "prompt_tokens": 14802,
+        "cache_hit_tokens": 4864,
+        "completion_tokens": 1339,
+        "cost_yuan": 0.0249
+      },
+      "peak_ctx_tokens": 5741,
+      "tool_counts": {
+        "search_repo": 3
+      },
+      "command_indexes": [],
+      "submission_trace": null
+    }
+  },
+  "rag": {
+    "navigator": {
+      "dynamic": true,
+      "trigger": "initial_task",
+      "queries": [
+        "EBO energy-based OOD detection evaluation CIFAR-10 ResNet-18",
+        "scripts/eval_ood.py EBO postprocessor",
+        "configs/postprocessors/ebo.yml content"
+      ],
+      "calls": 3,
+      "max_queries": 3,
+      "usage": {
+        "llm_calls": 3,
+        "prompt_tokens": 2395,
+        "cache_hit_tokens": 896,
+        "completion_tokens": 227,
+        "cost_yuan": 0.0039
+      },
+      "trace": "navigator_rag_trace.md"
+    }
+  },
+  "dynamic_rag": true,
+  "retrieval_ranker": "exact_path_symbol_plus_bm25_llm",
+  "repair_mode": "structured_exact_replacement_patch",
+  "workflow_error": "RuntimeError: reproducer failed to synthesize a valid artifact",
+  "total_rag_calls": 3,
+  "rag_requirement_met": true,
+  "handoff_requirement_met": false,
+  "public_evidence_found": false,
+  "public_contract_diagnostics": [
+    "No valid REPRO_RESULT was produced by a successful evaluation command."
+  ],
+  "verdict": {
+    "match": false,
+    "expected": 87.58,
+    "actual": null,
+    "abs_diff": null,
+    "tolerance": 0.05,
+    "evidence_line": null,
+    "command_index": null,
+    "num_examples": null,
+    "datasets": null,
+    "run_metrics": null,
+    "aggregation": null,
+    "reason": "no_valid_structured_evidence"
+  },
+  "collaboration_pass": false,
+  "total_cost_yuan": 0.0288,
+  "total_commands": 0
+}

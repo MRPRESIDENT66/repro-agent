@@ -1,0 +1,169 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Evaluating s0...
+  s0: ERROR - [Errno 2] No such file or directory: '/workspace/../data/benchmark_imglist/cifar10/test_cifar10.txt'
+
+```
+
+## Command 3
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 4
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=0 timed_out=False
+
+```text
+REPRO_RESULT {"metric": "near_ood_auroc", "actual": 87.09160809481564, "datasets": {"cifar100": 3, "tin": 3}, "run_metrics": {"s0": {"cifar100": 84.96135061726989, "tin": 88.18223334332244}, "s1": {"cifar100": 86.37881728393583, "tin": 88.39513523533299}, "s2": {"cifar100": 85.87366790122016, "tin": 88.75844418781253}}, "aggregation": "dataset_mean_then_run_mean"}
+
+Evaluating s0...
+  s0: cifar100=84.96, tin=88.18
+Evaluating s1...
+  s1: cifar100=86.38, tin=88.40
+Evaluating s2...
+  s2: cifar100=85.87, tin=88.76
+
+Summary:
+  Dataset means: cifar100=85.74, tin=88.45
+  Run means: ['86.57', '87.39', '87.32']
+  Final AUROC: 87.09
+
+```
+
+## Command 5
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 6
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=0 timed_out=False
+
+```text
+REPRO_RESULT {"metric": "near_ood_auroc", "actual": 87.09160809481564, "datasets": {"cifar100": 3, "tin": 3}, "run_metrics": {"s0": {"cifar100": 84.96135061726989, "tin": 88.18223334332244}, "s1": {"cifar100": 86.37881728393583, "tin": 88.39513523533299}, "s2": {"cifar100": 85.87366790122016, "tin": 88.75844418781253}}, "aggregation": "dataset_mean_then_run_mean"}
+
+Evaluating s0...
+  s0: cifar100=84.96, tin=88.18
+Evaluating s1...
+  s1: cifar100=86.38, tin=88.40
+Evaluating s2...
+  s2: cifar100=85.87, tin=88.76
+
+Summary:
+  Dataset means: cifar100=85.74, tin=88.45
+  Run means: ['86.57', '87.39', '87.32']
+  Final AUROC: 87.09
+
+```
+
+## Command 7
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 8
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Evaluating s0...
+  s0: ERROR - [Errno 2] No such file or directory: '/workspace/../data/benchmark_imglist/cifar10/test_cifar10.txt'
+
+```
+
+## Command 9
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 10
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=0 timed_out=False
+
+```text
+REPRO_RESULT {"metric": "near_ood_auroc", "actual": 87.09160809481564, "datasets": {"cifar100": 3, "tin": 3}, "run_metrics": {"s0": {"cifar100": 84.96135061726989, "tin": 88.18223334332244}, "s1": {"cifar100": 86.37881728393583, "tin": 88.39513523533299}, "s2": {"cifar100": 85.87366790122016, "tin": 88.75844418781253}}, "aggregation": "dataset_mean_then_run_mean"}
+
+Evaluating s0...
+  s0: cifar100=84.96, tin=88.18
+Evaluating s1...
+  s1: cifar100=86.38, tin=88.40
+Evaluating s2...
+  s2: cifar100=85.87, tin=88.76
+
+Summary:
+  Dataset means: cifar100=85.74, tin=88.45
+  Run means: ['86.57', '87.39', '87.32']
+  Final AUROC: 87.09
+
+```

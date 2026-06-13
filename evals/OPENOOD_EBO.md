@@ -572,15 +572,19 @@ Per-run metrics (all six values match the canonical run at full precision):
 The Reviewer gave PASS on the first execution — no REPAIR_REQUIRED returned.
 This is the lowest-cost and lowest-step successful run in the series (035 used
 10 commands and 4 repair rounds; this used 2 commands and 0 repair rounds at
-23% of the cost). The delta from 035 is purely stochastic model sampling: the
-model happened to generate correct TIN preprocessing on the first try.
+23% of the cost).
+
+Note on attempt numbering: the run script defaults to `ATTEMPT=002` when the
+env var is unset; this result was therefore saved into
+`evals/runs/openood_ebo_multi_rag_002/` rather than a `_036` directory. The
+artifacts and result.json are genuine — only the directory name is misleading.
 
 **Combined model verdict (deepseek-chat vs qwen3-max):**
 
 | | deepseek-chat | qwen3-max |
 |---|---|---|
-| Pass rate | 2 / 12 attempts (025, 030) | **2 / 2 attempts (035 near-miss, 036 pass)** |
-| Dominant failure | sign inversion + dataset count | single TIN preprocessing detail (035) |
+| Pass rate | 2 / 12 attempts (025, 030) | **1 / 2 attempts (036 pass; 035 fail)** |
+| Dominant failure | sign inversion + dataset count | TIN preprocessing (64→32 resize missing, 035) |
 | Min cost per pass | CNY 0.2833 (030) | **CNY 0.163** |
 | Min commands per pass | 6 (030) | **2** |
 

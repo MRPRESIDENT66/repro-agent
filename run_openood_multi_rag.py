@@ -919,9 +919,9 @@ def _public_contract_diagnostics(session: DockerSession) -> list[str]:
         return [issue]
     issues: list[str] = []
     if evidence.datasets != EXPECTED_DATASETS:
-        issues.append(
-            f"Dataset counts mismatch: expected {EXPECTED_DATASETS}, got {evidence.datasets}."
-        )
+        issue = f"Dataset counts mismatch: expected {EXPECTED_DATASETS}, got {evidence.datasets}."
+        issue += _silent_drop_hint(session, evidence.command_index)
+        issues.append(issue)
     if evidence.aggregation != AGGREGATION:
         issues.append(
             f"Aggregation mismatch: expected {AGGREGATION!r}, got {evidence.aggregation!r}."
@@ -963,6 +963,40 @@ def _public_contract_diagnostics(session: DockerSession) -> list[str]:
         issues.append(below_chance)
     issues.extend(_normalization_diagnostics(getattr(session, "workdir", None)))
     return issues
+
+
+# Generic signals that a data pipeline silently dropped items (PIL/torch/OS —
+# not specific to any repo or dataset).
+_DROP_SIGNAL_RE = re.compile(
+    r"broken|FileNotFoundError|No such file|cannot identify image|truncat|"
+    r"could not|UnidentifiedImageError|skipp",
+    re.IGNORECASE,
+)
+
+
+def _silent_drop_hint(session, command_index: int | None) -> str:
+    """When a count is short, explain it generically: scan the evaluating
+    command's own log for signs that items were silently dropped (unreadable /
+    missing files), so a short count is diagnosed as 'items were dropped — fix
+    the data path/root', not left as a mystery. Oracle-agnostic: the markers are
+    standard Python/PIL/OS errors; names no dataset or path."""
+    transcript = list(getattr(session, "transcript", []) or [])
+    run = None
+    if command_index and 1 <= command_index <= len(transcript):
+        run = transcript[command_index - 1]
+    text = f"{getattr(run, 'stdout', '')}\n{getattr(run, 'stderr', '')}" if run else ""
+    dropped = len(_DROP_SIGNAL_RE.findall(text))
+    hint = (
+        " A short count means the pipeline silently dropped listed items rather "
+        "than scoring all of them. Fix the data root / path construction so every "
+        "list entry resolves and decodes — do not subset or drop items."
+    )
+    if dropped:
+        hint += (
+            f" The evaluation log shows at least {dropped} drop/error signal(s) "
+            f"(e.g. 'broken' / FileNotFoundError) — those items did not load."
+        )
+    return hint
 
 
 def _below_chance_diagnostic(actual: float) -> str | None:

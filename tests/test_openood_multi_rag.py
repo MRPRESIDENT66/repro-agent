@@ -75,12 +75,33 @@ def test_public_contract_diagnostics_explain_counts_without_private_target() -> 
 
     diagnostics = _public_contract_diagnostics(session)
 
-    assert diagnostics == [
+    assert len(diagnostics) == 1
+    assert diagnostics[0].startswith(
         "Dataset counts mismatch: expected {'cifar100': 9000, 'tin': 7793}, "
         "got {'cifar100': 3, 'tin': 3}."
-    ]
+    )
+    assert "silently dropped" in diagnostics[0]   # generic count-short guidance
     assert "87.58" not in diagnostics[0]
     assert _diagnostic_change_terms(diagnostics) == {"datasets", "len("}
+
+
+def test_count_mismatch_surfaces_silent_drop_signals_from_log() -> None:
+    # Regression for 027/028/031: a short count because the loader silently
+    # skipped unreadable items should be diagnosed from the log, not left a
+    # mystery — generically (no dataset/path names).
+    session = _session(87.0, 87.0)
+    payload = json.loads(session.transcript[0].stdout.removeprefix("REPRO_RESULT "))
+    payload["datasets"] = {"cifar100": 9000, "tin": 6526}
+    session.transcript[0].stdout = f"REPRO_RESULT {json.dumps(payload)}\n"
+    session.transcript[0].stderr = (
+        "ERROR:root:[/workspace/data/.../val_7.JPEG] broken\n"
+        "FileNotFoundError: [Errno 2] No such file: val_9.JPEG\n"
+    )
+
+    diagnostics = _public_contract_diagnostics(session)
+
+    assert any("drop/error signal" in d for d in diagnostics)  # log-derived drop count
+    assert any("silently dropped" in d for d in diagnostics)    # generic guidance
 
 
 def test_public_contract_diagnostics_prioritize_malformed_successful_result() -> None:

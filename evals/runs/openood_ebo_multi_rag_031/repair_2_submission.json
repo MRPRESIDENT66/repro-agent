@@ -1,0 +1,11 @@
+```json
+{
+  "edits": [
+    {
+      "old": "ID_DATA_DIR = './data/cifar10'\n\n# Near-OOD: CIFAR-100\nOOD_CIFAR100_IMGLIST = './data/benchmark_imglist/cifar100/test_cifar100.txt'\nOOD_CIFAR100_DATA_DIR = './data/cifar100'\n\n# Near-OOD: TinyImageNet (resized to 32x32)\nOOD_TIN_IMGLIST = './data/benchmark_imglist/cifar100/test_tin.txt'\nOOD_TIN_DATA_DIR = './data/tinyimagenet'",
+      "new": "ID_DATA_DIR = './data/images_classic'\n\n# Near-OOD: CIFAR-100\nOOD_CIFAR100_IMGLIST = './data/benchmark_imglist/cifar100/test_cifar100.txt'\nOOD_CIFAR100_DATA_DIR = './data/images_classic'\n\n# Near-OOD: TinyImageNet (resized to 32x32)\nOOD_TIN_IMGLIST = './data/benchmark_imglist/cifar100/test_tin.txt'\nOOD_TIN_DATA_DIR = './data/images_classic'"
+    }
+  ],
+  "rationale": "The execution log shows FileNotFoundError for './data/cifar10/cifar10/test/airplane/0298.png'. The imglist files contain relative paths like 'cifar10/test/airplane/0298.png', and ImglistDataset joins data_dir with that relative path. The actual image files reside under data/images_classic/, not data/cifar10/. Changing all three data_dir constants to './data/images_classic' resolves the path construction to './data/images_classic/cifar10/test/airplane/0298.png', which matches the existing directory structure."
+}
+```

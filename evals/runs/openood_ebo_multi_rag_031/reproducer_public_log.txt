@@ -1,0 +1,345 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Loading datasets...
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 223, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 166, in main
+    id_loader = create_dataloader(ID_IMGLIST, ID_DATA_DIR)
+  File "/workspace/eval_ebo.py", line 66, in create_dataloader
+    dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: './data/cifar10_test.txt'
+
+```
+
+## Command 3
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 4
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Loading datasets...
+Evaluating s0...
+ERROR:root:[./data/cifar10/cifar10/test/airplane/0298.png] broken
+ERROR:root:[./data/cifar10/cifar10/test/airplane/0840.png] broken
+ERROR:root:index [200] broken
+ERROR:root:index [0] broken
+ERROR:root:[./data/cifar10/cifar10/test/airplane/0413.png] broken
+ERROR:root:index [400] broken
+Traceback (most recent call last):
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 76, in getitem
+    with open(path, 'rb') as f:
+FileNotFoundError: [Errno 2] No such file or directory: './data/cifar10/cifar10/test/airplane/0298.png'
+ERROR:root:[Errno 2] No such file or directory: './data/cifar10/cifar10/test/airplane/0298.png'
+Traceback (most recent call last):
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 76, in getitem
+    with open(path, 'rb') as f:
+FileNotFoundError: [Errno 2] No such file or directory: './data/cifar10/cifar10/test/airplane/0840.png'
+Traceback (most recent call last):
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 76, in getitem
+    with open(path, 'rb') as f:
+FileNotFoundError: [Errno 2] No such file or directory: './data/cifar10/cifar10/test/airplane/0413.png'
+ERROR:root:[Errno 2] No such file or directory: './data/cifar10/cifar10/test/airplane/0840.png'
+ERROR:root:[Errno 2] No such file or directory: './data/cifar10/cifar10/test/airplane/0413.png'
+ERROR:root:[./data/cifar10/cifar10/test/airplane/0593.png] broken
+ERROR:root:index [600] broken
+ERROR:root:[./data/cifar10/cifar10/test/automobile/0038.png] broken
+ERROR:root:index [1200] broken
+ERROR:root:[./data/cifar10/cifar10/test/airplan
+...[3501 chars omitted]...
+:root:[./data/cifar10/cifar10/test/automobile/0391.png] broken
+ERROR:root:index [1400] broken
+Traceback (most recent call last):
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 76, in getitem
+    with open(path, 'rb') as f:
+FileNotFoundError: [Errno 2] No such file or directory: './data/cifar10/cifar10/test/automobile/0391.png'
+ERROR:root:[Errno 2] No such file or directory: './data/cifar10/cifar10/test/automobile/0391.png'
+    data = self._next_data()
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1525, in _next_data
+    return self._process_data(data, worker_id)
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1563, in _process_data
+    data.reraise()
+  File "/usr/local/lib/python3.10/site-packages/torch/_utils.py", line 774, in reraise
+    raise exception
+FileNotFoundError: Caught FileNotFoundError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/worker.py", line 374, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py", line 54, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py", line 54, in <listcomp>
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/workspace/openood/datasets/base_dataset.py", line 47, in __getitem__
+    raise e
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 76, in getitem
+    with open(path, 'rb') as f:
+FileNotFoundError: [Errno 2] No such file or directory: './data/cifar10/cifar10/test/airplane/0298.png'
+
+
+```
+
+## Command 5
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 6
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Loading datasets...
+Evaluating s0...
+ERROR:root:[./data/images_classic/cifar100/test/camel/0057.png] broken
+ERROR:root:index [1400] broken
+ERROR:root:[./data/images_classic/cifar100/test/boy/0087.png] broken
+ERROR:root:index [1000] broken
+Traceback (most recent call last):
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 100, in getitem
+    soft_label[sample['label']] = 1
+IndexError: index 15 is out of bounds for dimension 0 with size 10
+ERROR:root:index 15 is out of bounds for dimension 0 with size 10
+Traceback (most recent call last):
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 100, in getitem
+    soft_label[sample['label']] = 1
+IndexError: index 11 is out of bounds for dimension 0 with size 10
+ERROR:root:index 11 is out of bounds for dimension 0 with size 10
+ERROR:root:[./data/images_classic/cifar100/test/bus/0007.png] broken
+ERROR:root:index [1200] broken
+Traceback (most recent call last):
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 100, in getitem
+    soft_label[sample['label']] = 1
+IndexError: index 13 is out of bounds for dimension 0 with size 10
+ERROR:root:index 13 is out of bounds for dimension 0 with size 10
+ERROR:root:[./data/images_classic/cifar100/test/bowl/0053.png] broken
+ERROR:root:index [900] broken
+Traceback (most recent call last):
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 100, in getite
+...[2921 chars omitted]...
+:
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 718, in __next__
+    data = self._next_data()
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1525, in _next_data
+    return self._process_data(data, worker_id)
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1563, in _process_data
+    data.reraise()
+  File "/usr/local/lib/python3.10/site-packages/torch/_utils.py", line 774, in reraise
+    raise exception
+IndexError: Caught IndexError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/worker.py", line 374, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py", line 54, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py", line 54, in <listcomp>
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+  File "/workspace/openood/datasets/base_dataset.py", line 47, in __getitem__
+    raise e
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 100, in getitem
+    soft_label[sample['label']] = 1
+IndexError: index 10 is out of bounds for dimension 0 with size 10
+
+ERROR:root:[./data/images_classic/cifar100/test/crab/0063.png] broken
+ERROR:root:index [2400] broken
+Traceback (most recent call last):
+  File "/workspace/openood/datasets/base_dataset.py", line 31, in __getitem__
+    sample = self.getitem(index)
+  File "/workspace/openood/datasets/imglist_dataset.py", line 105, in getitem
+    raise e
+  File "/workspace/openood/datasets/imglist_dataset.py", line 100, in getitem
+    soft_label[sample['label']] = 1
+IndexError: index 26 is out of bounds for dimension 0 with size 10
+ERROR:root:index 26 is out of bounds for dimension 0 with size 10
+
+```
+
+## Command 7
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 8
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Loading datasets...
+Evaluating s0...
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 223, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 186, in main
+    results, id_count = evaluate_run(checkpoint_path, id_loader, ood_loaders)
+  File "/workspace/eval_ebo.py", line 143, in evaluate_run
+    ood_scores = get_scores(loader)
+  File "/workspace/eval_ebo.py", line 130, in get_scores
+    for batch in loader:
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 718, in __next__
+    data = self._next_data()
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1525, in _next_data
+    return self._process_data(data, worker_id)
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/dataloader.py", line 1563, in _process_data
+    data.reraise()
+  File "/usr/local/lib/python3.10/site-packages/torch/_utils.py", line 774, in reraise
+    raise exception
+RuntimeError: Caught RuntimeError in DataLoader worker process 1.
+Original Traceback (most recent call last):
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/worker.py", line 374, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/fetch.py", line 57, in fetch
+    return self.collate_fn(data)
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/collate.py", line 401, in default_collate
+    return collate(batch, collate_fn_map=default_collate_fn_map)
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/collate.py", line 171, in collate
+    {
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/collate.py", line 172, in <dictcomp>
+    key: collate(
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/collate.py", line 155, in collate
+    return collate_fn_map[elem_type](batch, collate_fn_map=collate_fn_map)
+  File "/usr/local/lib/python3.10/site-packages/torch/utils/data/_utils/collate.py", line 273, in collate_tensor_fn
+    storage = elem._typed_storage()._new_shared(numel, device=elem.device)
+  File "/usr/local/lib/python3.10/site-packages/torch/storage.py", line 1210, in _new_shared
+    untyped_storage = torch.UntypedStorage._new_shared(
+  File "/usr/local/lib/python3.10/site-packages/torch/storage.py", line 414, in _new_shared
+    return cls._new_using_fd_cpu(size)
+RuntimeError: unable to allocate shared memory(shm) for file </torch_246_429435822_1>: No space left on device (28)
+
+
+```
+
+## Command 9
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 10
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=0 timed_out=False
+
+```text
+REPRO_RESULT {"metric": "near_ood_auroc", "actual": 92.41273958203274, "datasets": {"cifar100": 9000, "tin": 6526}, "run_metrics": {"s0": {"cifar100": 85.62008888888887, "tin": 98.36723022440154}, "s1": {"cifar100": 86.99321975308642, "tin": 98.43004222426534}, "s2": {"cifar100": 86.75804320987653, "tin": 98.30781319167772}}, "aggregation": "dataset_mean_then_run_mean"}
+
+Loading datasets...
+Evaluating s0...
+Evaluating s1...
+Evaluating s2...
+
+```

@@ -729,43 +729,37 @@ def _dynamic_rag_role(
             synthesis_peak = max(synthesis_peak, reply.prompt_tokens)
             synthesis_messages.append({"role": "assistant", "content": reply.content})
             candidate = reply.content
-            # No-progress guard: a near-identical resubmission cannot clear a
-            # validation error, so reject it without re-validating and demand a
-            # different, targeted change.
-            if (
-                last_candidate is not None
-                and SequenceMatcher(None, last_candidate, candidate).ratio() > 0.97
-            ):
-                last_candidate = candidate
-                synthesis_messages.append({
-                    "role": "user",
-                    "content": (
-                        "This artifact is essentially identical to your previous "
-                        "rejected one, so it fails for the same reason. Change ONLY "
-                        "the specific construct the error named (the cited line / AST "
-                        "node) and resubmit a materially different artifact."
-                    ),
-                })
-                continue
-            last_candidate = candidate
+            # Always validate first: a VALID candidate is accepted regardless of
+            # how textually similar it is to the last one — a correct fix can be a
+            # one-line diff (e.g. a single normalization constant), which a model
+            # making surgical edits will submit as a near-identical artifact.
             try:
-                output_path.write_text(validator(candidate))
-                save_submission(candidate)
-                submitted = True
-                break
+                validated = validator(candidate)
             except Exception as exc:
                 message = str(exc)
+                near_identical = (
+                    last_candidate is not None
+                    and SequenceMatcher(None, last_candidate, candidate).ratio() > 0.97
+                )
                 repeated = message == last_error
-                last_error = message
+                last_candidate, last_error = candidate, message
                 correction = f"The synthesized artifact failed validation: {message}. Correct it."
-                if repeated:
+                if near_identical:
                     correction += (
-                        " This is the SAME error as your previous attempt — your fix "
-                        "did not address it. Locate the exact line/construct the error "
-                        "names and change that specific code; do not resubmit a similar "
-                        "version."
+                        " Your artifact barely changed and still fails — change the "
+                        "EXACT construct the error names (the cited line / AST node)."
+                    )
+                elif repeated:
+                    correction += (
+                        " This is the SAME error as your previous attempt — locate the "
+                        "exact construct the error names and change only that."
                     )
                 synthesis_messages.append({"role": "user", "content": correction})
+                continue
+            output_path.write_text(validated)
+            save_submission(candidate)
+            submitted = True
+            break
         _save_messages(f"{name}_synthesis", synthesis_messages)
     _save_role_transcript(name, result)
     if not queries:

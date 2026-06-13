@@ -383,7 +383,44 @@ def test_synthesis_rejects_no_progress_resubmission(tmp_path: Path, monkeypatch)
     transcript = _synthesis_harness(
         tmp_path, monkeypatch, [Reply(identical)] * 3, always_fail
     )
-    assert "essentially identical" in transcript
+    assert "barely changed" in transcript
+
+
+def test_synthesis_accepts_valid_near_identical_fix(tmp_path: Path, monkeypatch) -> None:
+    # Regression for 034 (qwen3-max): a correct fix can be a one-line diff
+    # (~99% similar to the rejected version, e.g. a single normalization
+    # constant). It must be VALIDATED and ACCEPTED, not discarded as 'no progress'.
+    import run_openood_multi_rag as module
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    artifacts = tmp_path / "artifacts"
+    bad = "x" * 400 + "\nstd = [0.2023, 0.1994, 0.2010]\n"
+    good = "x" * 400 + "\nstd = [0.247, 0.2435, 0.2616]\n"   # one-line fix, near-identical
+
+    def validator(content: str) -> str:
+        if "0.247" not in content:
+            raise ValueError("normalization mismatch")
+        return content
+
+    role_llm = ScriptedLLM([
+        Reply("", [ToolCall("q1", "search_repo", {"query": "repository normalization constants"})]),
+    ])
+    llms = iter([role_llm, ScriptedLLM([]), ScriptedLLM([Reply(bad), Reply(good)])])
+    monkeypatch.setattr(module, "WORKDIR", workspace)
+    monkeypatch.setattr(module, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(module, "ChatLLM", lambda: next(llms))
+    monkeypatch.setattr(module, "search_repo", lambda q, r, l, **k: "Most relevant files:\n")
+
+    _dynamic_rag_role(
+        name="synth_fix", session=Session(workspace),
+        instruction="Search then synthesize.", context="fix normalization",
+        output_path=workspace / "artifact.txt", submit_name="submit_handoff",
+        submit_description="submit", validator=validator, trigger="initial_task",
+        max_steps=3, max_queries=1, synthesis_attempts=2,
+    )
+
+    assert "0.247" in (workspace / "artifact.txt").read_text()  # the near-identical fix was accepted
 
 
 def test_synthesis_escalates_on_repeated_validation_error(tmp_path: Path, monkeypatch) -> None:

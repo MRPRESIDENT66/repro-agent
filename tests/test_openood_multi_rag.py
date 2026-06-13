@@ -53,6 +53,20 @@ def test_public_contract_accepts_two_decimal_aggregation_rounding() -> None:
     assert _public_contract_passes(_session(87.09, 87.0916666667))
 
 
+def test_below_chance_result_flagged_as_inverted_without_leaking_target() -> None:
+    # Regression for attempt 029: blind, an inverted detector (12.42 = 100-87.58)
+    # is symmetric with the correct value, so the agent oscillated. A general
+    # below-chance sanity signal breaks the symmetry — without revealing 87.58.
+    inverted = _public_contract_diagnostics(_session(12.42, 12.42))
+    assert any("below" in d.lower() and "chance" in d.lower() for d in inverted)
+    assert all("87.58" not in d for d in inverted)  # no private target leaked
+
+    # A correct, above-chance result carries no inversion flag (and otherwise
+    # passes the contract).
+    correct = _public_contract_diagnostics(_session(87.58, 87.58))
+    assert not any("chance" in d.lower() for d in correct)
+
+
 def test_public_contract_diagnostics_explain_counts_without_private_target() -> None:
     session = _session(87.0, 87.0)
     payload = json.loads(session.transcript[0].stdout.removeprefix("REPRO_RESULT "))

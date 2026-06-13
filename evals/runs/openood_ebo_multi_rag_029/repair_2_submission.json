@@ -1,0 +1,11 @@
+```json
+{
+  "edits": [
+    {
+      "old": "def energy_score(logits: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:\n    \"\"\"Compute energy score E(x) = -T * logsumexp(f(x)/T).\"\"\"\n    return -temperature * torch.logsumexp(logits / temperature, dim=1)",
+      "new": "def energy_score(logits: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:\n    \"\"\"Compute energy score E(x) = T * logsumexp(f(x)/T).\"\"\"\n    return temperature * torch.logsumexp(logits / temperature, dim=1)"
+    }
+  ],
+  "rationale": "The independent reviewer identified a semantic mismatch: the official EBOPostprocessor returns positive logsumexp (not negated) as the OOD score, where higher values indicate more OOD-like. The current implementation negates the score, which flips the sign convention and produces incorrect AUROC values. The fix removes the negation to match the official implementation."
+}
+```

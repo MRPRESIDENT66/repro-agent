@@ -1,0 +1,11 @@
+```json
+{
+  "edits": [
+    {
+      "old": "def evaluate_run(net: torch.nn.Module,\n                 id_loader: DataLoader,\n                 ood_loader: DataLoader,\n                 device: torch.device) -> float:\n    \"\"\"Evaluate a single run and return AUROC for one OOD dataset.\"\"\"\n    net.eval()\n    id_energies = []\n    ood_energies = []\n\n    for batch in id_loader:\n        data = batch['data'].to(device)\n        logits = net(data)\n        energies = energy_score(logits)\n        id_energies.append(energies.cpu().numpy())\n\n    for batch in ood_loader:\n        data = batch['data'].to(device)\n        logits = net(data)\n        energies = energy_score(logits)\n        ood_energies.append(energies.cpu().numpy())",
+      "new": "def evaluate_run(net: torch.nn.Module,\n                 id_loader: DataLoader,\n                 ood_loader: DataLoader,\n                 device: torch.device) -> float:\n    \"\"\"Evaluate a single run and return AUROC for one OOD dataset.\"\"\"\n    net.eval()\n    id_energies = []\n    ood_energies = []\n\n    for batch in id_loader:\n        data = batch['data'].to(device)\n        logits = net(data)\n        energies = energy_score(logits)\n        id_energies.append(energies.detach().cpu().numpy())\n\n    for batch in ood_loader:\n        data = batch['data'].to(device)\n        logits = net(data)\n        energies = energy_score(logits)\n        ood_energies.append(energies.detach().cpu().numpy())"
+    }
+  ],
+  "rationale": "The RuntimeError occurs because energy_score returns tensors that retain gradients (logsumexp is differentiable). The fix adds .detach() before .cpu().numpy() on both lines 76 and 82, matching the pattern used in OpenOOD's base_postprocessor.py inference method. This resolves the blocking execution error without changing any other behavior."
+}
+```

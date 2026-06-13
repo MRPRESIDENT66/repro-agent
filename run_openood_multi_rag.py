@@ -262,6 +262,10 @@ _REQUIRED_CONTRACT_MARKERS = ("REPRO_RESULT", "json.dumps")
 # harness points the eval at (where the official s0/s1/s2 runs live).
 METRIC = "near_ood_auroc"
 CHECKPOINT_ROOT = "results/cifar10_resnet18_32x32_base_e100_lr0.1_default"
+# Random-chance baseline of a higher-is-better metric (AUROC = 50). Enables a
+# general sanity check: a published method scoring below chance is inverted. Set
+# to None for metrics with no such baseline.
+CHANCE_LEVEL = 50.0
 # =============================================================================
 
 
@@ -954,8 +958,30 @@ def _public_contract_diagnostics(session: DockerSession) -> list[str]:
                 f"actual does not match dataset_mean_then_run_mean: "
                 f"reported {evidence.actual}, recomputed {computed}."
             )
+    below_chance = _below_chance_diagnostic(evidence.actual)
+    if below_chance:
+        issues.append(below_chance)
     issues.extend(_normalization_diagnostics(getattr(session, "workdir", None)))
     return issues
+
+
+def _below_chance_diagnostic(actual: float) -> str | None:
+    """General sanity check for a higher-is-better detection/ranking metric: a
+    published method scoring below the random-chance baseline almost always means
+    the score or label/decision direction is inverted (such metrics are symmetric
+    about chance — an inverted ranking gives ``baseline*2 - value``). This breaks
+    the otherwise-blind symmetry between a correct result and its inverse without
+    referencing the private target. Oracle-agnostic: ``CHANCE_LEVEL`` is config
+    (None disables)."""
+    if CHANCE_LEVEL is None or actual >= CHANCE_LEVEL:
+        return None
+    return (
+        f"The reported value ({actual}) is below the {CHANCE_LEVEL} random-chance "
+        f"baseline for this higher-is-better metric. A published method scoring "
+        f"below chance indicates an inverted score or label/decision direction — "
+        f"correct the scoring/decision polarity in the implementation so the metric "
+        f"exceeds chance; do not simply negate the reported number."
+    )
 
 
 def _diagnostic_change_terms(diagnostics: list[str]) -> set[str]:

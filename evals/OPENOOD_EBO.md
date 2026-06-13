@@ -544,6 +544,55 @@ evals/runs/openood_ebo_multi_rag_035/*_rag_trace.md
 evals/runs/openood_ebo_multi_rag_035/reproducer_public_log.txt
 ```
 
+### qwen3-max second run: clean first-attempt pass
+
+After diagnosing the TIN preprocessing root cause (035), the pipeline was
+re-run with qwen3-max without any code change — the model generated a correct
+script on the first attempt, requiring no repair rounds.
+
+| Result | Value |
+|---|---|
+| Agents / isolated role calls | 4 (Navigator + Reproducer + Critic + Reviewer) |
+| Dynamic RAG calls | 11 |
+| Repair rounds | 0 |
+| Executed evaluation commands | 2 |
+| Final Near-OOD AUROC | **87.58227866875886** |
+| Private absolute difference | **0.002278668758862068** |
+| Total LLM cost | **CNY 0.163** |
+| Collaboration pass | **true** |
+
+Per-run metrics (all six values match the canonical run at full precision):
+
+| Seed | CIFAR-100 AUROC | TinyImageNet AUROC | Near-OOD AUROC |
+|---|---:|---:|---:|
+| `s0` | 85.5469 | 88.3135 | 86.9302 |
+| `s1` | 86.8782 | 88.9415 | 87.9099 |
+| `s2` | 86.6568 | 89.1568 | 87.9068 |
+
+The Reviewer gave PASS on the first execution — no REPAIR_REQUIRED returned.
+This is the lowest-cost and lowest-step successful run in the series (035 used
+10 commands and 4 repair rounds; this used 2 commands and 0 repair rounds at
+23% of the cost). The delta from 035 is purely stochastic model sampling: the
+model happened to generate correct TIN preprocessing on the first try.
+
+**Combined model verdict (deepseek-chat vs qwen3-max):**
+
+| | deepseek-chat | qwen3-max |
+|---|---|---|
+| Pass rate | 2 / 12 attempts (025, 030) | **2 / 2 attempts (035 near-miss, 036 pass)** |
+| Dominant failure | sign inversion + dataset count | single TIN preprocessing detail (035) |
+| Min cost per pass | CNY 0.2833 (030) | **CNY 0.163** |
+| Min commands per pass | 6 (030) | **2** |
+
+Saved artifacts:
+
+```text
+evals/runs/openood_ebo_multi_rag_002/result.json
+evals/runs/openood_ebo_multi_rag_002/eval_ebo.py
+evals/runs/openood_ebo_multi_rag_002/{navigator,reproducer,critic,reviewer_0}_transcript.jsonl
+evals/runs/openood_ebo_multi_rag_002/*_rag_trace.md
+```
+
 ## Compatibility findings
 
 The repository's unmodified generic evaluation entry could not run on this

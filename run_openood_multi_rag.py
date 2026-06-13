@@ -1141,7 +1141,9 @@ Public execution contract:
 - official CIFAR-10 preprocessing and benchmark image lists; do not reimplement
   the repository's ImglistDataset;
 - implement the small torchvision test transform directly from
-  `openood/preprocessors/transform.py`; do not parse checkpoint `config.yml`
+  `openood/preprocessors/transform.py`; retrieve the complete transform
+  pipeline (Resize, CenterCrop, ToTensor, Normalize) — not just the
+  normalization mean/std — before coding; do not parse checkpoint `config.yml`
   files or instantiate `TestStandardPreProcessor`;
 - EBO and official AUROC sign semantics, percentage points, and dataset-then-run mean;
 - print exactly one strict-JSON `REPRO_RESULT` using `json.dumps`; its
@@ -1189,7 +1191,9 @@ Treat every hardcoded normalization value and any custom Dataset
 implementation as high risk: verify them against repository source and prefer
 the official ImglistDataset.
 Use a small direct torchvision test transform from repository normalization
-source. Reject checkpoint `config.yml` parsing and `TestStandardPreProcessor`,
+source; retrieve the complete transform pipeline from the source file and verify
+it includes all steps (Resize, CenterCrop, ToTensor, Normalize) — not just the
+normalization values. Reject checkpoint `config.yml` parsing and `TestStandardPreProcessor`,
 which add irrelevant serialized-config failure modes.
 Allow only direct OpenOOD model/dataset module imports. Reject
 `openood.evaluation_api`, `openood.evaluators`, and `openood.postprocessors`;
@@ -1244,6 +1248,12 @@ do not ignore its failures, and do not request changes to behavior already
 demonstrated by a successful execution unless repository evidence proves a
 semantic mismatch. When execution failed, focus the review on the latest
 blocking error; defer unrelated semantic concerns until the program runs.
+Check the per-dataset AUROC values in the execution log for anomalies: if one
+dataset's AUROC is substantially higher than the others (e.g. one near 98-100
+while others are in the 80s), this strongly indicates a preprocessing mismatch
+such as a missing image resize step — retrieve the repository transform source
+and verify the complete pipeline. Flag this as REPAIR_REQUIRED even when
+execution succeeded and the overall number looks plausible.
 End with exactly `REVIEW_STATUS: PASS` only when no repair is needed; otherwise
 end with exactly `REVIEW_STATUS: REPAIR_REQUIRED`.
 Do not guess or mention the private target.""",

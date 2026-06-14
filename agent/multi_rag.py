@@ -659,12 +659,36 @@ class OracleConfig:
 # Main orchestration
 # ---------------------------------------------------------------------------
 
-def run_oracle(config: OracleConfig) -> None:
+class _PipelineDone(Exception):
+    """Clean early-stop for the solo/team ablation conditions (not an error)."""
+
+
+def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
+    """Run one blind reproduction.
+
+    ``pipeline`` selects the ablation condition (E2):
+      * ``"solo"`` — Reproducer only (its own RAG) → execute. Single-agent baseline.
+      * ``"team"`` — Navigator + Reproducer + Critic → execute. Pre-execution
+        collaboration (handoff + audit), no repair loop.
+      * ``"full"`` — adds the Reviewer + Repair loop (default; production behaviour).
+    Non-``full`` runs write artifacts to a ``__<pipeline>``-suffixed directory so
+    the conditions never collide.
+    """
+    if pipeline not in ("solo", "team", "full"):
+        raise ValueError(f"unknown pipeline {pipeline!r}")
+    run_critic = pipeline in ("team", "full")
+    run_repair = pipeline == "full"
+
+    artifact_dir = (
+        config.artifact_dir if pipeline == "full"
+        else config.artifact_dir.parent / f"{config.artifact_dir.name}__{pipeline}"
+    )
+
     config.copy_clean_source()
     if config.assert_blind_workspace is not None:
         config.assert_blind_workspace()
-    shutil.rmtree(config.artifact_dir, ignore_errors=True)
-    config.artifact_dir.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(artifact_dir, ignore_errors=True)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
 
     session = config.make_session()
     if config.session_go_offline:
@@ -674,7 +698,7 @@ def run_oracle(config: OracleConfig) -> None:
         return _dynamic_rag_role(
             task=config.task,
             workdir=config.workdir,
-            artifact_dir=config.artifact_dir,
+            artifact_dir=artifact_dir,
             session=session,
             search_extra_exclude=config.search_extra_exclude,
             **kwargs,
@@ -687,22 +711,25 @@ def run_oracle(config: OracleConfig) -> None:
     execution_start = 0
 
     try:
-        roles["navigator"], rag["navigator"] = rag_role(
-            name="navigator",
-            instruction=config.navigator_instruction,
-            context=config.task,
-            output_path=config.workdir / "navigator_report.md",
-            submit_name="submit_handoff",
-            submit_description="Submit the source-grounded Navigator handoff.",
-            validator=config.validate_report,
-            trigger="initial_task",
-            max_steps=7,
-        )
+        if run_critic:  # Navigator runs whenever the pre-execution team runs.
+            roles["navigator"], rag["navigator"] = rag_role(
+                name="navigator",
+                instruction=config.navigator_instruction,
+                context=config.task,
+                output_path=config.workdir / "navigator_report.md",
+                submit_name="submit_handoff",
+                submit_description="Submit the source-grounded Navigator handoff.",
+                validator=config.validate_report,
+                trigger="initial_task",
+                max_steps=7,
+            )
+            builder_context = (
+                "# Navigator handoff\n\n"
+                + (config.workdir / "navigator_report.md").read_text(errors="replace")
+            )
+        else:  # solo: the Reproducer works straight from the task.
+            builder_context = config.task
 
-        builder_context = (
-            "# Navigator handoff\n\n"
-            + (config.workdir / "navigator_report.md").read_text(errors="replace")
-        )
         roles["reproducer"], rag["reproducer"] = rag_role(
             name="reproducer",
             instruction=config.reproducer_instruction,
@@ -711,29 +738,30 @@ def run_oracle(config: OracleConfig) -> None:
             submit_name="submit_code",
             submit_description=f"Submit the complete generated {config.eval_script}.",
             validator=config.validate_code,
-            trigger="navigator_handoff",
+            trigger="navigator_handoff" if run_critic else "initial_task",
             max_steps=7,
             synthesis_attempts=5,
         )
 
-        critic_context = (
-            "# Generated evaluation script\n\n"
-            + (config.workdir / config.eval_script).read_text(errors="replace")
-            + "\n\n# Navigator handoff\n\n"
-            + (config.workdir / "navigator_report.md").read_text(errors="replace")
-        )
-        roles["critic"], rag["critic"] = rag_role(
-            name="critic",
-            instruction=config.critic_instruction,
-            context=critic_context,
-            output_path=config.workdir / config.eval_script,
-            submit_name="submit_code",
-            submit_description=f"Submit the complete audited {config.eval_script}.",
-            validator=config.validate_code,
-            trigger="generated_code_audit",
-            max_steps=7,
-            synthesis_attempts=5,
-        )
+        if run_critic:
+            critic_context = (
+                "# Generated evaluation script\n\n"
+                + (config.workdir / config.eval_script).read_text(errors="replace")
+                + "\n\n# Navigator handoff\n\n"
+                + (config.workdir / "navigator_report.md").read_text(errors="replace")
+            )
+            roles["critic"], rag["critic"] = rag_role(
+                name="critic",
+                instruction=config.critic_instruction,
+                context=critic_context,
+                output_path=config.workdir / config.eval_script,
+                submit_name="submit_code",
+                submit_description=f"Submit the complete audited {config.eval_script}.",
+                validator=config.validate_code,
+                trigger="generated_code_audit",
+                max_steps=7,
+                synthesis_attempts=5,
+            )
 
         execution_start = len(session.transcript)
         eval_run = config.execute_eval(session)
@@ -782,6 +810,9 @@ def run_oracle(config: OracleConfig) -> None:
                 max_steps=6,
                 max_queries=2,
             )
+
+        if not run_repair:
+            raise _PipelineDone()  # solo/team stop after the first execution
 
         review_current(0)
 
@@ -848,6 +879,8 @@ def run_oracle(config: OracleConfig) -> None:
             ):
                 protected_code_blocks.update(accepted_new_blocks)
 
+    except _PipelineDone:
+        pass  # solo/team intentionally stop after the first execution
     except Exception as exc:
         workflow_error = f"{type(exc).__name__}: {exc}"
     finally:
@@ -869,10 +902,15 @@ def run_oracle(config: OracleConfig) -> None:
     rag_requirement = bool(rag) and all(
         stage["dynamic"] and stage["calls"] >= 1 for stage in rag.values()
     )
-    handoff_requirement = (
-        (config.workdir / "navigator_report.md").exists()
-        and (config.workdir / "review_report.md").exists()
-    )
+    # Handoff artifacts required scale with the pipeline: full needs the reviewer
+    # audit, team needs the navigator handoff, solo has neither.
+    handoff_requirement = True
+    if run_critic:
+        handoff_requirement = (config.workdir / "navigator_report.md").exists()
+    if run_repair:
+        handoff_requirement = handoff_requirement and (
+            config.workdir / "review_report.md"
+        ).exists()
     collaboration_pass = verdict.match and rag_requirement and handoff_requirement
     total_cost = round(
         sum(r["usage"].get("cost_yuan", 0.0) for r in roles.values())
@@ -881,6 +919,7 @@ def run_oracle(config: OracleConfig) -> None:
     )
     output = {
         "task": config.task,
+        "pipeline": pipeline,
         "blind_workspace_checked": config.assert_blind_workspace is not None,
         "agents": len(roles),
         "attempt": config.attempt,
@@ -905,7 +944,7 @@ def run_oracle(config: OracleConfig) -> None:
     replay_fn = getattr(session, "replay_script", None)
     replay_script = (replay_fn() + "\n") if replay_fn is not None else None
 
-    for output_dir in (config.workdir, config.artifact_dir):
+    for output_dir in (config.workdir, artifact_dir):
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "result.json").write_text(result_json)
         if replay_script is not None:

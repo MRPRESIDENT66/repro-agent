@@ -17,5 +17,6 @@ if __name__ == "__main__":
             label_hint="image field 'img', gold field 'fine_label' (100 classes; "
             "the split also has 'coarse_label' with only 20 classes — do not use it)",
             workspace_slug="detectors_resnet18_cifar100",
-        )
+        ),
+        pipeline=os.environ.get("PIPELINE", "full"),
     )

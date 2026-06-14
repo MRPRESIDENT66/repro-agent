@@ -1,10 +1,10 @@
 """DistilBERT SST-2 oracle configuration for the multi-RAG orchestration.
 
-NLP domain (HuggingFace transformers). The agent navigates the locally
-provisioned model snapshot (config.json label map, tokenizer files) and writes a
-CPU eval that loads the cached model + GLUE/SST-2 validation split and reports
-accuracy. Runs in a local subprocess venv (.venv-oracle, has transformers +
-datasets); model and dataset are pre-cached, so the eval runs offline.
+NLP domain (HuggingFace transformers). The agent navigates a provisioned
+`model_card.md` (label map + dataset facts) and writes a CPU eval that loads the
+cached model by name + the GLUE/SST-2 validation split and reports accuracy. Runs
+in a local subprocess venv (.venv-oracle, has transformers + datasets); model and
+dataset are pre-cached, so the eval runs offline.
 """
 
 from __future__ import annotations
@@ -31,18 +31,15 @@ METRIC = "accuracy"
 N_EXAMPLES = 872
 CHANCE_LEVEL = 50.0  # binary SST-2; below chance ⇒ inverted label mapping
 
-# Small snapshot files the agent may navigate (the loadable model — NOT the
-# README, which carries the published number and must stay out of the blind WS).
-_RAG_FILES = ("config.json", "tokenizer_config.json", "vocab.txt")
 
 TASK = f"""Reproduce the published accuracy (in percent) of the HuggingFace model
 '{MODEL_NAME}' on the SST-2 validation set (GLUE, {N_EXAMPLES} examples).
 
-The model snapshot (config + tokenizer) is provisioned in the working directory,
-and both the model weights and the GLUE/SST-2 dataset are pre-cached on disk. The
-environment is CPU-only and offline. Load the model with its own tokenizer,
-evaluate on the SST-2 validation split, and report top-1 classification accuracy
-as a percentage."""
+A model card (`model_card.md`) is provided in the working directory, and both the
+model weights and the GLUE/SST-2 dataset are pre-cached on disk (load the model by
+name from the cache). The environment is CPU-only and offline. Load the model with
+its own tokenizer, evaluate on the SST-2 validation split, and report top-1
+classification accuracy as a percentage."""
 
 EVIDENCE = f"""A result counts only when an EXECUTED evaluation command prints:
 REPRO_RESULT {{"metric":"{METRIC}","actual":<number>,"num_examples":{N_EXAMPLES}}}
@@ -135,13 +132,29 @@ def _make_copy_clean_source(workdir: Path):
     def _copy_clean_source() -> None:
         shutil.rmtree(workdir, ignore_errors=True)
         workdir.mkdir(parents=True, exist_ok=True)
-        snapshot = _snapshot_dir()
-        model_ws = workdir / "model"
-        model_ws.mkdir()
-        for name in _RAG_FILES:
-            src = snapshot / name
-            if src.exists():
-                shutil.copy2(src, model_ws / name)
+        # Provision the model's facts as a PROSE card, not a loadable `model/`
+        # directory. A config-only dir (no weights) is a trap: an over-eager
+        # rewrite to `from_pretrained("./model")` crashes on missing weights. The
+        # eval loads by NAME from the offline cache; the card only documents the
+        # label map (read from the cached config) and the dataset.
+        import json as _json
+        id2label = {}
+        cfg = _snapshot_dir() / "config.json"
+        if cfg.exists():
+            try:
+                id2label = _json.loads(cfg.read_text(errors="replace")).get("id2label", {})
+            except Exception:
+                id2label = {}
+        label_lines = "\n".join(f"- `{k}` → {v}" for k, v in id2label.items()) or "- (see config)"
+        card = (
+            f"# {MODEL_NAME}\n\n"
+            f"DistilBERT fine-tuned for binary sentiment classification on SST-2.\n\n"
+            f"## Label mapping (id2label)\n\n{label_lines}\n\n"
+            f"These align with the SST-2 gold labels (0 = negative, 1 = positive).\n\n"
+            f"## Dataset\n\nGLUE / SST-2 validation split, {N_EXAMPLES} examples; "
+            f"text field `sentence`, gold integer field `label`.\n"
+        )
+        (workdir / "model_card.md").write_text(card)
 
     return _copy_clean_source
 
@@ -182,12 +195,12 @@ def _make_execute_eval():
 
 NAVIGATOR_INSTRUCTION = f"""You are the Navigator in a collaborative ML
 reproduction team. You receive no prewritten queries. Formulate your own
-search_repo query over the provisioned model snapshot (under `model/`) to pin
+search_repo query over the provisioned `model_card.md` to pin
 down the facts a correct evaluation needs, then submit a concise grounded
 handoff. Cover:
 - the model class to load ({MODEL_NAME}) and that it is a sequence-classification
   head loaded with its own tokenizer;
-- the label mapping (inspect `model/config.json` id2label/label2id) and whether
+- the label mapping (inspect `model_card.md` for the id2label mapping) and whether
   it aligns with SST-2 gold labels (0=negative, 1=positive);
 - the dataset to use: GLUE/SST-2 validation split, {N_EXAMPLES} examples, with
   text field `sentence` and integer field `label`;
@@ -229,7 +242,7 @@ Verify:
 - the model + tokenizer are loaded from `{MODEL_NAME}`;
 - the dataset is the GLUE/SST-2 **validation** split with {N_EXAMPLES} examples,
   reading `sentence` and `label`;
-- the label mapping matches `model/config.json` and SST-2 gold labels with no
+- the label mapping matches `model_card.md` and SST-2 gold labels with no
   spurious inversion;
 - accuracy is a percentage (0-100) over all examples;
 - exactly one strict-JSON `REPRO_RESULT` via `json.dumps`.
@@ -244,7 +257,7 @@ public-contract audit is authoritative. When execution succeeded, check:
 - accuracy is a percentage (0-100), not a fraction;
 - num_examples = {N_EXAMPLES} (the full validation split, not a subset);
 - the label mapping is correct — if accuracy is near or below 50%, suspect an
-  inverted label/argmax direction and verify against `model/config.json`;
+  inverted label/argmax direction and verify against `model_card.md`;
 - the result came from real model inference, not a hardcoded constant.
 End with exactly `REVIEW_STATUS: PASS` only when no repair is needed; otherwise
 end with exactly `REVIEW_STATUS: REPAIR_REQUIRED`.

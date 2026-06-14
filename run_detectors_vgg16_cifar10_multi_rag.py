@@ -16,5 +16,6 @@ if __name__ == "__main__":
             expected=93.37,
             label_hint="image field 'img', gold field 'label' (10 classes)",
             workspace_slug="detectors_vgg16_cifar10",
-        )
+        ),
+        pipeline=os.environ.get("PIPELINE", "full"),
     )

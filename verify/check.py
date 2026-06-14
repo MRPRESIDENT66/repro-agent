@@ -336,6 +336,9 @@ def has_eval_provenance(workdir: str | Path, transcript: Iterable | None = None)
     prediction_markers = (
         "argmax", ".max(", "topk", "predicted", "logits", "logsumexp",
         "roc_curve", "compute_all_metrics",
+        # library-API eval calls: a real metric computed by a standard eval/attack
+        # routine (e.g. robustbench/AutoAttack) rather than a hand-rolled argmax.
+        "run_standard_evaluation", "clean_accuracy", "AutoAttack", "accuracy_score",
     )
     workdir = Path(workdir)
 

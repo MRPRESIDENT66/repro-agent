@@ -258,3 +258,67 @@ Current conclusion: dynamic RAG and role isolation are meaningful and
 observable, but end-to-end reliability is now limited mainly by repair
 selection and brittle validator feedback, not by insufficient retrieval calls.
 Experiments were paused after `024`.
+
+## Framework generalization — two new multi-RAG oracles (2026-06-14)
+
+After the multi-RAG orchestration was extracted into a generic
+`agent/multi_rag.py` + per-oracle `evals/oracles/<name>.py` config, two new
+oracles from **different domains and backends** were added to test that the
+framework is not customized to one paper. Each new oracle is only an
+`OracleConfig` (prompts, validator, contract, execute) + a 9-line run script; no
+orchestration code was touched.
+
+| Oracle | Domain | Framework / backend | Target | Result (blind, provenance-gated) |
+| --- | --- | --- | --- | --- |
+| DistilBERT SST-2 | NLP text classification | HuggingFace transformers · subprocess | accuracy 91.06 | **PASS** — 91.055, first try, no repair |
+| mmpretrain ResNet-18 CIFAR-10 | image classification | OpenMMLab/mmcv · Docker (amd64) | top1 94.82 | **PASS** — 94.82, first try after fixes |
+
+Both run strictly offline against pre-provisioned checkpoints + data; the
+offline oracle truth was re-verified independently (91.055 / 94.8200) before any
+agent run. DistilBERT navigates the model snapshot (config.json label map);
+mmpretrain is a clone-and-navigate task — the agent locates `tools/test.py` and
+the ResNet-18 CIFAR-10 config in the ~1800-file repo, writes a wrapper that runs
+the repo's own eval entry against the checkpoint, and parses mmengine's printed
+`accuracy/top1`.
+
+### What the mmpretrain integration surfaced (three real framework bugs)
+
+The NLP oracle passed immediately, but wiring up the navigation/Docker oracle
+exposed three latent defects — all **general**, none specific to mmpretrain, and
+each previously masked because the post-refactor repair loop and the
+subprocess/Docker teardown paths were only unit-tested, never run end-to-end:
+
+1. **`Session` has no `close()`** — `run_oracle`'s teardown called
+   `session.close()` unconditionally, crashing every subprocess-backed oracle
+   (also RobustBench). Fixed: call `close()` only if present.
+2. **`str.format` mangled literal JSON** — repair instructions embed the
+   EVIDENCE JSON example (`{"metric":…}`); injecting the round number with
+   `.format(round_index=…)` re-interpreted those braces as fields
+   (`KeyError: '"metric"'`), aborting the repair loop for *every* oracle. Fixed:
+   inject with `.replace("{round_index}", …)`.
+3. **Provenance gate missed wrapper-delegation** — `has_eval_provenance`
+   recognized the repo's eval entry only when invoked on the command line, but
+   the multi-agent pattern is a wrapper `.py` that shells out to
+   `tools/test.py`. So a correct 94.82 from a real eval was rejected as
+   `no_eval_provenance`. Fixed: the delegation check now also scans the agent's
+   eval scripts (still unfakeable — the real value + num_examples require
+   actually running the entry against the checkpoint).
+
+A self-inflicted provisioning inconsistency was also corrected: mmpretrain was
+nested under a `mmpretrain/` subdir while the checkpoint sat at the workspace
+root, so the agent oscillated on paths and exhausted its repair budget
+(attempt 002). OpenOOD and RobustBench both lay the repo contents at the
+workspace root (what `git clone && cd` gives you); matching that convention
+removed the artificial ambiguity and the agent passed first-try.
+
+Note on mmpretrain blindness: the published 94.82 lives in the public repo's
+own model-zoo metafile, so "blind" here means the task and verifier never reveal
+it — the agent must still run `tools/test.py` to produce it (the validator
+requires the eval entry; the contract requires `num_examples=10000` from real
+output), so the number cannot be hardcoded into a passing artifact.
+
+Per-attempt record: `001` failed (wrong `tools/test.py` path before the layout
+fix); `002` ran the full 4-round repair loop but exhausted it on the path
+asymmetry; `003` produced the correct 94.82 but was gated by
+`no_eval_provenance`; `004` is the clean pass. Artifacts under
+`evals/runs/{distilbert_sst2_multi_rag_001,mmpretrain_resnet18_multi_rag_00{1..4}}/`.

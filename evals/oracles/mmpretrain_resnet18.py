@@ -1,0 +1,303 @@
+"""mmpretrain ResNet-18 CIFAR-10 oracle configuration for the multi-RAG orchestration.
+
+Image-classification domain in the OpenMMLab / mmcv ecosystem. Unlike the
+library-load oracles, the agent is dropped into a cloned ~1800-file research repo
+and must NAVIGATE to the eval entry (tools/test.py) and the right config, then
+write a small wrapper that runs it and parses mmengine's printed top-1 accuracy.
+Runs in the pre-provisioned linux/amd64 Docker image (repro-mmpretrain:latest)
+with torch2.1.0-cpu + a prebuilt mmcv wheel; checkpoint and CIFAR-10 are
+provisioned on disk and the container is taken offline before execution.
+"""
+
+from __future__ import annotations
+
+import ast
+import shutil
+from pathlib import Path
+
+from agent.multi_rag import OracleConfig, _extract_python
+from exec.docker_session import DockerSession
+from verify.check import extract_structured_evidence
+
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = ROOT / "repos" / "mmpretrain"
+CKPT_SOURCE = ROOT / "workspaces" / "mmpretrain_resnet18_cifar10" / "ckpt.pth"
+CIFAR_SOURCE = (
+    ROOT / "workspaces" / "mmpretrain_resnet18_cifar10"
+    / "mmpretrain" / "data" / "cifar10"
+)
+IMAGE = "repro-mmpretrain:latest"
+
+EXPECTED = 94.82
+TOLERANCE = 0.10
+METRIC = "top1_accuracy"
+N_EXAMPLES = 10000
+
+TASK = f"""Reproduce the published top-1 accuracy (in percent) of the mmpretrain
+model-zoo ResNet-18 (b16x8, CIFAR-10) on the CIFAR-10 test set
+({N_EXAMPLES} images).
+
+The mmpretrain repository is checked out directly in the working directory (its
+`tools/`, `configs/`, etc. are at the working-directory root), the trained
+checkpoint is at `ckpt.pth`, and the CIFAR-10 data is provisioned under
+`data/cifar10/`. The environment is CPU-only and offline. Navigate the repository
+to find the evaluation entry point and the matching ResNet-18 CIFAR-10 config,
+run the evaluation against the checkpoint, and report the top-1 accuracy as a
+percentage."""
+
+EVIDENCE = f"""A result counts only when an EXECUTED evaluation command prints:
+REPRO_RESULT {{"metric":"{METRIC}","actual":<number>,"num_examples":{N_EXAMPLES}}}
+The evaluation program itself must print the line. Do not echo or printf a
+hardcoded number. `actual` is top-1 accuracy in percentage points (0-100), parsed
+from the metric that the repository's own test tool prints (e.g. the
+`accuracy/top1:` value in mmengine's output)."""
+
+# The wrapper must actually invoke the repository's test entry and serialize the
+# parsed metric — it cannot print a literal it never sees (blind).
+_REQUIRED_MARKERS = ("REPRO_RESULT", "test.py")
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def _validate_code(content: str) -> str:
+    code = _extract_python(content)
+    try:
+        ast.parse(code)
+    except SyntaxError as exc:
+        raise ValueError(f"code is not syntactically valid: {exc}") from exc
+    missing = [m for m in _REQUIRED_MARKERS if m not in code]
+    if missing:
+        raise ValueError(
+            "code is missing required public-contract markers "
+            f"{missing}: it must run the repository's test entry (tools/test.py) "
+            "and print a REPRO_RESULT line parsed from its real output."
+        )
+    return code
+
+
+# ---------------------------------------------------------------------------
+# Contract
+# ---------------------------------------------------------------------------
+
+def _make_public_contract_diagnostics(n_examples: int):
+    def _public_contract_diagnostics(session) -> list[str]:
+        evidence = extract_structured_evidence(
+            session.transcript,
+            metric=METRIC,
+            expected_num_examples=n_examples,
+        )
+        if evidence is None:
+            issue = (
+                f"No valid REPRO_RESULT was produced by a successful evaluation "
+                f'command. Need metric="{METRIC}" and num_examples={n_examples} in '
+                f"the stdout of a successful run that invoked the repository test "
+                f"tool."
+            )
+            latest = next(
+                (run for run in reversed(session.transcript) if not run.ok), None
+            )
+            if latest is not None:
+                tail = f"{latest.stdout}\n{latest.stderr}".strip()[-1500:]
+                if tail:
+                    issue += f"\nFix the latest blocking execution error first:\n{tail}"
+            return [issue]
+        issues: list[str] = []
+        if not 0.0 <= evidence.actual <= 100.0:
+            issues.append("top-1 accuracy must be a percentage in the 0-100 scale.")
+        return issues
+
+    return _public_contract_diagnostics
+
+
+# ---------------------------------------------------------------------------
+# Workspace helpers
+# ---------------------------------------------------------------------------
+
+def _make_copy_clean_source(workdir: Path):
+    def _copy_clean_source() -> None:
+        # Repo CONTENTS at the workdir root — same convention as the OpenOOD and
+        # RobustBench oracles, and what `git clone && cd` actually gives you:
+        # tools/test.py, configs/, data/, ckpt.pth all at one level.
+        shutil.rmtree(workdir, ignore_errors=True)
+        shutil.copytree(
+            SOURCE,
+            workdir,
+            ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+        )
+        # The checkpoint, at the root the config's run cwd sees.
+        shutil.copy2(CKPT_SOURCE, workdir / "ckpt.pth")
+        # CIFAR-10 data (extracted batches + tarball) where the config expects it
+        # relative to the run cwd: data/cifar10/.
+        data_dst = workdir / "data" / "cifar10"
+        data_dst.mkdir(parents=True, exist_ok=True)
+        for child in CIFAR_SOURCE.iterdir():
+            if child.is_dir():
+                shutil.copytree(child, data_dst / child.name, dirs_exist_ok=True)
+            else:
+                shutil.copy2(child, data_dst / child.name)
+
+    return _copy_clean_source
+
+
+def _make_assert_blind_workspace(workdir: Path):
+    def _assert_blind_workspace() -> None:
+        target = f"{EXPECTED:.2f}"  # "94.82"
+        # Only scan small text files the agent could read; skip the repo's own
+        # docs/changelogs (large, and the published number may appear in model-zoo
+        # tables that are part of the public repo, not a private leak).
+        for path in workdir.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in {".json", ".csv"}:
+                continue
+            try:
+                if target in path.read_text(errors="replace"):
+                    raise RuntimeError(
+                        f"private target leaked into blind workspace: {path}"
+                    )
+            except OSError:
+                continue
+
+    return _assert_blind_workspace
+
+
+def _make_execute_eval():
+    def _execute_eval(session: DockerSession):
+        syntax = session.shell("python -m py_compile eval_mmpretrain.py", timeout=120)
+        if not syntax.ok:
+            return syntax
+        return session.shell("python eval_mmpretrain.py", timeout=1800)
+
+    return _execute_eval
+
+
+# ---------------------------------------------------------------------------
+# Role instructions
+# ---------------------------------------------------------------------------
+
+NAVIGATOR_INSTRUCTION = f"""You are the Navigator in a collaborative ML
+reproduction team working inside a large cloned mmpretrain repository. You
+receive no prewritten queries. Formulate your own search_repo queries to locate,
+with exact repository paths, the things a correct evaluation needs:
+- the evaluation ENTRY POINT: the repo has many look-alike test launchers
+  (slurm_test.sh, dist_test.sh, mim launchers) — find the actual Python entry
+  `tools/test.py` that runs a single-process CPU test;
+- the matching ResNet-18 CIFAR-10 config under `configs/` (the b16x8 cifar10
+  variant) and the base configs it inherits (model / dataset / runtime);
+- how `tools/test.py` is invoked (config + checkpoint positional args) and what
+  metric it prints (the mmengine `accuracy/top1:` line) and on how many images;
+- that data is at `data/cifar10/` and the checkpoint at `ckpt.pth`.
+Submit a concise grounded handoff with the exact entry path, config path, and the
+run command shape. Do not guess or mention the private target.
+
+Task:
+{TASK}"""
+
+REPRODUCER_INSTRUCTION = f"""You are the Reproducer/Builder. Generate a complete
+CPU-safe `eval_mmpretrain.py` wrapper. You receive a Navigator handoff but no
+prewritten RAG queries; search the repo for any remaining uncertainty (exact
+config path, the entry's CLI, the metric key) before coding.
+
+Public execution contract:
+- run the repository's own evaluation entry `tools/test.py` as a
+  subprocess (use `sys.executable`), passing the ResNet-18 CIFAR-10 config and
+  the checkpoint `ckpt.pth`; do NOT re-implement the model, dataset, or metric;
+- the environment is CPU-only and offline — do not download anything; the data is
+  already at `data/cifar10/`;
+- capture the tool's stdout/stderr, parse the printed top-1 accuracy (the
+  `accuracy/top1:` value in mmengine's output) as a float in percentage points;
+- print exactly one strict-JSON `REPRO_RESULT` line with the parsed value and
+  `num_examples`={N_EXAMPLES}; the program must print it from the PARSED metric,
+  never a hardcoded literal;
+- {EVIDENCE}
+
+Do not guess or mention the private target."""
+
+CRITIC_INSTRUCTION = f"""You are an independent Code Critic. Audit the generated
+`eval_mmpretrain.py` against the repository. You receive no prewritten queries:
+search the highest-risk unverified claim (is `tools/test.py` the right entry? is
+the config path correct and the cifar10 b16x8 variant? is the metric key parsed
+correctly?) and submit a complete corrected wrapper, not a prose review.
+
+Verify:
+- it invokes `tools/test.py` with the correct config + `ckpt.pth`;
+- it does not re-implement evaluation or hardcode the accuracy;
+- it parses the real `accuracy/top1:` value the tool prints and reports it as a
+  percentage with num_examples={N_EXAMPLES};
+- exactly one strict-JSON `REPRO_RESULT` line.
+{EVIDENCE}
+
+Do not guess or mention the private target."""
+
+REVIEWER_INSTRUCTION = f"""You are the independent Reviewer. Audit the current
+`eval_mmpretrain.py` and the public execution log. Derive a search_repo query
+from the concrete execution error or the highest-risk semantic claim. The
+deterministic public-contract audit is authoritative. When execution failed,
+focus on the latest blocking error (wrong config path, wrong entry, a data path
+the tool cannot find, a parse that returned nothing). When execution succeeded,
+check:
+- the accuracy came from the repository test tool's real output, not a constant;
+- it is a percentage (0-100) and num_examples={N_EXAMPLES};
+- the correct config + checkpoint were used.
+End with exactly `REVIEW_STATUS: PASS` only when no repair is needed; otherwise
+end with exactly `REVIEW_STATUS: REPAIR_REQUIRED`.
+Do not guess or mention the private target."""
+
+REPAIR_INSTRUCTION = f"""You are Repair Agent {{round_index}}. Fix the concrete
+failure identified by the execution log and the independent Reviewer. Search the
+repository for the specific error (e.g. the exact config path, the test entry's
+CLI, the metric key, the data root), then submit a corrected complete
+`eval_mmpretrain.py`. Preserve all working behavior and the public contract: run
+the real `tools/test.py`, parse the printed top-1 accuracy, percentage units,
+num_examples={N_EXAMPLES}, one strict-JSON `REPRO_RESULT` line, CPU-only offline.
+{EVIDENCE}
+
+Do not guess or mention the private target."""
+
+
+# ---------------------------------------------------------------------------
+# Config factory
+# ---------------------------------------------------------------------------
+
+def make_config(attempt: str) -> OracleConfig:
+    workdir = ROOT / "workspaces" / "mmpretrain_resnet18_multi_rag"
+    artifact_dir = ROOT / "evals" / "runs" / f"mmpretrain_resnet18_multi_rag_{attempt}"
+
+    contract_diagnostics = _make_public_contract_diagnostics(N_EXAMPLES)
+
+    return OracleConfig(
+        name="mmpretrain_resnet18",
+        task=TASK,
+        metric=METRIC,
+        expected=EXPECTED,
+        tolerance=TOLERANCE,
+        attempt=attempt,
+        workdir=workdir,
+        artifact_dir=artifact_dir,
+        eval_script="eval_mmpretrain.py",
+        make_session=lambda: DockerSession(
+            workdir, image=IMAGE, mem="6g", cpus=6.0, default_timeout=1800
+        ),
+        session_go_offline=True,
+        copy_clean_source=_make_copy_clean_source(workdir),
+        execute_eval=_make_execute_eval(),
+        validate_code=_validate_code,
+        public_contract_passes=lambda session: not contract_diagnostics(session),
+        public_contract_diagnostics=contract_diagnostics,
+        verify_kwargs={"expected_num_examples": N_EXAMPLES},
+        navigator_instruction=NAVIGATOR_INSTRUCTION,
+        reproducer_instruction=REPRODUCER_INSTRUCTION,
+        critic_instruction=CRITIC_INSTRUCTION,
+        reviewer_instruction=REVIEWER_INSTRUCTION,
+        repair_instruction=REPAIR_INSTRUCTION,
+        repair_mode_label="full_file_replacement",
+        repair_submit_name="submit_code",
+        repair_submit_description="Submit the repaired eval_mmpretrain.py.",
+        search_extra_exclude={
+            "eval_mmpretrain.py",
+            "navigator_report.md",
+            "review_report.md",
+            "reproducer_public_log.txt",
+        },
+        assert_blind_workspace=_make_assert_blind_workspace(workdir),
+    )

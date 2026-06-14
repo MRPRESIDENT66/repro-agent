@@ -1,0 +1,135 @@
+## Command 1
+
+```bash
+python -m py_compile eval_mmpretrain.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_mmpretrain.py
+```
+
+exit=1 timed_out=False
+
+```text
+
+Error: test.py not found at /workspace/tools/test.py
+
+```
+
+## Command 3
+
+```bash
+python -m py_compile eval_mmpretrain.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 4
+
+```bash
+python eval_mmpretrain.py
+```
+
+exit=1 timed_out=False
+
+```text
+
+Error: checkpoint not found at /workspace/mmpretrain/ckpt.pth
+
+```
+
+## Command 5
+
+```bash
+python -m py_compile eval_mmpretrain.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 6
+
+```bash
+python eval_mmpretrain.py
+```
+
+exit=1 timed_out=False
+
+```text
+
+Error: checkpoint not found at /workspace/mmpretrain/ckpt.pth
+
+```
+
+## Command 7
+
+```bash
+python -m py_compile eval_mmpretrain.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 8
+
+```bash
+python eval_mmpretrain.py
+```
+
+exit=1 timed_out=False
+
+```text
+
+Downloading checkpoint from https://download.openmmlab.com/mmclassification/v0/resnet/resnet18_b16x8_cifar10_20210528-bd3031c5.pth ...
+Error downloading checkpoint: <urlopen error [Errno -3] Temporary failure in name resolution>
+
+```
+
+## Command 9
+
+```bash
+python -m py_compile eval_mmpretrain.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 10
+
+```bash
+python eval_mmpretrain.py
+```
+
+exit=1 timed_out=False
+
+```text
+
+Error: checkpoint not found at /workspace/mmpretrain/ckpt.pth
+
+```

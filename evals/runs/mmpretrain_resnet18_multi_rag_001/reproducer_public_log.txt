@@ -1,0 +1,29 @@
+## Command 1
+
+```bash
+python -m py_compile eval_mmpretrain.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_mmpretrain.py
+```
+
+exit=1 timed_out=False
+
+```text
+
+Error: could not parse accuracy/top1 from output
+Full output: 
+/usr/local/bin/python: can't open file '/workspace/tools/test.py': [Errno 2] No such file or directory
+
+
+```

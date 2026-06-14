@@ -812,7 +812,11 @@ def run_oracle(config: OracleConfig) -> None:
 
             roles[key], rag[key] = rag_role(
                 name=key,
-                instruction=config.repair_instruction.format(round_index=round_index),
+                # .replace (not .format): repair instructions embed literal JSON
+                # braces from EVIDENCE, which str.format would mis-parse as fields.
+                instruction=config.repair_instruction.replace(
+                    "{round_index}", str(round_index)
+                ),
                 context=repair_context,
                 output_path=config.workdir / config.eval_script,
                 submit_name=config.repair_submit_name,
@@ -847,7 +851,11 @@ def run_oracle(config: OracleConfig) -> None:
     except Exception as exc:
         workflow_error = f"{type(exc).__name__}: {exc}"
     finally:
-        session.close()
+        # Docker-backed sessions need teardown; the subprocess Session has no
+        # close() (its state is just the workdir), so call it only if present.
+        close = getattr(session, "close", None)
+        if close is not None:
+            close()
 
     verdict = verify_run(
         session.transcript,

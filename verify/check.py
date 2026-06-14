@@ -340,12 +340,18 @@ def has_eval_provenance(workdir: str | Path, transcript: Iterable | None = None)
     workdir = Path(workdir)
 
     commands = [run.command for run in transcript] if transcript is not None else []
-    if any(_delegates_to_repo_eval(c, workdir) for c in commands):
+    sources = [s.read_text(errors="replace") for s in workdir.rglob("*.py")]
+
+    # Delegation provenance: the repo's own eval entry (tools/test.py …) is run
+    # against the checkpoint. This can appear either directly on the command line
+    # (single-step oracle) OR inside a wrapper ``.py`` the agent wrote that shells
+    # out to the entry (the multi-agent pattern). Both are legitimate
+    # clone-and-navigate behaviour and equally hard to fake — you still cannot
+    # produce the real value + num_examples without actually running the entry.
+    if any(_delegates_to_repo_eval(t, workdir) for t in (*commands, *sources)):
         return True
 
-    sources = [s.read_text(errors="replace") for s in workdir.rglob("*.py")]
-    sources.extend(commands)
-    for source in sources:
+    for source in (*sources, *commands):
         if (
             "REPRO_RESULT" in source
             and any(marker in source for marker in data_markers)

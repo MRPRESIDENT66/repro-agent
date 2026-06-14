@@ -322,3 +322,63 @@ fix); `002` ran the full 4-round repair loop but exhausted it on the path
 asymmetry; `003` produced the correct 94.82 but was gated by
 `no_eval_provenance`; `004` is the clean pass. Artifacts under
 `evals/runs/{distilbert_sst2_multi_rag_001,mmpretrain_resnet18_multi_rag_00{1..4}}/`.
+
+## Does the repair loop earn its keep? — two repair-exercising oracles (2026-06-14)
+
+The first four multi-RAG oracles answered *breadth* (the framework generalizes
+across domains), but three of them pass first-try, so they do not exercise the
+**repair loop** — the most expensive part of the multi-agent design. To test
+whether repair actually converts failures into successes (and not just on
+OpenOOD), two oracles were added that are built to surface contract-detectable
+runtime failures:
+
+- **detectors/timm ResNet-18 CIFAR-100** (79.26) and **VGG16-bn CIFAR-10**
+  (93.37) — pretrained classifiers from the `detectors` OOD-benchmark library.
+  The architectures are registered into timm only as a side effect of
+  `import detectors`; a plain `timm.create_model(..., pretrained=True)` raises
+  `Unknown model`. The published number is **scrubbed** from the provisioned
+  model card (blind), but the loading recipe is kept, so the fix is
+  RAG-discoverable. CIFAR-100 adds a second trap (`fine_label` vs `coarse_label`).
+  Both share one parameterized oracle (`evals/oracles/detectors_timm.py`); the
+  contract adds a **below-chance** gate so a broken eval (crash, wrong label
+  field, untrained weights) fails deterministically and triggers repair. Run in
+  the `.venv-oracle` subprocess, CPU-only, offline; truths re-verified (79.26 /
+  93.37).
+
+**Result — N=3 each, blind, provenance-gated:**
+
+| Oracle | passed | repair fired | repair fired → still passed |
+|---|---|---|---|
+| ResNet-18 CIFAR-100 | 3/3 | 1/3 (#001) | 1/1 |
+| VGG16-bn CIFAR-10 | 3/3 | 1/3 (#002, **2 rounds**) | 1/1 |
+| **total** | **6/6** | **2/6** | **2/2** |
+
+**The honest finding — repair recovers runs that would otherwise fail.** In the
+2/6 runs where the first execution failed the contract, the repair loop fixed it
+and the run passed; without repair those two would be losses, i.e. **6/6 with
+repair vs 4/6 without** on this set. The failures repair fixed were *emergent*,
+not the planted gotcha:
+
+- ResNet-18 #001: a data-iteration `TypeError` (string indexing) → repaired in 1
+  round → 79.3.
+- VGG16-bn #002: an offline `ConnectionError` (the first eval reached for the
+  Hub instead of the on-disk cache), then a transform `TypeError`
+  (`Unexpected type list`) → repaired in **2 rounds** → 93.37.
+
+Two things this clarifies about *where* the multi-agent value lives:
+
+1. **The planted `import detectors` crash was mostly defused pre-execution** by
+   the Navigator/Critic reading the model card — i.e. the *pre-execution* Critic
+   pass is itself a real mechanism (it catches what a one-shot agent would miss),
+   separate from repair. This matches the earlier M5 result that multi-agent
+   does not raise success on *easy first-try* tasks: the value shows up only when
+   a first attempt actually fails.
+2. **Repair generalizes to unplanned failures.** It earned its keep not by fixing
+   the scripted gotcha but by recovering from emergent offline/data/transform
+   bugs the agent introduced — exactly the failures you cannot script in advance.
+
+Net picture across all six multi-RAG oracles: breadth is shown by 6 oracles in 5
+domains × 2 backends all reproducing blind; the repair loop's value is shown
+where it can be — on the runs that fail first, it converts 2/2 back to passes,
+and OpenOOD remains the standing hard case where repair fires routinely (~50%).
+Artifacts under `evals/runs/detectors_{resnet18_cifar100,vgg16_cifar10}_multi_rag_00{1..3}/`.

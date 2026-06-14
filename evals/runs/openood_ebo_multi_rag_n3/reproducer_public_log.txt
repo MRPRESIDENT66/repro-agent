@@ -1,0 +1,89 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 229, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 137, in main
+    id_dataset = SimpleImglistDataset(id_imglist, DATA_DIR, transform)
+  File "/workspace/eval_ebo.py", line 77, in __init__
+    self.dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: './data/benchmark_imglist/cifar10/cifar10_test.txt'
+
+```
+
+## Command 3
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 4
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=0 timed_out=False
+
+```text
+REPRO_RESULT {"metric": "near_ood_auroc", "actual": 12.42, "datasets": {"cifar100": 9000, "tin": 7793}, "run_metrics": {"s0": {"cifar100": 14.45, "tin": 11.69}, "s1": {"cifar100": 13.12, "tin": 11.06}, "s2": {"cifar100": 13.34, "tin": 10.84}}, "aggregation": "dataset_mean_then_run_mean"}
+
+
+```
+
+## Command 5
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 6
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=0 timed_out=False
+
+```text
+REPRO_RESULT {"metric": "near_ood_auroc", "actual": 87.58, "datasets": {"cifar100": 9000, "tin": 7793}, "run_metrics": {"s0": {"cifar100": 85.55, "tin": 88.31}, "s1": {"cifar100": 86.88, "tin": 88.94}, "s2": {"cifar100": 86.66, "tin": 89.16}}, "aggregation": "dataset_mean_then_run_mean"}
+
+
+```

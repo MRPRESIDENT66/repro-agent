@@ -1,0 +1,26 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=0 timed_out=False
+
+```text
+REPRO_RESULT {"metric": "near_ood_auroc", "actual": 87.58227866875886, "datasets": {"cifar100": 3, "tin": 3}, "run_metrics": {"s0": {"cifar100": 85.54688888888889, "tin": 88.31349216533356}, "s1": {"cifar100": 86.87821728395062, "tin": 88.94150448408115}, "s2": {"cifar100": 86.6567888888889, "tin": 89.1567803014101}}, "aggregation": "dataset_mean_then_run_mean"}
+
+
+```

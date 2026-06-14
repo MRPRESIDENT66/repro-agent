@@ -1,0 +1,26 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Error: Checkpoint not found at results/cifar10_resnet18_32x32_base_e100_lr0.1_default/results/cifar10_resnet18_32x32_base_e100_lr0.1_default/s0/best.ckpt
+
+```

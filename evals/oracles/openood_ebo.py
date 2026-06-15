@@ -45,7 +45,10 @@ _FORBIDDEN_CLASS_DEFS = {"ResNet18_32x32", "ImglistDataset"}
 _FORBIDDEN_CALL_OR_IMPORT_NAMES = {"TestStandardPreProcessor"}
 _FORBIDDEN_USE_NAMES = {"UnsafeLoader"}
 _FORBIDDEN_CALL_ARG_MARKERS = ("config.yml", "--checkpoint_root")
-_REQUIRED_CONTRACT_MARKERS = ("REPRO_RESULT", "json.dumps")
+_REQUIRED_CONTRACT_MARKERS = ("predictions.json",)
+
+_RUNS = ("s0", "s1", "s2")
+_OOD = {"cifar100": 9000, "tin": 7793}  # near-OOD sets + their exact sample counts
 
 TASK = """Reproduce the official EBO Near-OOD AUROC for CIFAR-10 using the
 official s0, s1, and s2 CrossEntropy ResNet-18 checkpoints and both Near-OOD
@@ -53,15 +56,74 @@ datasets, CIFAR-100 and TinyImageNet. The fixed OpenOOD repository, data, and
 checkpoints are already present. The environment is CPU-only and offline.
 Preserve repository evaluation semantics and report percentage AUROC."""
 
-EVIDENCE = """A result counts only when an EXECUTED evaluation command prints:
-REPRO_RESULT {"metric":"near_ood_auroc","actual":<number>,
-"datasets":{"cifar100":<count>,"tin":<count>},
-"run_metrics":{"s0":{"cifar100":<auroc>,"tin":<auroc>},
-"s1":{"cifar100":<auroc>,"tin":<auroc>},
-"s2":{"cifar100":<auroc>,"tin":<auroc>}},
-"aggregation":"dataset_mean_then_run_mean"}
-The evaluation program itself must print the line. Do not echo or printf it.
-`actual` must equal the dataset mean within each run, then the mean of runs."""
+EVIDENCE = """The eval must WRITE a file `predictions.json` in the working
+directory: the per-sample EBO energy scores, structured as
+{"s0": {"id": [scores for the CIFAR-10 ID test set],
+        "cifar100": [9000 scores], "tin": [7793 scores]},
+ "s1": {...}, "s2": {...}}  (one block per checkpoint).
+An external verifier recomputes the Near-OOD AUROC itself (per run, AUROC of each
+OOD set vs the ID set; then the dataset mean within each run, then the mean over
+runs). It ignores anything you print. Use the EBO energy convention where OOD
+samples score HIGHER than ID. Do NOT hardcode scores — only the model's real
+per-sample EBO scores reproduce the target."""
+
+
+def _auc(pos: list[float], neg: list[float]) -> float:
+    """AUROC = P(pos > neg) as a percentage (Mann-Whitney, tie-averaged ranks).
+    No sklearn dependency, so the verifier runs in the orchestrator venv."""
+    merged = sorted([(v, 1) for v in pos] + [(v, 0) for v in neg], key=lambda x: x[0])
+    ranks = [0.0] * len(merged)
+    i = 0
+    while i < len(merged):
+        j = i
+        while j < len(merged) and merged[j][0] == merged[i][0]:
+            j += 1
+        avg = (i + 1 + j) / 2.0  # 1-based average rank for the tie block
+        for k in range(i, j):
+            ranks[k] = avg
+        i = j
+    sum_pos = sum(ranks[k] for k in range(len(merged)) if merged[k][1] == 1)
+    n_pos, n_neg = len(pos), len(neg)
+    return (sum_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg) * 100.0
+
+
+def _recompute(workdir: Path):
+    """Verifier-side Near-OOD AUROC from the agent's per-sample EBO scores. Returns
+    ``(auroc_pct, n_scored)`` or ``None`` (missing/malformed/wrong-count)."""
+    pred_path = workdir / "predictions.json"
+    if not pred_path.is_file():
+        return None
+    try:
+        data = json.loads(pred_path.read_text())
+    except (ValueError, OSError):
+        return None
+    if not isinstance(data, dict) or set(data) != set(_RUNS):
+        return None
+    run_aucs: list[float] = []
+    total = 0
+    for run in _RUNS:
+        rd = data.get(run)
+        if not isinstance(rd, dict):
+            return None
+        ids = rd.get("id")
+        if not isinstance(ids, list) or len(ids) < 2:
+            return None
+        try:
+            id_scores = [float(x) for x in ids]
+        except (TypeError, ValueError):
+            return None
+        ds_aucs: list[float] = []
+        for ood, n in _OOD.items():
+            scores = rd.get(ood)
+            if not isinstance(scores, list) or len(scores) != n:
+                return None
+            try:
+                ds_aucs.append(_auc([float(x) for x in scores], id_scores))
+            except (TypeError, ValueError):
+                return None
+            total += n
+        run_aucs.append(sum(ds_aucs) / len(ds_aucs))
+    return (sum(run_aucs) / len(run_aucs), total)
 
 # ---------------------------------------------------------------------------
 # AST-level contract validation
@@ -272,35 +334,16 @@ def _diagnostic_change_terms(diagnostics: list[str]) -> set[str]:
 
 def _make_public_contract_diagnostics(workdir: Path):
     def _public_contract_diagnostics(session: DockerSession) -> list[str]:
-        evidence = extract_structured_evidence(
-            session.transcript,
-            metric=METRIC,
-            expected_num_examples=None,
-        )
-        if evidence is None:
-            malformed = next(
-                (
-                    run for run in reversed(session.transcript)
-                    if run.ok and "REPRO_RESULT" in run.stdout
-                ),
-                None,
+        # V2: feedback recomputed from the per-sample EBO scores file the eval wrote.
+        if not (workdir / "predictions.json").is_file():
+            issue = (
+                "No `predictions.json` (the per-sample EBO scores file) was written. "
+                "It must be {s0,s1,s2} each with `id`, `cifar100` (9000) and `tin` "
+                "(7793) score lists."
             )
-            if malformed is not None:
-                issues = [
-                    "A successful evaluation printed REPRO_RESULT, but it was not valid "
-                    "strict JSON. Serialize the result object with json.dumps.",
-                ]
-                generated = workdir / "eval_ebo.py"
-                if generated.is_file():
-                    issues.extend(
-                        _normalization_diagnostics_for_code(
-                            generated.read_text(errors="replace"),
-                            workdir / NORMALIZATION_SOURCE_REL,
-                        )
-                    )
-                return issues
-            issue = "No valid REPRO_RESULT was produced by a successful evaluation command."
-            latest = next((run for run in reversed(session.transcript) if not run.ok), None)
+            latest = next(
+                (run for run in reversed(session.transcript) if not run.ok), None
+            )
             if latest is not None:
                 from agent.multi_rag import _search_evidence, _missing_path_hints
                 failure = _search_evidence(f"{latest.stdout}\n{latest.stderr}")
@@ -311,57 +354,32 @@ def _make_public_contract_diagnostics(workdir: Path):
                     issue += "\nExisting files beside the missing path:\n" + "\n".join(hints)
             return [issue]
 
-        issues: list[str] = []
-        if evidence.datasets != EXPECTED_DATASETS:
-            issue = (
-                f"Dataset counts mismatch: expected {EXPECTED_DATASETS}, "
-                f"got {evidence.datasets}."
-            )
-            issue += _silent_drop_hint(session, evidence.command_index)
-            issues.append(issue)
-        if evidence.aggregation != AGGREGATION:
-            issues.append(
-                f"Aggregation mismatch: expected {AGGREGATION!r}, "
-                f"got {evidence.aggregation!r}."
-            )
-        if evidence.run_metrics is None:
-            issues.append("run_metrics is missing.")
+        rec = _recompute(workdir)
+        if rec is None:
+            issues = [
+                "`predictions.json` is malformed: it must be a dict with keys "
+                "{s0,s1,s2}, each a dict with an `id` score list plus `cifar100` "
+                "(exactly 9000 scores) and `tin` (exactly 7793 scores). A short count "
+                "means the pipeline silently dropped items — fix the data path so "
+                "every list entry loads; do not subset."
+            ]
+            generated = workdir / "eval_ebo.py"
+            if generated.is_file():
+                issues.extend(
+                    _normalization_diagnostics_for_code(
+                        generated.read_text(errors="replace"),
+                        workdir / NORMALIZATION_SOURCE_REL,
+                    )
+                )
             return issues
-        if set(evidence.run_metrics) != set(EXPECTED_RUNS):
-            issues.append(
-                f"Run names mismatch: expected {EXPECTED_RUNS}, "
-                f"got {sorted(evidence.run_metrics)}."
-            )
-        expected_names = set(EXPECTED_DATASETS)
-        for run, values in evidence.run_metrics.items():
-            if set(values) != expected_names:
-                issues.append(
-                    f"Dataset keys for {run} mismatch: expected {sorted(expected_names)}, "
-                    f"got {sorted(values)}."
-                )
-        all_values = [
-            v
-            for run_vals in evidence.run_metrics.values()
-            for v in run_vals.values()
-        ]
-        all_values.append(evidence.actual)
-        if not all(0.0 <= v <= 100.0 for v in all_values) or max(all_values) <= 1.0:
-            issues.append(
-                "AUROC values must be finite percentage points in the 0-100 scale."
-            )
-        if evidence.run_metrics and all(vals for vals in evidence.run_metrics.values()):
-            computed = sum(
-                sum(run_vals.values()) / len(run_vals)
-                for run_vals in evidence.run_metrics.values()
-            ) / len(evidence.run_metrics)
-            if abs(computed - evidence.actual) > 0.011:
-                issues.append(
-                    f"actual does not match dataset_mean_then_run_mean: "
-                    f"reported {evidence.actual}, recomputed {computed}."
-                )
-        below = _below_chance_diagnostic(evidence.actual)
+
+        issues: list[str] = []
+        auroc, _ = rec
+        below = _below_chance_diagnostic(auroc)
         if below:
             issues.append(below)
+        # The buried preprocessing gotcha (missing resize) still shows up as a code
+        # check against the repo's normalization source — useful repair feedback.
         generated = workdir / "eval_ebo.py"
         if generated.is_file():
             issues.extend(
@@ -521,9 +539,10 @@ Public execution contract:
   pipeline (Resize, CenterCrop, ToTensor, Normalize) — not just the
   normalization mean/std — before coding; do not parse checkpoint `config.yml`
   files or instantiate `TestStandardPreProcessor`;
-- EBO and official AUROC sign semantics, percentage points, and dataset-then-run mean;
-- print exactly one strict-JSON `REPRO_RESULT` using `json.dumps`; its
-  `datasets` values are evaluated sample counts, not checkpoint/run counts;
+- EBO energy sign semantics (OOD scores HIGHER than ID), evaluated over every
+  sample (cifar100=9000, tin=7793 — do not subset or drop items);
+- WRITE `predictions.json` with the per-sample EBO scores per run (id/cifar100/tin),
+  as described below — the verifier recomputes the AUROC, you do not print it;
 - accept `--root` and use batched DataLoader CPU inference;
 - import the model and dataset only from direct modules such as
   `openood.networks.resnet18_32x32` and
@@ -543,9 +562,9 @@ unverified claim in the code, and issue follow-up queries only when evidence
 requires them. Submit a complete corrected script, not a prose review.
 
 Verify model import, benchmark paths, preprocessing, EBO/AUROC sign,
-percentage units, s0/s1/s2 aggregation, `--root`, and batched CPU execution.
-Require strict-JSON `REPRO_RESULT` via `json.dumps`, with evaluated sample
-counts in `datasets`, not checkpoint/run counts.
+`--root`, batched CPU execution, and that the eval WRITES `predictions.json` with
+the per-run per-sample EBO scores (id/cifar100=9000/tin=7793), from real inference
+over every sample (not subset).
 Treat every hardcoded normalization value and any custom Dataset
 implementation as high risk: verify them against repository source and prefer
 the official ImglistDataset.
@@ -597,10 +616,10 @@ the Reviewer still disputes (e.g. a suspected EBO/AUROC sign) may and should be
 changed. Fix only the latest blocking execution error in this round. Submit at
 most two small edits; defer unrelated concerns until the next execution result.
 
-Preserve working behavior and the public contract: percentage AUROC, correct
-EBO/AUROC direction, exact dataset counts, s0/s1/s2 dataset-then-run mean,
-strict-JSON `REPRO_RESULT` via `json.dumps`, `--root`, batched DataLoader CPU
-inference, and no unrelated broad-package imports.
+Preserve working behavior and the public contract: correct EBO/AUROC direction,
+exact per-sample coverage (cifar100=9000, tin=7793), a `predictions.json` with the
+per-run id/cifar100/tin EBO scores, `--root`, batched DataLoader CPU inference, and
+no unrelated broad-package imports.
 {EVIDENCE}
 
 Do not guess or mention the private target."""
@@ -641,9 +660,7 @@ def make_config(attempt: str) -> OracleConfig:
         public_contract_diagnostics=contract_diagnostics,
         verify_kwargs={
             "expected_num_examples": None,
-            "expected_datasets": EXPECTED_DATASETS,
-            "expected_runs": EXPECTED_RUNS,
-            "expected_aggregation": AGGREGATION,
+            "recompute_fn": _recompute,
         },
         navigator_instruction=NAVIGATOR_INSTRUCTION,
         reproducer_instruction=REPRODUCER_INSTRUCTION,

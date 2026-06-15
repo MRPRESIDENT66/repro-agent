@@ -158,6 +158,80 @@ Compact, reused from the development study (illustrative, small-N).
 
 ---
 
+## E4 — Stripping the specialization: the `generic` prompt path
+
+E1/E2 use *specialized* per-task prompts that hand the agent substantial task
+knowledge (APIs, field names, known gotchas). The fair question is what survives
+when that is removed. `prompt_mode=generic` swaps every role prompt for a single
+**task-agnostic** set (no task identity, API, or gotcha) — only the public result
+contract and the repo itself remain. Two hard tasks now pass under it:
+
+| Task | backend | target | generic, full pipeline |
+|---|---|---|---|
+| RobustBench Carmon2019 | subprocess | 52.0 robust acc | **pass** (verifier-recomputed 52.0) |
+| OpenOOD EBO | Docker | 87.58 Near-OOD AUROC | **pass** (verifier-recomputed 87.58) |
+
+Getting there was itself a debugging study, and the failures were *orchestrator*
+defects, not agent-capability limits:
+
+- **RobustBench was a pure wall-clock timeout.** Full AutoAttack (apgd-ce +
+  apgd-dlr, n=50) on a WRN-28-10 measured **~1484 s on CPU**; the eval timeout was
+  900 s, so it was killed mid-attack every time. Raising the budget to 2700 s —
+  **the attack configuration is unchanged**, so the `52.0` semantics are intact —
+  let it finish and pass.
+- **OpenOOD exposed a three-stage cascade.** (1) In specialized mode the Navigator
+  *hallucinated* a CIFAR-10 normalization `std` (a value absent from the entire
+  repo) and attributed it to a file that contains no such number; the repair loop
+  re-fed that bad handoff every round, so a sign + normalization error produced
+  AUROC **8.49**. (2) The generic diagnostics path checked only artifact *shape*,
+  so a structurally-valid-but-semantically-wrong `predictions.json` drew no
+  corrective feedback. (3) After fixing (1) with an anti-hallucination rule ("a
+  reported constant must be read from a named file, never filled from memory"), the
+  agent stopped inventing values but instead tried to *import* the repo's
+  CUDA/optional-dependency API chain (`libmr`), failing five rounds without
+  producing any artifact.
+
+The fixes are all **task-agnostic** and stay inside the generic contract (no
+hidden target, no task identity):
+
+1. **Anti-hallucination grounding** (Navigator): concrete constants must be quoted
+   from a specific file actually read, or flagged as unresolved — never supplied
+   from convention.
+2. **Inline-fallback strategy** (Reproducer + Repair): when a high-level API can't
+   be imported because of an absent/incompatible dependency, stop retrying the
+   import — read the constants and computation *logic* from source and reimplement
+   that minimal slice inline with stable base libraries. Reuse the repo's **values
+   and semantics, not its import surface.**
+3. **Sanity diagnostics in the generic path**, of two kinds with an honest
+   boundary between them:
+   - *Framework-level (truly task-agnostic):* a verifier-recomputed
+     higher-is-better metric **below its random-chance floor** signals an inverted
+     decision direction. The floor is declared once per task as
+     `OracleConfig.chance_level` (50.0 for binary AUROC, 100/num_classes for
+     balanced top-1; left unset for robust-accuracy, where sub-chance is a
+     legitimate attack outcome, not an error). The value comes from the verifier's
+     own recomputation — never the hidden target — so the check generalizes to any
+     task that declares a floor.
+   - *Oracle-specific (the honest limit):* the "hardcoded normalization disagrees
+     with the repo's own source" check still names OpenOOD's source file and dict
+     key. It references only the agent's own code and the repo's own files (no
+     target), but it is **not** yet framework-general — a new task needs its own
+     equivalent. So "the generic path self-corrects hard tasks" is, today, partly
+     a framework capability and partly a per-task diagnostic I had to author after
+     predicting the failure mode.
+
+With these, the agent reaches 87.58 **on its own** (4 executions, ¥0.58, no human
+edit to its code). Independently re-verified: the official CPU reference script's
+held-out result is 87.5823 (s0/s1/s2 = 86.93/87.91/87.91), and that script is
+scrubbed from the agent's workspace, so blindness holds. **Caveats:** these are
+single N=1 generic passes per task, not an N=5 rate; the development above was
+iterated against these same tasks (read as feasibility, not a generalization
+rate); and as noted, one of the two enabling diagnostics is still oracle-specific,
+so the result shows "given the right *form* of feedback the agent self-corrects",
+not yet "the system produces that feedback for an unseen task unaided."
+
+---
+
 ## Key findings
 
 1. **Blind reproduction is feasible and provenance-gated** — 21/25 across four
@@ -198,8 +272,9 @@ alone (solo-repair) is 0/5 on the hard task — the pipeline cannot be reduced t
   run.
 - **Oracle specialization is real.** The per-task prompts hand the agent
   substantial task knowledge (APIs, field names, known gotchas); "generalizes" must
-  be read with that caveat. (A `prompt_mode=generic` path that strips this is under
-  development.)
+  be read with that caveat. A `prompt_mode=generic` path that strips this exists
+  and now passes two hard tasks (RobustBench, OpenOOD) as single N=1 runs — see
+  E4 — but the broad N=5 generality claim still rests on the specialized prompts.
 - **The two `detectors` tasks are not new papers** — same library as the existing
   `resnet18_cifar100` task; included to exercise repair, not for paper breadth.
 - **mmpretrain blindness is soft** — its 94.82 is in the public repo's own
@@ -269,4 +344,5 @@ fixes (all with regression/attack tests):
 
 All **107** unit tests pass (orchestration + provenance-attack suites added).
 Still open: a true held-out split, a finer component ablation, a second hard task
-for E2, and the in-progress `prompt_mode=generic` path to reduce specialization.
+for E2, and scaling the `prompt_mode=generic` path (E4) from single N=1 passes to
+a full N=5 rate.

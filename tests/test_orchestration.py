@@ -14,8 +14,19 @@ from pathlib import Path
 import pytest
 
 from agent import multi_rag
+from agent.generic_prompts import GENERIC_PROMPTS
 from agent.llm import Reply, ToolCall, Usage
-from agent.multi_rag import OracleConfig, run_oracle
+from agent.multi_rag import (
+    OracleConfig,
+    _atomic_write_text,
+    _failed_import_packages,
+    _generic_task_context,
+    _make_generic_code_validator,
+    _make_generic_contract_diagnostics,
+    _make_generic_repair_validator,
+    _role_prompts,
+    run_oracle,
+)
 from exec.session import RunResult, Session
 
 
@@ -33,7 +44,12 @@ class _AutoLLM:
             return Reply("", [ToolCall("q", "search_repo", {"query": "how to evaluate here"})])
         submit = next((n for n in names if n.startswith("submit_")), None)
         if submit:
-            content = "REVIEW_STATUS: PASS\n" if "review" in submit else "eval code"
+            if "review" in submit:
+                content = "REVIEW_STATUS: PASS\n"
+            else:
+                system = str(messages[0].get("content", "")).lower()
+                repair_line = "repair_marker = True\n" if "repair agent" in system else ""
+                content = "output_path = 'predictions.json'\n" + repair_line
             return Reply("", [ToolCall("s", submit, {"content": content})])
         return Reply("synthesis fallback\nREVIEW_STATUS: PASS\n")
 
@@ -103,6 +119,16 @@ def _result(cfg: OracleConfig) -> dict:
 
 
 # ---------------------------------------------------------------------------
+
+def test_atomic_write_text_replaces_complete_file_without_temp_artifacts(tmp_path):
+    output = tmp_path / "eval.py"
+    output.write_text("old\n")
+
+    _atomic_write_text(output, "new complete content\n")
+
+    assert output.read_text() == "new complete content\n"
+    assert list(tmp_path.glob(".eval.py.*.tmp")) == []
+
 
 def test_solo_and_team_are_one_shot(tmp_path, monkeypatch):
     _patch(monkeypatch)
@@ -178,3 +204,228 @@ def test_unknown_pipeline_rejected(tmp_path, monkeypatch):
     cfg = _make_config(tmp_path, outcomes=[True])
     with pytest.raises(ValueError, match="unknown pipeline"):
         run_oracle(cfg, pipeline="turbo")
+
+
+def test_generic_mode_replaces_all_specialized_role_prompts(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[True])
+
+    generic = _role_prompts(cfg, "generic")
+    specialized = _role_prompts(cfg, "specialized")
+
+    assert generic == GENERIC_PROMPTS
+    assert specialized.navigator == "nav"
+    assert specialized.reproducer == "rep"
+    assert specialized.critic == "crit"
+    assert specialized.reviewer == "rev"
+    assert specialized.repair == "fix {round_index}"
+
+
+def test_generic_task_context_exposes_protocol_but_not_private_target(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[True])
+
+    context = _generic_task_context(cfg)
+
+    assert cfg.task in context
+    assert 'metric id must be "acc"' in context
+    assert "num_examples` value must be 10" in context
+    assert "REPRO_RESULT" in context
+    assert str(cfg.expected) not in context
+    assert str(cfg.tolerance) not in context
+
+
+def test_generic_task_context_uses_v2_artifact_contract_when_provided(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[True])
+    cfg.public_result_protocol = (
+        "Write `predictions.json`: a JSON list of exactly 10 measured predictions."
+    )
+    cfg.public_execution_command = (
+        "python eval.py --model-dir provisioned_models --data-dir provisioned_data"
+    )
+
+    context = _generic_task_context(cfg)
+
+    assert "predictions.json" in context
+    assert "exactly 10 measured predictions" in context
+    assert cfg.public_execution_command in context
+    assert "accept and honor this command's arguments" in context
+    assert "REPRO_RESULT" not in context
+    assert str(cfg.expected) not in context
+    assert str(cfg.tolerance) not in context
+
+
+def test_generic_code_validator_checks_interface_without_specialized_solution(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[True])
+    cfg.public_result_protocol = (
+        "Write `predictions.json`: a JSON list of measured predictions."
+    )
+    validate = _make_generic_code_validator(cfg)
+
+    assert validate("path = 'predictions.json'\n") == "path = 'predictions.json'\n"
+    with pytest.raises(ValueError, match="public result artifact") as exc:
+        validate("print('aggregate only')\n")
+    assert "AutoAttack" not in str(exc.value)
+    assert "tools/test.py" not in str(exc.value)
+
+
+def test_generic_contract_diagnostics_hide_specialized_repair_hints(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[False])
+    cfg.public_result_protocol = (
+        "Write `predictions.json`: a JSON list of measured predictions."
+    )
+    cfg.public_contract_diagnostics = lambda _session: [
+        "Use AutoAttack and the fine_label field."
+    ]
+    diagnostics = _make_generic_contract_diagnostics(cfg)
+
+    issues = diagnostics(Session(cfg.workdir))
+
+    assert "public result artifact is missing" in issues[0]
+    assert "AutoAttack" not in issues[0]
+    assert "fine_label" not in issues[0]
+
+
+def test_generic_contract_diagnostics_expose_own_artifact_shape_and_metric(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[False])
+    cfg.public_result_protocol = (
+        "Write `predictions.json`: a JSON object of measured predictions."
+    )
+    cfg.public_contract_passes = lambda _session: False
+    cfg.verify_kwargs["recompute_fn"] = lambda _workdir: (12.5, 3)
+    (cfg.workdir / "predictions.json").write_text(
+        json.dumps({"run": {"id": [1, 2], "ood": [3]}})
+    )
+    diagnostics = _make_generic_contract_diagnostics(cfg)
+
+    issue = diagnostics(Session(cfg.workdir))[0]
+
+    assert "id: list[2]" in issue
+    assert "ood: list[1]" in issue
+    assert "acc=12.5 over n=3" in issue
+    assert str(cfg.expected) not in issue
+    assert str(cfg.tolerance) not in issue
+
+
+def test_generic_repair_rejects_reentering_failed_package_initializer(tmp_path):
+    workdir = tmp_path / "ws"
+    session = Session(workdir)
+    session.transcript.append(
+        RunResult(
+            command="python eval.py",
+            stdout="",
+            stderr=(
+                'Traceback:\n  File "/workspace/library/plugins/__init__.py", line 1\n'
+                "ModuleNotFoundError: No module named 'optional_dep'\n"
+            ),
+            exit_code=1,
+            timed_out=False,
+            duration_s=0.0,
+        )
+    )
+    validate = _make_generic_repair_validator(
+        lambda content: content,
+        session,
+        workdir,
+        execution_start=0,
+        current_code="from library.core.direct import Tool\n",
+    )
+
+    assert _failed_import_packages(session, workdir) == {"library.plugins"}
+    with pytest.raises(ValueError, match="already proven to fail"):
+        validate("from library.plugins.sibling import Tool\n")
+    with pytest.raises(ValueError, match="made no code change"):
+        validate("from library.core.direct import Tool\n")
+    assert validate("from library.core.alternative import Tool\n") == (
+        "from library.core.alternative import Tool\n"
+    )
+
+
+def test_generic_mode_does_not_call_specialized_code_validator(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[True])
+    cfg.public_result_protocol = (
+        "Write `predictions.json`: a JSON list of measured predictions."
+    )
+
+    def specialized_validator(_content):
+        raise AssertionError("specialized validator leaked into generic mode")
+
+    cfg.validate_code = specialized_validator
+    cfg.public_contract_diagnostics = lambda _session: (_ for _ in ()).throw(
+        AssertionError("specialized diagnostics leaked into generic mode")
+    )
+    run_oracle(cfg, pipeline="solo", prompt_mode="generic")
+
+    assert _result(cfg)["workflow_error"] is None
+
+
+def test_generic_repair_uses_shared_full_file_path(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[False, True])
+    cfg.public_result_protocol = (
+        "Write `predictions.json`: a JSON list of measured predictions."
+    )
+    cfg.repair_submit_name = "submit_specialized_patch"
+    cfg.repair_make_validator = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("specialized repair validator leaked into generic mode")
+    )
+
+    run_oracle(cfg, pipeline="solo-repair", prompt_mode="generic")
+
+    result = _result(cfg)
+    assert result["workflow_error"] is None
+    assert result["repair_mode"] == "full_file_replacement"
+    assert "repair_1" in result["roles"]
+
+
+def test_generic_mode_is_recorded_and_uses_separate_artifact_dir(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[True])
+    cfg.public_result_protocol = (
+        "Write `predictions.json`: a JSON list of exactly 10 measured predictions."
+    )
+
+    run_oracle(cfg, pipeline="full", prompt_mode="generic")
+
+    result = _result(cfg)
+    generic_artifact = cfg.artifact_dir.parent / f"{cfg.artifact_dir.name}__generic"
+    assert result["prompt_mode"] == "generic"
+    assert result["oracle_contract_mode"] == "public_artifact_only"
+    assert result["runtime_probe_enabled"] is True
+    assert result["runtime_probe_budget"] == multi_rag.MAX_RUNTIME_PROBES
+    assert result["total_runtime_probes"] == 0
+    assert (generic_artifact / "result.json").exists()
+    assert json.loads((generic_artifact / "result.json").read_text())["prompt_mode"] == "generic"
+
+    navigator_messages = [
+        json.loads(line)
+        for line in (generic_artifact / "navigator_transcript.jsonl").read_text().splitlines()
+    ]
+    assert navigator_messages[0]["content"] == GENERIC_PROMPTS.navigator
+    assert "nav" not in navigator_messages[0]["content"]
+    assert "predictions.json" in navigator_messages[1]["content"]
+    assert "REPRO_RESULT" not in navigator_messages[1]["content"]
+
+
+def test_specialized_mode_keeps_original_reproducer_context(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[True])
+
+    run_oracle(cfg, pipeline="full", prompt_mode="specialized")
+
+    result = _result(cfg)
+    messages = [
+        json.loads(line)
+        for line in (cfg.artifact_dir / "reproducer_transcript.jsonl").read_text().splitlines()
+    ]
+    assert result["oracle_contract_mode"] == "task_specific"
+    assert result["runtime_probe_enabled"] is False
+    assert result["runtime_probe_budget"] == 0
+    assert "# Navigator handoff" in messages[1]["content"]
+    assert "# Public task and result protocol" not in messages[1]["content"]
+
+
+def test_unknown_prompt_mode_rejected(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[True])
+    with pytest.raises(ValueError, match="unknown prompt mode"):
+        run_oracle(cfg, prompt_mode="oracle-whispers")

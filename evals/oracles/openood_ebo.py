@@ -16,8 +16,6 @@ from agent.multi_rag import (
     _review_requires_repair,
 )
 from exec.docker_session import DockerSession
-from verify.check import extract_structured_evidence
-
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "repos" / "OpenOOD"
 IMAGE = "repro-openood:latest"
@@ -48,6 +46,8 @@ _FORBIDDEN_CALL_ARG_MARKERS = ("config.yml", "--checkpoint_root")
 _REQUIRED_CONTRACT_MARKERS = ("predictions.json",)
 
 _RUNS = ("s0", "s1", "s2")
+_ID_COUNT = 9000  # OpenOOD CIFAR-10 ID *test* split: the 10000-image test set is
+# split into 9000 id-test + 1000 id-val; the near-OOD AUROC scores the 9000 id-test.
 _OOD = {"cifar100": 9000, "tin": 7793}  # near-OOD sets + their exact sample counts
 
 TASK = """Reproduce the official EBO Near-OOD AUROC for CIFAR-10 using the
@@ -56,11 +56,11 @@ datasets, CIFAR-100 and TinyImageNet. The fixed OpenOOD repository, data, and
 checkpoints are already present. The environment is CPU-only and offline.
 Preserve repository evaluation semantics and report percentage AUROC."""
 
-EVIDENCE = """The eval must WRITE a file `predictions.json` in the working
+EVIDENCE = f"""The eval must WRITE a file `predictions.json` in the working
 directory: the per-sample EBO energy scores, structured as
-{"s0": {"id": [scores for the CIFAR-10 ID test set],
-        "cifar100": [9000 scores], "tin": [7793 scores]},
- "s1": {...}, "s2": {...}}  (one block per checkpoint).
+{{"s0": {{"id": [{_ID_COUNT} scores for the complete CIFAR-10 ID test set],
+         "cifar100": [9000 scores], "tin": [7793 scores]}},
+ "s1": {{...}}, "s2": {{...}}}}  (one block per checkpoint).
 An external verifier recomputes the Near-OOD AUROC itself (per run, AUROC of each
 OOD set vs the ID set; then the dataset mean within each run, then the mean over
 runs). It ignores anything you print. Use the EBO energy convention where OOD
@@ -106,7 +106,7 @@ def _recompute(workdir: Path):
         if not isinstance(rd, dict):
             return None
         ids = rd.get("id")
-        if not isinstance(ids, list) or len(ids) < 2:
+        if not isinstance(ids, list) or len(ids) != _ID_COUNT:
             return None
         try:
             id_scores = [float(x) for x in ids]
@@ -338,8 +338,8 @@ def _make_public_contract_diagnostics(workdir: Path):
         if not (workdir / "predictions.json").is_file():
             issue = (
                 "No `predictions.json` (the per-sample EBO scores file) was written. "
-                "It must be {s0,s1,s2} each with `id`, `cifar100` (9000) and `tin` "
-                "(7793) score lists."
+                f"It must be {{s0,s1,s2}} each with `id` ({_ID_COUNT}), "
+                "`cifar100` (9000) and `tin` (7793) score lists."
             )
             latest = next(
                 (run for run in reversed(session.transcript) if not run.ok), None
@@ -356,13 +356,16 @@ def _make_public_contract_diagnostics(workdir: Path):
 
         rec = _recompute(workdir)
         if rec is None:
-            issues = [
+            malformed = (
                 "`predictions.json` is malformed: it must be a dict with keys "
-                "{s0,s1,s2}, each a dict with an `id` score list plus `cifar100` "
-                "(exactly 9000 scores) and `tin` (exactly 7793 scores). A short count "
-                "means the pipeline silently dropped items — fix the data path so "
-                "every list entry loads; do not subset."
-            ]
+                f"{{s0,s1,s2}}, each a dict with `id` (exactly {_ID_COUNT} scores), "
+                "`cifar100` (exactly 9000 scores) and `tin` (exactly 7793 scores). "
+                "A short count means the pipeline silently dropped items — fix the "
+                "data path so every list entry loads; do not subset."
+            )
+            transcript = list(getattr(session, "transcript", []) or [])
+            malformed += _silent_drop_hint(session, len(transcript) if transcript else None)
+            issues = [malformed]
             generated = workdir / "eval_ebo.py"
             if generated.is_file():
                 issues.extend(
@@ -391,6 +394,29 @@ def _make_public_contract_diagnostics(workdir: Path):
         return issues
 
     return _public_contract_diagnostics
+
+
+def _make_generic_safe_diagnostics(workdir: Path):
+    """Oracle-specific sanity check safe under generic prompt mode: the eval's
+    hardcoded normalization disagreeing with the repository's OWN normalization
+    source. Derivable from the agent's own code + the repo's own files, never the
+    hidden target — just "your constants don't match the repo you were told to
+    use". (The below-chance direction check is now framework-level, driven by
+    OracleConfig.chance_level, so it is not repeated here.)
+    """
+    def _generic_safe_diagnostics(session: DockerSession) -> list[str]:
+        issues: list[str] = []
+        generated = workdir / "eval_ebo.py"
+        if generated.is_file():
+            issues.extend(
+                _normalization_diagnostics_for_code(
+                    generated.read_text(errors="replace"),
+                    workdir / NORMALIZATION_SOURCE_REL,
+                )
+            )
+        return issues
+
+    return _generic_safe_diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +566,7 @@ Public execution contract:
   normalization mean/std — before coding; do not parse checkpoint `config.yml`
   files or instantiate `TestStandardPreProcessor`;
 - EBO energy sign semantics (OOD scores HIGHER than ID), evaluated over every
-  sample (cifar100=9000, tin=7793 — do not subset or drop items);
+  sample (id={_ID_COUNT}, cifar100=9000, tin=7793 — do not subset or drop items);
 - WRITE `predictions.json` with the per-sample EBO scores per run (id/cifar100/tin),
   as described below — the verifier recomputes the AUROC, you do not print it;
 - accept `--root` and use batched DataLoader CPU inference;
@@ -563,8 +589,8 @@ requires them. Submit a complete corrected script, not a prose review.
 
 Verify model import, benchmark paths, preprocessing, EBO/AUROC sign,
 `--root`, batched CPU execution, and that the eval WRITES `predictions.json` with
-the per-run per-sample EBO scores (id/cifar100=9000/tin=7793), from real inference
-over every sample (not subset).
+the per-run per-sample EBO scores (id={_ID_COUNT}/cifar100=9000/tin=7793), from
+real inference over every sample (not subset).
 Treat every hardcoded normalization value and any custom Dataset
 implementation as high risk: verify them against repository source and prefer
 the official ImglistDataset.
@@ -618,8 +644,8 @@ most two small edits; defer unrelated concerns until the next execution result.
 
 Preserve working behavior and the public contract: correct EBO/AUROC direction,
 exact per-sample coverage (cifar100=9000, tin=7793), a `predictions.json` with the
-per-run id/cifar100/tin EBO scores, `--root`, batched DataLoader CPU inference, and
-no unrelated broad-package imports.
+per-run id={_ID_COUNT}/cifar100=9000/tin=7793 EBO scores, `--root`, batched
+DataLoader CPU inference, and no unrelated broad-package imports.
 {EVIDENCE}
 
 Do not guess or mention the private target."""
@@ -658,10 +684,14 @@ def make_config(attempt: str) -> OracleConfig:
         validate_code=validate_code,
         public_contract_passes=public_contract_passes,
         public_contract_diagnostics=contract_diagnostics,
+        generic_safe_diagnostics=_make_generic_safe_diagnostics(workdir),
+        chance_level=CHANCE_LEVEL,
         verify_kwargs={
             "expected_num_examples": None,
             "recompute_fn": _recompute,
         },
+        public_result_protocol=EVIDENCE,
+        public_execution_command=f"python eval_ebo.py --root {CHECKPOINT_ROOT}",
         navigator_instruction=NAVIGATOR_INSTRUCTION,
         reproducer_instruction=REPRODUCER_INSTRUCTION,
         critic_instruction=CRITIC_INSTRUCTION,

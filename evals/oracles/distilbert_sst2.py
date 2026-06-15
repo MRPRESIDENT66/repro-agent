@@ -333,7 +333,10 @@ def make_config(attempt: str) -> OracleConfig:
         validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
         public_contract_diagnostics=contract_diagnostics,
+        chance_level=50.0,  # binary SST-2 sentiment classification
         verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": _recompute},
+        public_result_protocol=EVIDENCE,
+        public_execution_command="python eval_sst2.py",
         navigator_instruction=NAVIGATOR_INSTRUCTION,
         reproducer_instruction=REPRODUCER_INSTRUCTION,
         critic_instruction=CRITIC_INSTRUCTION,

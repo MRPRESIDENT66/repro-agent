@@ -31,3 +31,25 @@ def get_doc_vectors(docs: list[Doc], embedder, name: str) -> np.ndarray:
     np.save(vec_path, vecs)
     meta_path.write_text(json.dumps(key))
     return vecs
+
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://us-api.ccodezh.com",
+    "ANTHROPIC_AUTH_TOKEN": "sk-0QMFJXOjN9EBGxCZCWmsMCgsNHaOY5ZQCHWWfecOnVz5t4US",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-5-20251101",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-5-20250929",
+    "ANTHROPIC_MODEL": "claude-sonnet-4-5-20250929",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}
+
+{
+  "apiKeyHelper": "echo 'sk-0QMFJXOjN9EBGxCZCWmsMCgsNHaOY5ZQCHWWfecOnVz5t4US'",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://us-api.ccodezh.com",
+    "ANTHROPIC_AUTH_TOKEN": "sk-0QMFJXOjN9EBGxCZCWmsMCgsNHaOY5ZQCHWWfecOnVz5t4US",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  }
+}

@@ -9,4 +9,5 @@ if __name__ == "__main__":
     run_oracle(
         make_config(os.environ.get("OPENOOD_MULTI_RAG_ATTEMPT", "002")),
         pipeline=os.environ.get("PIPELINE", "full"),
+        prompt_mode=os.environ.get("PROMPT_MODE", "specialized"),
     )

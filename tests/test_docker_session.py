@@ -36,3 +36,26 @@ def test_state_persists_in_container(tmp_path: Path) -> None:
         assert "pip" in s.shell("cat tools.txt").stdout    # second exec sees the first's writes
     finally:
         s.close()
+
+
+def test_probe_is_not_verifier_visible(tmp_path: Path) -> None:
+    s = DockerSession(tmp_path / "ws")
+    try:
+        assert s.probe("python -c \"print('probe')\"").ok
+        assert s.shell("python -c \"print('evaluation')\"").ok
+        assert len(s.probe_transcript) == 1
+        assert len(s.transcript) == 1
+        assert "probe" in s.probe_replay_script()
+        assert "evaluation" in s.replay_script()
+    finally:
+        s.close()
+
+
+def test_sync_file_waits_for_bind_mount_visibility(tmp_path: Path) -> None:
+    s = DockerSession(tmp_path / "ws")
+    try:
+        s.write_file("generated.py", "print('ok')\n")
+        assert s.sync_file("generated.py")
+        assert not s.sync_file("missing.py", timeout=0.1)
+    finally:
+        s.close()

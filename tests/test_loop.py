@@ -8,6 +8,7 @@ is covered by test_loop_fc.py.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from agent.llm import ScriptedLLM
@@ -80,6 +81,27 @@ def test_replay_script_records_commands(tmp_path: Path) -> None:
     llm = ScriptedLLM(["```bash\necho one\n```", "```bash\necho two\n```", "FINAL: 0"])
     run_agent("t", s, llm, use_tools=False)
     assert s.replay_script() == "echo one\necho two"
+
+
+def test_runtime_probe_is_separate_from_verifier_transcript(tmp_path: Path) -> None:
+    s = Session(tmp_path / "ws", venv_python=sys.executable, default_timeout=30)
+
+    probe = s.probe("python -c \"print('probe')\"", timeout=5)
+    evaluation = s.shell("python -c \"print('evaluation')\"", timeout=5)
+
+    assert probe.ok and evaluation.ok
+    assert [run.stdout.strip() for run in s.probe_transcript] == ["probe"]
+    assert [run.stdout.strip() for run in s.transcript] == ["evaluation"]
+    assert s.probe_replay_script() == "python -c \"print('probe')\""
+    assert s.replay_script() == "python -c \"print('evaluation')\""
+
+
+def test_sync_file_confirms_local_workspace_visibility(tmp_path: Path) -> None:
+    s = _session(tmp_path)
+    s.write_file("generated.py", "print('ok')\n")
+
+    assert s.sync_file("generated.py")
+    assert not s.sync_file("missing.py")
 
 
 def test_agent_prompt_does_not_contain_expected(tmp_path: Path) -> None:

@@ -183,7 +183,11 @@ def _make_execute_eval(n_examples: int, epsilon: float):
             f"--data_dir robustbench_data "
             f"--n_examples {n_examples} "
             f"--epsilon {epsilon}",
-            timeout=900,
+            # Full AutoAttack (apgd-ce + apgd-dlr, n=50) on WRN-28-10 measured
+            # ~1484s wall on an 11-core CPU; 900s killed it mid apgd-dlr. The
+            # attack config is unchanged — only the budget is raised, with margin
+            # for orchestrator/thread overhead.
+            timeout=2700,
         )
 
     return _execute_eval
@@ -283,7 +287,7 @@ def make_config(attempt: str) -> OracleConfig:
         make_session=lambda: Session(
             workdir,
             venv_python=ROOT / ".venv" / "bin" / "python",
-            default_timeout=900,
+            default_timeout=2700,
         ),
         session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir),
@@ -292,6 +296,15 @@ def make_config(attempt: str) -> OracleConfig:
         public_contract_passes=lambda session: not contract_diagnostics(session),
         public_contract_diagnostics=contract_diagnostics,
         verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": recompute},
+        public_result_protocol=EVIDENCE,
+        public_execution_command=(
+            f"PYTHONPATH=. python eval_robustbench.py "
+            f"--model_name {MODEL_NAME} "
+            f"--model_dir robustbench_models "
+            f"--data_dir robustbench_data "
+            f"--n_examples {N_EXAMPLES} "
+            f"--epsilon {EPSILON}"
+        ),
         navigator_instruction=NAVIGATOR_INSTRUCTION,
         reproducer_instruction=REPRODUCER_INSTRUCTION,
         critic_instruction=CRITIC_INSTRUCTION,

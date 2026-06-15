@@ -15,8 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir \
         torch torchvision \
         numpy==1.26.4 scipy scikit-learn pandas \
+        faiss-cpu==1.7.4 \
         pyyaml tqdm pillow matplotlib \
         opencv-python-headless imgaug diffdist gdown
 
-RUN python -c "import torch, torchvision, numpy, sklearn, pandas, cv2, imgaug; \
-    print('repro-openood OK | torch', torch.__version__, '| numpy', numpy.__version__)"
+RUN python -c "import torch, torchvision, numpy, sklearn, pandas, faiss, cv2, imgaug; \
+    print('repro-openood OK | torch', torch.__version__, '| numpy', numpy.__version__, \
+    '| faiss', faiss.__version__)"

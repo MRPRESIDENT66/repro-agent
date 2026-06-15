@@ -12,15 +12,18 @@ provisioned on disk and the container is taken offline before execution.
 from __future__ import annotations
 
 import ast
+import json
 import shutil
 from pathlib import Path
 
 from agent.multi_rag import OracleConfig, _extract_python
 from exec.docker_session import DockerSession
-from verify.check import extract_structured_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "repos" / "mmpretrain"
+# CIFAR-10 test gold labels (standard test order, which mmpretrain's test loader
+# also follows — shuffle is off for test).
+GOLD_LABELS = ROOT / "evals" / "oracles" / "gold" / "cifar10_test_labels.json"
 # Provisioned assets live in a stable (gitignored) dir, like robustbench_models/
 # — not under the transient workspaces/ tree that gets wiped between runs.
 CKPT_SOURCE = ROOT / "repos" / "mmpretrain_assets" / "ckpt.pth"
@@ -44,16 +47,18 @@ to find the evaluation entry point and the matching ResNet-18 CIFAR-10 config,
 run the evaluation against the checkpoint, and report the top-1 accuracy as a
 percentage."""
 
-EVIDENCE = f"""A result counts only when an EXECUTED evaluation command prints:
-REPRO_RESULT {{"metric":"{METRIC}","actual":<number>,"num_examples":{N_EXAMPLES}}}
-The evaluation program itself must print the line. Do not echo or printf a
-hardcoded number. `actual` is top-1 accuracy in percentage points (0-100), parsed
-from the metric that the repository's own test tool prints (e.g. the
-`accuracy/top1:` value in mmengine's output)."""
+EVIDENCE = f"""The eval must WRITE a file `predictions.json` in the working
+directory: a JSON list of exactly {N_EXAMPLES} integers — the model's predicted
+class id for each CIFAR-10 test image, in test order. The repository's own
+`tools/test.py` can dump per-sample predictions (e.g. via `--out`); load that dump
+and write `predictions.json`. An external verifier recomputes top-1 accuracy from
+this file against held-out gold labels it loads itself; it ignores anything you
+print. Do NOT hardcode predictions — only the model's real per-sample predictions
+reproduce the target."""
 
-# The wrapper must actually invoke the repository's test entry and serialize the
-# parsed metric — it cannot print a literal it never sees (blind).
-_REQUIRED_MARKERS = ("REPRO_RESULT", "test.py")
+# The wrapper must run the repository's test entry AND write the per-sample
+# predictions file — it cannot print a literal it never sees (blind).
+_REQUIRED_MARKERS = ("predictions.json", "test.py")
 
 
 # ---------------------------------------------------------------------------
@@ -71,28 +76,41 @@ def _validate_code(content: str) -> str:
         raise ValueError(
             "code is missing required public-contract markers "
             f"{missing}: it must run the repository's test entry (tools/test.py) "
-            "and print a REPRO_RESULT line parsed from its real output."
+            "with per-sample prediction dumping and write predictions.json."
         )
     return code
+
+
+def _recompute(workdir: Path):
+    """Verifier-side top-1 from the agent's per-sample predictions vs pinned gold."""
+    pred_path = workdir / "predictions.json"
+    if not pred_path.is_file():
+        return None
+    try:
+        preds = json.loads(pred_path.read_text())
+        gold = json.loads(GOLD_LABELS.read_text())
+    except (ValueError, OSError):
+        return None
+    if not isinstance(preds, list) or len(preds) != len(gold):
+        return None
+    try:
+        correct = sum(int(p) == int(g) for p, g in zip(preds, gold))
+    except (TypeError, ValueError):
+        return None
+    return (100.0 * correct / len(gold), len(gold))
 
 
 # ---------------------------------------------------------------------------
 # Contract
 # ---------------------------------------------------------------------------
 
-def _make_public_contract_diagnostics(n_examples: int):
+def _make_public_contract_diagnostics(workdir: Path, n_examples: int):
     def _public_contract_diagnostics(session) -> list[str]:
-        evidence = extract_structured_evidence(
-            session.transcript,
-            metric=METRIC,
-            expected_num_examples=n_examples,
-        )
-        if evidence is None:
+        if not (workdir / "predictions.json").is_file():
             issue = (
-                f"No valid REPRO_RESULT was produced by a successful evaluation "
-                f'command. Need metric="{METRIC}" and num_examples={n_examples} in '
-                f"the stdout of a successful run that invoked the repository test "
-                f"tool."
+                f"No `predictions.json` written. Run the repo's test tool with "
+                f"per-sample prediction dumping and write a JSON list of "
+                f"{n_examples} predicted class ids in test order."
             )
             latest = next(
                 (run for run in reversed(session.transcript) if not run.ok), None
@@ -102,10 +120,16 @@ def _make_public_contract_diagnostics(n_examples: int):
                 if tail:
                     issue += f"\nFix the latest blocking execution error first:\n{tail}"
             return [issue]
-        issues: list[str] = []
-        if not 0.0 <= evidence.actual <= 100.0:
-            issues.append("top-1 accuracy must be a percentage in the 0-100 scale.")
-        return issues
+        rec = _recompute(workdir)
+        if rec is None:
+            return [
+                f"`predictions.json` is malformed or not a list of {n_examples} "
+                f"integer class ids."
+            ]
+        acc, _ = rec
+        if not 0.0 <= acc <= 100.0:
+            return ["recomputed top-1 must be a percentage in 0-100."]
+        return []
 
     return _public_contract_diagnostics
 
@@ -203,11 +227,12 @@ Public execution contract:
   the checkpoint `ckpt.pth`; do NOT re-implement the model, dataset, or metric;
 - the environment is CPU-only and offline — do not download anything; the data is
   already at `data/cifar10/`;
-- capture the tool's stdout/stderr, parse the printed top-1 accuracy (the
-  `accuracy/top1:` value in mmengine's output) as a float in percentage points;
-- print exactly one strict-JSON `REPRO_RESULT` line with the parsed value and
-  `num_examples`={N_EXAMPLES}; the program must print it from the PARSED metric,
-  never a hardcoded literal;
+- make `tools/test.py` DUMP per-sample predictions (e.g. pass `--out results.pkl`,
+  which mmengine writes per-sample); then load that dump and extract the predicted
+  class id for each test image;
+- WRITE `predictions.json`: a JSON list of the {N_EXAMPLES} predicted class ids in
+  test order. The verifier recomputes top-1 from this — you need not parse the
+  printed accuracy;
 - {EVIDENCE}
 
 Do not guess or mention the private target."""
@@ -215,15 +240,14 @@ Do not guess or mention the private target."""
 CRITIC_INSTRUCTION = f"""You are an independent Code Critic. Audit the generated
 `eval_mmpretrain.py` against the repository. You receive no prewritten queries:
 search the highest-risk unverified claim (is `tools/test.py` the right entry? is
-the config path correct and the cifar10 b16x8 variant? is the metric key parsed
-correctly?) and submit a complete corrected wrapper, not a prose review.
+the config path correct and the cifar10 b16x8 variant? how does the dump store the
+predicted label?) and submit a complete corrected wrapper, not a prose review.
 
 Verify:
 - it invokes `tools/test.py` with the correct config + `ckpt.pth`;
-- it does not re-implement evaluation or hardcode the accuracy;
-- it parses the real `accuracy/top1:` value the tool prints and reports it as a
-  percentage with num_examples={N_EXAMPLES};
-- exactly one strict-JSON `REPRO_RESULT` line.
+- it does not re-implement evaluation or hardcode predictions;
+- it dumps per-sample predictions from the tool and writes `predictions.json`:
+  a JSON list of {N_EXAMPLES} predicted class ids in test order.
 {EVIDENCE}
 
 Do not guess or mention the private target."""
@@ -248,7 +272,7 @@ repository for the specific error (e.g. the exact config path, the test entry's
 CLI, the metric key, the data root), then submit a corrected complete
 `eval_mmpretrain.py`. Preserve all working behavior and the public contract: run
 the real `tools/test.py`, parse the printed top-1 accuracy, percentage units,
-num_examples={N_EXAMPLES}, one strict-JSON `REPRO_RESULT` line, CPU-only offline.
+and a `predictions.json` with {N_EXAMPLES} per-sample predicted class ids in test order, CPU-only offline.
 {EVIDENCE}
 
 Do not guess or mention the private target."""
@@ -262,7 +286,7 @@ def make_config(attempt: str) -> OracleConfig:
     workdir = ROOT / "workspaces" / "mmpretrain_resnet18_multi_rag"
     artifact_dir = ROOT / "evals" / "runs" / f"mmpretrain_resnet18_multi_rag_{attempt}"
 
-    contract_diagnostics = _make_public_contract_diagnostics(N_EXAMPLES)
+    contract_diagnostics = _make_public_contract_diagnostics(workdir, N_EXAMPLES)
 
     return OracleConfig(
         name="mmpretrain_resnet18",
@@ -283,7 +307,7 @@ def make_config(attempt: str) -> OracleConfig:
         validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
         public_contract_diagnostics=contract_diagnostics,
-        verify_kwargs={"expected_num_examples": N_EXAMPLES},
+        verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": _recompute},
         navigator_instruction=NAVIGATOR_INSTRUCTION,
         reproducer_instruction=REPRODUCER_INSTRUCTION,
         critic_instruction=CRITIC_INSTRUCTION,

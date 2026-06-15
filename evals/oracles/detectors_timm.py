@@ -19,24 +19,24 @@ Model weights + dataset are pre-cached, so the eval runs CPU-only and offline.
 from __future__ import annotations
 
 import ast
-import re
+import json
 import shutil
 from pathlib import Path
 
 from agent.multi_rag import OracleConfig, _extract_python
 from exec.session import Session
-from verify.check import extract_structured_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
 ORACLE_VENV = ROOT / ".venv-oracle"  # has timm + detectors + datasets + torch
 CARDS_DIR = Path(__file__).resolve().parent / "detectors_cards"
+GOLD_DIR = Path(__file__).resolve().parent / "gold"
 
 METRIC = "top1_accuracy"
 
-# The script must really load the model + data + predict and serialize the
-# contract — but must NOT be required to contain `import detectors`, since
+# The script must really load the model + data + predict and WRITE the per-sample
+# predictions file — but must NOT be required to contain `import detectors`, since
 # discovering that line is the whole point of the task.
-_REQUIRED_MARKERS = ("REPRO_RESULT", "json.dumps")
+_REQUIRED_MARKERS = ("predictions.json",)
 _REQUIRED_USAGE = ("timm", "load_dataset")
 _PREDICTION_MARKERS = ("argmax", "logits", ".max(", "topk")
 
@@ -63,20 +63,37 @@ def _validate_code(content: str) -> str:
     return code
 
 
-def _make_public_contract_diagnostics(num_examples: int, num_classes: int):
+def _make_recompute(gold_path: Path):
+    """Verifier-side metric: score the agent's per-sample predictions against the
+    pinned gold labels. Returns ``(top1_pct, n)`` or ``None``."""
+    def _recompute(workdir: Path):
+        pred_path = workdir / "predictions.json"
+        if not pred_path.is_file():
+            return None
+        try:
+            preds = json.loads(pred_path.read_text())
+            gold = json.loads(gold_path.read_text())
+        except (ValueError, OSError):
+            return None
+        if not isinstance(preds, list) or len(preds) != len(gold):
+            return None
+        try:
+            correct = sum(int(p) == int(g) for p, g in zip(preds, gold))
+        except (TypeError, ValueError):
+            return None
+        return (100.0 * correct / len(gold), len(gold))
+
+    return _recompute
+
+
+def _make_public_contract_diagnostics(workdir: Path, recompute, num_examples: int, num_classes: int):
     chance = 100.0 / num_classes
 
     def _public_contract_diagnostics(session) -> list[str]:
-        evidence = extract_structured_evidence(
-            session.transcript,
-            metric=METRIC,
-            expected_num_examples=num_examples,
-        )
-        if evidence is None:
+        if not (workdir / "predictions.json").is_file():
             issue = (
-                f"No valid REPRO_RESULT was produced by a successful evaluation "
-                f'command. Need metric="{METRIC}" and num_examples={num_examples} in '
-                f"the stdout of a successful run."
+                f"No `predictions.json` written. The eval must write a JSON list of "
+                f"{num_examples} predicted class ids in dataset order."
             )
             latest = next(
                 (run for run in reversed(session.transcript) if not run.ok), None
@@ -86,19 +103,21 @@ def _make_public_contract_diagnostics(num_examples: int, num_classes: int):
                 if tail:
                     issue += f"\nFix the latest blocking execution error first:\n{tail}"
             return [issue]
-        issues: list[str] = []
-        if not 0.0 <= evidence.actual <= 100.0:
-            issues.append("top-1 accuracy must be a percentage in the 0-100 scale.")
-        if evidence.actual <= chance * 1.5:
-            issues.append(
-                f"The reported accuracy ({evidence.actual}) is at/near the "
-                f"{chance:.2f}% random-chance baseline for this {num_classes}-class "
-                f"task. A trained classifier scores far above chance — this points "
-                f"to a broken eval (wrong label field, wrong preprocessing, or the "
-                f"model failing to load with its trained weights). Check the model "
-                f"card and the dataset label field."
-            )
-        return issues
+        rec = recompute(workdir)
+        if rec is None:
+            return [
+                f"`predictions.json` is malformed or not a list of exactly "
+                f"{num_examples} integer class ids."
+            ]
+        acc, _ = rec
+        if acc <= chance * 1.5:
+            return [
+                f"Recomputed accuracy ({acc:.2f}) is at/near the {chance:.2f}% "
+                f"random-chance baseline for this {num_classes}-class task — a "
+                f"broken eval (wrong label field, wrong preprocessing, or the model "
+                f"loaded without its trained weights). Check the model card + label field."
+            ]
+        return []
 
     return _public_contract_diagnostics
 
@@ -198,9 +217,10 @@ Public execution contract:
 - read the normalization mean/std from the loaded model's `pretrained_cfg`;
 - load the dataset with `load_dataset(...)`: {dataset_desc}, {num_examples}
   examples, {label_hint};
-- run batched CPU inference, `logits.argmax(-1)` vs the gold label, accuracy as a
-  percentage over all {num_examples} examples;
-- print exactly one strict-JSON `REPRO_RESULT` line using `json.dumps`;
+- run batched CPU inference, take `logits.argmax(-1)` as the predicted class id;
+- WRITE the per-sample predictions to `predictions.json` in the working directory:
+  a JSON list of the {num_examples} predicted class ids in dataset order. You do
+  NOT need to print or compute the accuracy — an external verifier recomputes it;
 - {evidence}
 
 Do not guess or mention the private target."""
@@ -215,8 +235,8 @@ Verify:
   `Unknown model` or yields random weights);
 - normalization is read from `pretrained_cfg`, not assumed;
 - the dataset + label field are correct ({label_hint});
-- accuracy is a percentage over all {num_examples} examples;
-- exactly one strict-JSON `REPRO_RESULT` via `json.dumps`.
+- the eval WRITES `predictions.json`: a JSON list of {num_examples} per-sample
+  predicted class ids in dataset order, from real inference (not hardcoded).
 {evidence}
 
 Do not guess or mention the private target."""
@@ -238,8 +258,8 @@ and the error for the specific fix — e.g. if loading raised `Unknown model`, t
 model card's usage snippet shows the required registration import; if the label
 field is wrong, the dataset exposes a different field name. Submit a corrected
 complete `eval_detectors.py`. Preserve the public contract: timm load with trained
-weights, normalization from `pretrained_cfg`, {num_examples} examples, strict-JSON
-`REPRO_RESULT` via `json.dumps`, CPU-only offline.
+weights, normalization from `pretrained_cfg`, and a `predictions.json` with
+{num_examples} per-sample predicted class ids in dataset order, CPU-only offline.
 {evidence}
 
 Do not guess or mention the private target."""
@@ -261,16 +281,20 @@ def make_config(
     expected: float,
     label_hint: str,
     workspace_slug: str,
+    gold_labels: str,
     tolerance: float = 0.10,
 ) -> OracleConfig:
     workdir = ROOT / "workspaces" / f"{workspace_slug}_multi_rag"
     artifact_dir = ROOT / "evals" / "runs" / f"{workspace_slug}_multi_rag_{attempt}"
+    recompute = _make_recompute(GOLD_DIR / gold_labels)
 
     evidence = (
-        f"A result counts only when an EXECUTED evaluation command prints:\n"
-        f'REPRO_RESULT {{"metric":"{METRIC}","actual":<number>,"num_examples":{num_examples}}}\n'
-        f"The evaluation program itself must print the line. Do not echo or printf "
-        f"it. `actual` is top-1 accuracy in percentage points (0-100)."
+        f"The eval must WRITE a file `predictions.json` in the working directory: a "
+        f"JSON list of exactly {num_examples} integers — the model's predicted class "
+        f"id for each test example, in dataset order. An external verifier recomputes "
+        f"top-1 accuracy from this file against held-out gold labels it loads itself; "
+        f"it ignores anything you print. Do NOT hardcode the predictions or the "
+        f"accuracy — only per-sample predictions from real inference reproduce the target."
     )
     task = (
         f"Reproduce the published top-1 accuracy (in percent) of the pretrained "
@@ -284,7 +308,9 @@ def make_config(
     nav, rep, crit, rev, rep_fix = _instructions(
         model_name, dataset_desc, num_examples, label_hint, evidence
     )
-    contract_diagnostics = _make_public_contract_diagnostics(num_examples, num_classes)
+    contract_diagnostics = _make_public_contract_diagnostics(
+        workdir, recompute, num_examples, num_classes
+    )
 
     return OracleConfig(
         name=workspace_slug,
@@ -305,7 +331,7 @@ def make_config(
         validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
         public_contract_diagnostics=contract_diagnostics,
-        verify_kwargs={"expected_num_examples": num_examples},
+        verify_kwargs={"expected_num_examples": num_examples, "recompute_fn": recompute},
         navigator_instruction=nav,
         reproducer_instruction=rep,
         critic_instruction=crit,

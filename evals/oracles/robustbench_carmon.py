@@ -86,6 +86,15 @@ def _make_public_contract_diagnostics(n_examples: int):
 # Workspace helpers
 # ---------------------------------------------------------------------------
 
+# The published robust accuracy leaks into the blind workspace: the repo README
+# shows a `robust accuracy: 52.00%` worked example. Scrub it (and the bare 52.0
+# form) from doc files so the agent cannot read the target — it must still run
+# AutoAttack to produce it.
+_BLIND_TARGETS = ("52.00", "52.0")
+_DOC_SUFFIXES = {".md", ".rst", ".txt", ".ipynb"}
+_SCAN_SUFFIXES = _DOC_SUFFIXES | {".py", ".json", ".csv", ".yaml", ".yml"}
+
+
 def _make_copy_clean_source(workdir: Path):
     def _copy_clean_source() -> None:
         shutil.rmtree(workdir, ignore_errors=True)
@@ -94,10 +103,39 @@ def _make_copy_clean_source(workdir: Path):
             workdir,
             ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
         )
+        for path in workdir.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in _DOC_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(errors="replace")
+            except OSError:
+                continue
+            if any(t in text for t in _BLIND_TARGETS):
+                for t in _BLIND_TARGETS:
+                    text = text.replace(t, "[scrubbed]")
+                path.write_text(text)
         (workdir / "robustbench_models").symlink_to(MODEL_DIR)
         (workdir / "robustbench_data").symlink_to(DATA_DIR)
 
     return _copy_clean_source
+
+
+def _make_assert_blind_workspace(workdir: Path):
+    def _assert_blind_workspace() -> None:
+        for path in workdir.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in _SCAN_SUFFIXES:
+                continue
+            try:
+                text = path.read_text(errors="replace")
+            except OSError:
+                continue
+            for t in _BLIND_TARGETS:
+                if t in text:
+                    raise RuntimeError(
+                        f"target {t!r} leaked into blind workspace: {path}"
+                    )
+
+    return _assert_blind_workspace
 
 
 def _make_execute_eval(n_examples: int, epsilon: float):
@@ -231,4 +269,5 @@ def make_config(attempt: str) -> OracleConfig:
             "review_report.md",
             "reproducer_public_log.txt",
         },
+        assert_blind_workspace=_make_assert_blind_workspace(workdir),
     )

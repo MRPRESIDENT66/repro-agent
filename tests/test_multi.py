@@ -20,17 +20,23 @@ from agent.llm import Reply, ScriptedLLM, ToolCall
 from agents.multi import run_multi, run_single
 
 # An isolated Reproducer prints ONE line, no target — matches its own sub only.
-_MULTI_EVAL = """cat > eval.py <<'PYEOF'
-# provenance markers: load_dataset + argmax over CIFAR
-print('REPRO_RESULT {"metric":"top1_accuracy","actual":92.0,"num_examples":100}')
+# The `if False` block gives the script the AST shape of a real eval (a load call
+# + a predict call) so the provenance gate accepts it; it never executes, so the
+# stub stays side-effect-free.
+_PROV = (
+    "if False:\n"
+    "    from datasets import load_dataset\n"
+    "    load_dataset('cifar10', split='test').argmax(1)\n"
+)
+_MULTI_EVAL = f"""cat > eval.py <<'PYEOF'
+{_PROV}print('REPRO_RESULT {{"metric":"top1_accuracy","actual":92.0,"num_examples":100}}')
 PYEOF"""
 
 # The single agent prints ALL THREE, each labelled with its target.
-_SINGLE_EVAL = """cat > eval.py <<'PYEOF'
-# provenance markers: load_dataset + argmax over CIFAR
-print('REPRO_RESULT {"metric":"top1_accuracy","actual":92.0,"num_examples":100,"target":"resnet20"}')
-print('REPRO_RESULT {"metric":"top1_accuracy","actual":92.0,"num_examples":100,"target":"resnet32"}')
-print('REPRO_RESULT {"metric":"top1_accuracy","actual":92.0,"num_examples":100,"target":"resnet56"}')
+_SINGLE_EVAL = f"""cat > eval.py <<'PYEOF'
+{_PROV}print('REPRO_RESULT {{"metric":"top1_accuracy","actual":92.0,"num_examples":100,"target":"resnet20"}}')
+print('REPRO_RESULT {{"metric":"top1_accuracy","actual":92.0,"num_examples":100,"target":"resnet32"}}')
+print('REPRO_RESULT {{"metric":"top1_accuracy","actual":92.0,"num_examples":100,"target":"resnet56"}}')
 PYEOF"""
 
 

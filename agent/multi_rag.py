@@ -663,21 +663,42 @@ class _PipelineDone(Exception):
     """Clean early-stop for the solo/team ablation conditions (not an error)."""
 
 
-def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
-    """Run one blind reproduction.
+_PIPELINES = ("solo", "team", "solo-retry", "solo-repair", "full")
+# Every post-execution loop shares ONE execution budget so the conditions are
+# comparable: 1 initial run + up to MAX_REPAIR_ROUNDS follow-ups = 5 executions.
+MAX_REPAIR_ROUNDS = 4
 
-    ``pipeline`` selects the ablation condition (E2):
-      * ``"solo"`` — Reproducer only (its own RAG) → execute. Single-agent baseline.
-      * ``"team"`` — Navigator + Reproducer + Critic → execute. Pre-execution
-        collaboration (handoff + audit), no repair loop.
-      * ``"full"`` — adds the Reviewer + Repair loop (default; production behaviour).
-    Non-``full`` runs write artifacts to a ``__<pipeline>``-suffixed directory so
-    the conditions never collide.
+
+def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
+    """Run one blind reproduction under an ablation condition.
+
+    The five conditions share an identical execution budget (≤5 evals); they
+    differ only in *what* drives the follow-up attempts — which is what isolates
+    "another attempt" from "repair driven by the real error":
+
+      * ``"solo"``        — Reproducer only → 1 execution. Single-agent baseline.
+      * ``"team"``        — Navigator + Reproducer + Critic → 1 execution.
+                            Pre-execution collaboration, no follow-ups.
+      * ``"solo-retry"``  — Reproducer; on failure RE-GENERATE from the original
+                            context with **no execution feedback**, ≤5 executions.
+                            The budget-matched control for "more tries".
+      * ``"solo-repair"`` — Reproducer; on failure a Repair role fixes it **with
+                            the real execution error**, ≤5 executions. Single
+                            agent + feedback repair.
+      * ``"full"``        — Navigator + Reproducer + Critic + Reviewer + feedback
+                            Repair loop, ≤5 executions (default).
+
+    Non-``full`` runs write artifacts to a ``__<pipeline>`` dir so conditions
+    never collide.
     """
-    if pipeline not in ("solo", "team", "full"):
-        raise ValueError(f"unknown pipeline {pipeline!r}")
+    if pipeline not in _PIPELINES:
+        raise ValueError(f"unknown pipeline {pipeline!r}; valid: {_PIPELINES}")
     run_critic = pipeline in ("team", "full")
-    run_repair = pipeline == "full"
+    post_mode = {
+        "solo": "none", "team": "none",
+        "solo-retry": "retry", "solo-repair": "repair", "full": "repair",
+    }[pipeline]
+    use_reviewer = pipeline == "full"
 
     artifact_dir = (
         config.artifact_dir if pipeline == "full"
@@ -709,6 +730,7 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
     protected_code_blocks: set[str] = set()
     workflow_error: str | None = None
     execution_start = 0
+    n_exec = 0  # actual eval executions consumed (budget reporting)
 
     try:
         if run_critic:  # Navigator runs whenever the pre-execution team runs.
@@ -811,73 +833,103 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
                 max_queries=2,
             )
 
-        if not run_repair:
+        n_exec = 1  # the initial execution above
+        if post_mode == "none":
             raise _PipelineDone()  # solo/team stop after the first execution
 
-        review_current(0)
+        if use_reviewer:
+            review_current(0)
 
-        for round_index in (1, 2, 3, 4):
+        for round_index in range(1, MAX_REPAIR_ROUNDS + 1):
             if config.public_contract_passes(session):
                 break
             diagnostics = config.public_contract_diagnostics(session)
-            repair_context = (
-                "# Current evaluation script\n\n"
-                + (config.workdir / config.eval_script).read_text(errors="replace")
-                + "\n\n# Public execution log\n\n"
-                + _public_log(session, execution_start)
-                + "\n\n# Independent reviewer audit\n\n"
-                + (config.workdir / "review_report.md").read_text(errors="replace")
-                + "\n\n# Navigator handoff\n\n"
-                + (config.workdir / "navigator_report.md").read_text(errors="replace")
-                + "\n\n# Deterministic public-contract audit\n\n"
-                + "\n".join(f"- {issue}" for issue in diagnostics)
-            )
-            key = f"repair_{round_index}"
             accepted_new_blocks: list[str] = []
-            if config.repair_make_validator is not None:
-                repair_validator = config.repair_make_validator(
-                    diagnostics, protected_code_blocks, accepted_new_blocks
-                )
-            else:
-                repair_validator = config.validate_code
 
-            roles[key], rag[key] = rag_role(
-                name=key,
-                # .replace (not .format): repair instructions embed literal JSON
-                # braces from EVIDENCE, which str.format would mis-parse as fields.
-                instruction=config.repair_instruction.replace(
-                    "{round_index}", str(round_index)
-                ),
-                context=repair_context,
-                output_path=config.workdir / config.eval_script,
-                submit_name=config.repair_submit_name,
-                submit_description=config.repair_submit_description,
-                validator=repair_validator,
-                trigger="execution_error_and_reviewer_finding",
-                max_steps=7,
-                max_queries=2,
-                submit_schema=config.repair_submit_schema,
-                submission_adapter=config.repair_submission_adapter,
-                synthesis_instruction=config.repair_synthesis_instruction,
-                synthesis_attempts=4,
-            )
+            if post_mode == "retry":
+                # Budget-matched CONTROL: regenerate from the ORIGINAL context with
+                # NO execution feedback — isolates "another attempt" from "repair
+                # driven by the real error". Same execution budget as repair/full.
+                key = f"retry_{round_index}"
+                roles[key], rag[key] = rag_role(
+                    name=key,
+                    instruction=config.reproducer_instruction,
+                    context=builder_context,
+                    output_path=config.workdir / config.eval_script,
+                    submit_name="submit_code",
+                    submit_description=f"Submit a fresh {config.eval_script}.",
+                    validator=config.validate_code,
+                    trigger="blind_retry",
+                    max_steps=7,
+                    synthesis_attempts=5,
+                )
+            else:  # "repair": fix WITH the real execution error (solo-repair, full)
+                parts = [
+                    "# Current evaluation script\n\n"
+                    + (config.workdir / config.eval_script).read_text(errors="replace"),
+                    "# Public execution log\n\n" + _public_log(session, execution_start),
+                ]
+                if use_reviewer:
+                    parts.append(
+                        "# Independent reviewer audit\n\n"
+                        + (config.workdir / "review_report.md").read_text(errors="replace")
+                    )
+                if run_critic:
+                    parts.append(
+                        "# Navigator handoff\n\n"
+                        + (config.workdir / "navigator_report.md").read_text(errors="replace")
+                    )
+                parts.append(
+                    "# Deterministic public-contract audit\n\n"
+                    + "\n".join(f"- {issue}" for issue in diagnostics)
+                )
+                repair_context = "\n\n".join(parts)
+                if config.repair_make_validator is not None:
+                    repair_validator = config.repair_make_validator(
+                        diagnostics, protected_code_blocks, accepted_new_blocks
+                    )
+                else:
+                    repair_validator = config.validate_code
+                key = f"repair_{round_index}"
+                roles[key], rag[key] = rag_role(
+                    name=key,
+                    # .replace (not .format): repair instructions embed literal JSON
+                    # braces from EVIDENCE, which str.format would mis-parse as fields.
+                    instruction=config.repair_instruction.replace(
+                        "{round_index}", str(round_index)
+                    ),
+                    context=repair_context,
+                    output_path=config.workdir / config.eval_script,
+                    submit_name=config.repair_submit_name,
+                    submit_description=config.repair_submit_description,
+                    validator=repair_validator,
+                    trigger="execution_error_and_reviewer_finding",
+                    max_steps=7,
+                    max_queries=2,
+                    submit_schema=config.repair_submit_schema,
+                    submission_adapter=config.repair_submission_adapter,
+                    synthesis_instruction=config.repair_synthesis_instruction,
+                    synthesis_attempts=4,
+                )
 
             start = len(session.transcript)
-            repaired_run = config.execute_eval(session)
-            roles[key]["errors"] = 0 if repaired_run.ok else 1
+            stepped_run = config.execute_eval(session)
+            n_exec += 1
+            roles[key]["errors"] = 0 if stepped_run.ok else 1
             roles[key]["command_indexes"] = [start + 1, len(session.transcript)]
             session.write_file(
                 "reproducer_public_log.txt",
                 _public_log(session, execution_start),
             )
-            review_current(round_index)
 
-            if config.make_endorsed is not None and config.make_endorsed(
-                repaired_run.ok,
-                config.public_contract_passes(session),
-                config.workdir / "review_report.md",
-            ):
-                protected_code_blocks.update(accepted_new_blocks)
+            if use_reviewer:
+                review_current(round_index)
+                if config.make_endorsed is not None and config.make_endorsed(
+                    stepped_run.ok,
+                    config.public_contract_passes(session),
+                    config.workdir / "review_report.md",
+                ):
+                    protected_code_blocks.update(accepted_new_blocks)
 
     except _PipelineDone:
         pass  # solo/team intentionally stop after the first execution
@@ -907,7 +959,7 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
     handoff_requirement = True
     if run_critic:
         handoff_requirement = (config.workdir / "navigator_report.md").exists()
-    if run_repair:
+    if use_reviewer:
         handoff_requirement = handoff_requirement and (
             config.workdir / "review_report.md"
         ).exists()
@@ -920,6 +972,8 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
     output = {
         "task": config.task,
         "pipeline": pipeline,
+        "max_executions": MAX_REPAIR_ROUNDS + 1,  # shared budget across conditions
+        "eval_executions": n_exec,                # actually consumed
         "blind_workspace_checked": config.assert_blind_workspace is not None,
         "agents": len(roles),
         "attempt": config.attempt,

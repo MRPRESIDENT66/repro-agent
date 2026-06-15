@@ -119,12 +119,12 @@ def test_structured_result_with_eval_provenance_matches(tmp_path) -> None:
 
 
 def test_inline_eval_command_counts_as_provenance(tmp_path) -> None:
-    # The eval is inline (python -c) with NO .py file — provenance must still be
-    # found in the command body, else a legit inline reproduction is wrongly rejected.
+    # A self-contained inline eval (python -c) that REALLY loads data and predicts
+    # (real call nodes, not comment markers) must be accepted.
     line = 'REPRO_RESULT {"metric":"top1_accuracy","actual":92.60,"num_examples":10000}'
     cmd = (
-        "python -c \"from datasets import load_dataset; "
-        "p = model(x).argmax(1); print('REPRO_RESULT ...')\""
+        'python -c "import datasets; d = datasets.load_dataset(); '
+        "pred = logits.argmax(1); print('REPRO_RESULT ...')\""
     )
     verdict = verify_run(
         [_run(line, command=cmd)],
@@ -142,17 +142,17 @@ def test_delegating_to_repo_eval_entry_counts_as_provenance(tmp_path) -> None:
     # against the checkpoint and parses its output. The argmax lives in the repo's
     # library code, not the agent's command — so the inline-marker heuristic would
     # false-negative this *correct* behaviour. Delegation provenance must catch it.
-    (tmp_path / "repo" / "tools").mkdir(parents=True)
-    (tmp_path / "repo" / "tools" / "test.py").write_text("# the repo's real eval entry\n")
-    line = 'REPRO_RESULT {"metric":"top1_accuracy","actual":94.82,"num_examples":10000}'
-    cmd = (
-        "cd repo && python -c \"import subprocess, re, sys; "
-        "out = subprocess.run([sys.executable, 'tools/test.py', 'configs/r18.py', "
-        "'../ckpt.pth'], capture_output=True, text=True).stdout; "
-        "print('REPRO_RESULT {\\\"metric\\\":\\\"top1_accuracy\\\",...}')\""
+    (tmp_path / "tools").mkdir(parents=True)
+    (tmp_path / "tools" / "test.py").write_text("# the repo's real eval entry\n")
+    (tmp_path / "wrapper.py").write_text(
+        "import subprocess, sys\n"
+        "out = subprocess.run([sys.executable, 'tools/test.py', 'cfg.py', 'ckpt.pth'],\n"
+        "                     capture_output=True, text=True).stdout\n"
+        "print('REPRO_RESULT {\"metric\":\"top1_accuracy\",\"actual\":94.82,\"num_examples\":10000}')\n"
     )
+    line = 'REPRO_RESULT {"metric":"top1_accuracy","actual":94.82,"num_examples":10000}'
     verdict = verify_run(
-        [_run(line, command=cmd)],
+        [_run(line, command="python wrapper.py")],
         tmp_path,
         expected=94.82,
         tolerance=0.10,
@@ -160,6 +160,72 @@ def test_delegating_to_repo_eval_entry_counts_as_provenance(tmp_path) -> None:
         expected_num_examples=10000,
     )
     assert verdict.match
+
+
+# --- Provenance attack suite: every forgery must fail closed (P0-1) -----------
+
+def _attack(tmp_path, files: dict[str, str], command: str):
+    """Write decoy files, run a forged emitting command with the RIGHT value, and
+    return the verdict. Provenance is the only thing that may stop the match."""
+    for name, body in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+    line = 'REPRO_RESULT {"metric":"top1_accuracy","actual":92.60,"num_examples":10000}'
+    return verify_run(
+        [_run(line, command=command)],
+        tmp_path,
+        expected=92.60,
+        tolerance=0.10,
+        metric="top1_accuracy",
+        expected_num_examples=10000,
+    )
+
+
+def test_attack_decoy_file_plus_python_c_print_fails_closed(tmp_path) -> None:
+    # A legit-looking decoy script in the workspace + the value printed by a bare
+    # `python -c`. The gate is bound to the emitting command, so the decoy is never
+    # scanned and the print has no real eval.
+    v = _attack(
+        tmp_path,
+        {"decoy.py": "import datasets\nd = datasets.load_dataset()\nx.argmax(1)\n# REPRO_RESULT\n"},
+        command="python -c \"print('REPRO_RESULT {...}')\"",
+    )
+    assert not v.match and v.reason == "no_eval_provenance"
+
+
+def test_attack_comment_markers_fail_closed(tmp_path) -> None:
+    # The emitting script carries the marker words only in comments/strings.
+    v = _attack(
+        tmp_path,
+        {"eval.py": "# load_dataset argmax over CIFAR\nx = 'argmax load_dataset'\n"
+                    "print('REPRO_RESULT {...}')\n"},
+        command="python eval.py",
+    )
+    assert not v.match and v.reason == "no_eval_provenance"
+
+
+def test_attack_hardcoded_print_fails_closed(tmp_path) -> None:
+    v = _attack(
+        tmp_path,
+        {"eval.py": "print('REPRO_RESULT {\"metric\":\"top1_accuracy\","
+                    "\"actual\":92.60,\"num_examples\":10000}')\n"},
+        command="python eval.py",
+    )
+    assert not v.match and v.reason == "no_eval_provenance"
+
+
+def test_attack_fake_wrapper_without_subprocess_fails_closed(tmp_path) -> None:
+    # Mentions the entry + checkpoint as plain strings but never shells out.
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test.py").write_text("# entry\n")
+    v = _attack(
+        tmp_path,
+        {"eval.py": "entry = 'tools/test.py'\nckpt = 'ckpt.pth'\n"
+                    "print('REPRO_RESULT {...}')\n"},
+        command="python eval.py",
+    )
+    assert not v.match and v.reason == "no_eval_provenance"
 
 
 def test_echo_without_real_eval_still_rejected(tmp_path) -> None:

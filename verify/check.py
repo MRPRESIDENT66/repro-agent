@@ -11,6 +11,7 @@ are deliberately ignored, so guessing the published number cannot pass.
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import re
@@ -300,68 +301,116 @@ def verify_evidence_line(
 
 _EVAL_ENTRY = re.compile(r"[\w./-]*(?:test|eval|validate|val)\.py")
 _CKPT = re.compile(r"[\w./-]+\.(?:pth|pt|ckpt|bin|safetensors)\b")
+# Real CALLS (checked in the AST, so the same word in a comment or a plain string
+# does NOT count) that prove a model/data was actually loaded and a prediction/
+# metric was actually computed.
+_LOAD_CALLS = frozenset({
+    "load_dataset", "DataLoader", "load_clean_dataset", "load_model",
+    "from_pretrained", "create_model", "load_cifar10", "load_cifar100",
+    "load_state_dict",
+})
+_PRED_CALLS = frozenset({
+    "argmax", "topk", "softmax", "logsumexp", "predict", "roc_curve",
+    "compute_all_metrics", "run_standard_evaluation", "clean_accuracy",
+    "accuracy_score",
+})
+_SUBPROCESS_CALLS = frozenset({"run", "Popen", "call", "check_call", "check_output", "system"})
 
 
-def _delegates_to_repo_eval(command: str, workdir: Path) -> bool:
-    """Provenance via DELEGATION: the evidence-emitting command ran the cloned
-    repo's own eval entry (e.g. ``tools/test.py <config> <checkpoint>``) and
-    parsed its output. For a clone-and-navigate oracle this is the *correct*
-    behaviour — the prediction/argmax lives in the repo's library code, not in a
-    script the agent rewrote — so the inline-marker heuristic below would
-    false-negative it. It still can't be faked: you can't get the real value +
-    num_examples without actually running the entry against the checkpoint.
-    """
-    if "REPRO_RESULT" not in command or not _CKPT.search(command):
+def _call_name(node: ast.Call) -> str | None:
+    f = node.func
+    if isinstance(f, ast.Name):
+        return f.id
+    if isinstance(f, ast.Attribute):
+        return f.attr
+    return None
+
+
+def _is_real_inline_eval(src: str) -> bool:
+    """AST proof that THIS source really evaluates: an actual call that loads a
+    model/data, an actual call that predicts/scores, and ``REPRO_RESULT`` in a
+    real string literal. Comments and decoy marker strings don't qualify — they
+    are not Call nodes."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
         return False
-    for m in _EVAL_ENTRY.finditer(command):
-        name = Path(m.group(0)).name
-        if any(True for _ in Path(workdir).rglob(name)):  # the entry exists on disk
-            return True
-    return False
+    has_load = has_pred = has_result = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = _call_name(node)
+            if name in _LOAD_CALLS:
+                has_load = True
+            if name in _PRED_CALLS:
+                has_pred = True
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "REPRO_RESULT" in node.value:
+                has_result = True
+    return has_load and has_pred and has_result
 
 
-def has_eval_provenance(workdir: str | Path, transcript: Iterable | None = None) -> bool:
-    """Heuristic V1 gate: the result came from a real evaluation, not an echo.
-
-    Accepts EITHER pattern:
-      1. **inline eval** — a ``.py`` script or command body that emits
-         ``REPRO_RESULT`` *and* itself loads data *and* predicts (the
-         library-load oracles, where the agent writes a self-contained eval).
-      2. **delegation** — the emitting command invoked the cloned repo's own
-         eval entry (``tools/test.py`` …) against the checkpoint (the
-         clone-and-navigate oracle, where the agent correctly reuses the repo's
-         harness instead of reinventing it). See :func:`_delegates_to_repo_eval`.
-    """
-    data_markers = ("load_dataset", "DataLoader", "datasets.", "dataset", "CIFAR", "GLUE")
-    prediction_markers = (
-        "argmax", ".max(", "topk", "predicted", "logits", "logsumexp",
-        "roc_curve", "compute_all_metrics",
-        # library-API eval calls: a real metric computed by a standard eval/attack
-        # routine (e.g. robustbench/AutoAttack) rather than a hand-rolled argmax.
-        "run_standard_evaluation", "clean_accuracy", "AutoAttack", "accuracy_score",
+def _delegates_in_script(src: str, workdir: Path) -> bool:
+    """DELEGATION provenance: the emitting script actually shells out (a real
+    subprocess CALL in its AST) to the repo's own eval entry (``tools/test.py`` …,
+    which exists on disk) against a checkpoint, and emits ``REPRO_RESULT``. The
+    correct clone-and-navigate behaviour — and unfakeable by string mentions
+    alone, because a real subprocess call to the entry is required."""
+    if "REPRO_RESULT" not in src or not _CKPT.search(src):
+        return False
+    if not any(
+        any(True for _ in workdir.rglob(Path(m.group(0)).name))
+        for m in _EVAL_ENTRY.finditer(src)
+    ):
+        return False
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return False
+    return any(
+        isinstance(n, ast.Call) and _call_name(n) in _SUBPROCESS_CALLS
+        for n in ast.walk(tree)
     )
+
+
+def _emitting_source(command: str, workdir: Path) -> str | None:
+    """The source actually executed by the evidence-emitting command: the
+    ``python -c`` inline body, or the first existing ``.py`` file the command
+    runs. None if the command runs no resolvable script."""
+    m = re.search(r"-c\s+(['\"])(.*?)\1", command, re.DOTALL)
+    if m:
+        return m.group(2)
+    for tok in re.findall(r"[\w./-]+\.py", command):
+        path = workdir / tok
+        if path.is_file():
+            return path.read_text(errors="replace")
+    return None
+
+
+def has_eval_provenance(
+    workdir: str | Path,
+    transcript: Iterable | None,
+    command_index: int | None,
+) -> bool:
+    """Whether the matched evidence came from a real evaluation — bound to the
+    SPECIFIC command that emitted it, not a scan of unrelated workspace files.
+
+    Passes only if the source that command executed either (a) AST-provably loads
+    a model/data, predicts, and emits ``REPRO_RESULT`` (inline eval), or (b) shells
+    out to the repo's eval entry against a checkpoint (delegation). A bare
+    ``echo``/``python -c "print(target)"``, a decoy marker file, or marker words in
+    comments/strings therefore fail closed.
+    """
+    if transcript is None or not command_index:
+        return False
+    runs = list(transcript)
+    if not (1 <= command_index <= len(runs)):
+        return False
     workdir = Path(workdir)
-
-    commands = [run.command for run in transcript] if transcript is not None else []
-    sources = [s.read_text(errors="replace") for s in workdir.rglob("*.py")]
-
-    # Delegation provenance: the repo's own eval entry (tools/test.py …) is run
-    # against the checkpoint. This can appear either directly on the command line
-    # (single-step oracle) OR inside a wrapper ``.py`` the agent wrote that shells
-    # out to the entry (the multi-agent pattern). Both are legitimate
-    # clone-and-navigate behaviour and equally hard to fake — you still cannot
-    # produce the real value + num_examples without actually running the entry.
-    if any(_delegates_to_repo_eval(t, workdir) for t in (*commands, *sources)):
-        return True
-
-    for source in (*sources, *commands):
-        if (
-            "REPRO_RESULT" in source
-            and any(marker in source for marker in data_markers)
-            and any(marker in source for marker in prediction_markers)
-        ):
-            return True
-    return False
+    command = runs[command_index - 1].command
+    src = _emitting_source(command, workdir)
+    if src is None:
+        return False
+    return _is_real_inline_eval(src) or _delegates_in_script(src, workdir)
 
 
 def verify_run(
@@ -389,7 +438,9 @@ def verify_run(
         expected_runs=expected_runs,
         expected_aggregation=expected_aggregation,
     )
-    if verdict.match and not has_eval_provenance(workdir, transcript):
+    if verdict.match and not has_eval_provenance(
+        workdir, transcript, verdict.command_index
+    ):
         verdict.match = False
         verdict.reason = "no_eval_provenance"
     return verdict

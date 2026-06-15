@@ -188,86 +188,6 @@ def _make_execute_eval():
 
 
 # ---------------------------------------------------------------------------
-# Role instructions (parameterized by description fields)
-# ---------------------------------------------------------------------------
-
-def _instructions(model_name, dataset_desc, num_examples, label_hint, evidence):
-    nav = f"""You are the Navigator in a collaborative ML reproduction team. You
-receive no prewritten queries. The working directory contains a `model_card.md`
-for the pretrained model `{model_name}`. Search it (and any uncertainty you have)
-to pin down exactly how this checkpoint is loaded and evaluated, then submit a
-concise grounded handoff covering:
-- the exact loading mechanism for `{model_name}` (it is a timm-registered model —
-  read the model card's usage snippet carefully; the registration may require a
-  specific import side-effect, not just `timm.create_model`);
-- the preprocessing the model expects (read normalization from the loaded model's
-  `pretrained_cfg`, do not assume ImageNet defaults);
-- the dataset: {dataset_desc} ({num_examples} examples), {label_hint};
-- CPU-only, offline loading from the local cache.
-Do not guess or mention the private target."""
-
-    rep = f"""You are the Reproducer/Builder. Generate a complete CPU-safe
-`eval_detectors.py`. You receive a Navigator handoff and a `model_card.md` in the
-working directory; search them for any loading/eval uncertainty before coding.
-
-Public execution contract:
-- load `{model_name}` via timm with `pretrained=True`; follow the model card's
-  usage snippet exactly — the architecture is registered by an import side-effect,
-  so a plain `timm.create_model(...)` may raise `Unknown model`;
-- read the normalization mean/std from the loaded model's `pretrained_cfg`;
-- load the dataset with `load_dataset(...)`: {dataset_desc}, {num_examples}
-  examples, {label_hint};
-- run batched CPU inference, take `logits.argmax(-1)` as the predicted class id;
-- WRITE the per-sample predictions to `predictions.json` in the working directory:
-  a JSON list of the {num_examples} predicted class ids in dataset order. You do
-  NOT need to print or compute the accuracy — an external verifier recomputes it;
-- {evidence}
-
-Do not guess or mention the private target."""
-
-    crit = f"""You are an independent Code Critic. Audit the generated
-`eval_detectors.py` against the model card. You receive no prewritten queries:
-search the highest-risk unverified claim and submit a complete corrected script.
-
-Verify:
-- the model actually loads with its trained weights (the timm registration import
-  side-effect is present if the card requires it — otherwise loading raises
-  `Unknown model` or yields random weights);
-- normalization is read from `pretrained_cfg`, not assumed;
-- the dataset + label field are correct ({label_hint});
-- the eval WRITES `predictions.json`: a JSON list of {num_examples} per-sample
-  predicted class ids in dataset order, from real inference (not hardcoded).
-{evidence}
-
-Do not guess or mention the private target."""
-
-    rev = f"""You are the independent Reviewer. Audit the current
-`eval_detectors.py` and the public execution log. Derive a search_repo query from
-the concrete execution error or the highest-risk claim. The deterministic
-public-contract audit is authoritative. When execution failed, focus on the
-latest blocking error (an `Unknown model` / registration error, a missing label
-field, a preprocessing problem). When execution succeeded, check that accuracy is
-far above chance and came from the real model + the correct label field.
-End with exactly `REVIEW_STATUS: PASS` only when no repair is needed; otherwise
-end with exactly `REVIEW_STATUS: REPAIR_REQUIRED`.
-Do not guess or mention the private target."""
-
-    rep_fix = f"""You are Repair Agent {{round_index}}. Fix the concrete failure
-identified by the execution log and the independent Reviewer. Search `model_card.md`
-and the error for the specific fix — e.g. if loading raised `Unknown model`, the
-model card's usage snippet shows the required registration import; if the label
-field is wrong, the dataset exposes a different field name. Submit a corrected
-complete `eval_detectors.py`. Preserve the public contract: timm load with trained
-weights, normalization from `pretrained_cfg`, and a `predictions.json` with
-{num_examples} per-sample predicted class ids in dataset order, CPU-only offline.
-{evidence}
-
-Do not guess or mention the private target."""
-
-    return nav, rep, crit, rev, rep_fix
-
-
-# ---------------------------------------------------------------------------
 # Config factory
 # ---------------------------------------------------------------------------
 
@@ -279,7 +199,6 @@ def make_config(
     num_examples: int,
     num_classes: int,
     expected: float,
-    label_hint: str,
     workspace_slug: str,
     gold_labels: str,
     tolerance: float = 0.10,
@@ -305,9 +224,6 @@ def make_config(
         f"trained weights and the preprocessing it expects, evaluate on the full "
         f"test set, and report top-1 accuracy as a percentage."
     )
-    nav, rep, crit, rev, rep_fix = _instructions(
-        model_name, dataset_desc, num_examples, label_hint, evidence
-    )
     contract_diagnostics = _make_public_contract_diagnostics(
         workdir, recompute, num_examples, num_classes
     )
@@ -328,9 +244,7 @@ def make_config(
         session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir, model_name, expected),
         execute_eval=_make_execute_eval(),
-        validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
-        public_contract_diagnostics=contract_diagnostics,
         chance_level=100.0 / num_classes,  # balanced top-1 over num_classes
         verify_kwargs={"expected_num_examples": num_examples, "recompute_fn": recompute},
         public_result_protocol=evidence,
@@ -338,14 +252,6 @@ def make_config(
             "HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 "
             "python eval_detectors.py"
         ),
-        navigator_instruction=nav,
-        reproducer_instruction=rep,
-        critic_instruction=crit,
-        reviewer_instruction=rev,
-        repair_instruction=rep_fix,
-        repair_mode_label="full_file_replacement",
-        repair_submit_name="submit_code",
-        repair_submit_description="Submit the repaired eval_detectors.py.",
         search_extra_exclude={
             "eval_detectors.py",
             "navigator_report.md",

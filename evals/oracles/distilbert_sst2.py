@@ -218,93 +218,6 @@ def _make_execute_eval():
 
 
 # ---------------------------------------------------------------------------
-# Role instructions
-# ---------------------------------------------------------------------------
-
-NAVIGATOR_INSTRUCTION = f"""You are the Navigator in a collaborative ML
-reproduction team. You receive no prewritten queries. Formulate your own
-search_repo query over the provisioned `model_card.md` to pin
-down the facts a correct evaluation needs, then submit a concise grounded
-handoff. Cover:
-- the model class to load ({MODEL_NAME}) and that it is a sequence-classification
-  head loaded with its own tokenizer;
-- the label mapping (inspect `model_card.md` for the id2label mapping) and whether
-  it aligns with SST-2 gold labels (0=negative, 1=positive);
-- the dataset to use: GLUE/SST-2 validation split, {N_EXAMPLES} examples, with
-  text field `sentence` and integer field `label`;
-- tokenization (the model's own tokenizer, padding + truncation) and CPU-only,
-  offline loading from the local cache.
-Do not guess or mention the private target.
-
-Task:
-{TASK}"""
-
-REPRODUCER_INSTRUCTION = f"""You are the Reproducer/Builder. Generate a complete
-CPU-safe `eval_sst2.py`. You receive a Navigator handoff but no prewritten RAG
-queries; search the model snapshot for any remaining uncertainty (e.g. the exact
-id2label) before coding.
-
-Public execution contract:
-- load the model with `AutoModelForSequenceClassification.from_pretrained(
-  "{MODEL_NAME}")` and the matching `AutoTokenizer`; the weights are cached, so
-  load by name (offline) — set `model.eval()`;
-- load the data with `load_dataset(...)` for GLUE/SST-2 validation
-  ({N_EXAMPLES} examples); the text field is `sentence`, the gold field is
-  `label`; the GLUE config needs a namespaced id;
-- tokenize with the model's own tokenizer (padding + truncation), run batched CPU
-  inference, take `logits.argmax(-1)` as the predicted label for each example
-  (the model's LABEL_0/LABEL_1 already align with SST-2 0/1 — no remap);
-- WRITE the per-sample predictions to `predictions.json` in the working directory:
-  a JSON list of the {N_EXAMPLES} predicted labels (0/1) in dataset order. You do
-  NOT need to print or compute the accuracy — the external verifier recomputes it
-  from this file;
-- {EVIDENCE}
-
-Do not guess or mention the private target."""
-
-CRITIC_INSTRUCTION = f"""You are an independent Code Critic. Audit the generated
-`eval_sst2.py` against the provisioned model snapshot. You receive no prewritten
-queries: search the highest-risk unverified claim (label mapping, dataset id,
-text/label field names, split, tokenizer) and submit a complete corrected
-script, not a prose review.
-
-Verify:
-- the model + tokenizer are loaded from `{MODEL_NAME}`;
-- the dataset is the GLUE/SST-2 **validation** split with {N_EXAMPLES} examples,
-  reading `sentence` and `label`;
-- the label mapping matches `model_card.md` and SST-2 gold labels with no
-  spurious inversion;
-- the eval WRITES `predictions.json` — a JSON list of {N_EXAMPLES} per-sample
-  predicted labels (0/1) in dataset order, from real inference (not hardcoded).
-{EVIDENCE}
-
-Do not guess or mention the private target."""
-
-REVIEWER_INSTRUCTION = f"""You are the independent Reviewer. Audit the current
-`eval_sst2.py` and the public execution log. Derive a search_repo query from the
-concrete execution error or the highest-risk semantic claim. The deterministic
-public-contract audit is authoritative. When execution succeeded, check:
-- accuracy is a percentage (0-100), not a fraction;
-- num_examples = {N_EXAMPLES} (the full validation split, not a subset);
-- the label mapping is correct — if the recomputed accuracy is near or below 50%,
-  suspect an inverted label/argmax direction and verify against `model_card.md`;
-- `predictions.json` has {N_EXAMPLES} entries from real inference, not hardcoded.
-End with exactly `REVIEW_STATUS: PASS` only when no repair is needed; otherwise
-end with exactly `REVIEW_STATUS: REPAIR_REQUIRED`.
-Do not guess or mention the private target."""
-
-REPAIR_INSTRUCTION = f"""You are Repair Agent {{round_index}}. Fix the concrete
-failure identified by the execution log and the independent Reviewer. Search the
-model snapshot for the specific error or disputed claim, then submit a corrected
-complete `eval_sst2.py`. Preserve all working behavior and the public contract:
-correct label mapping, and a `predictions.json` with {N_EXAMPLES} per-sample
-predicted labels (0/1) in dataset order from real inference, CPU-only offline.
-{EVIDENCE}
-
-Do not guess or mention the private target."""
-
-
-# ---------------------------------------------------------------------------
 # Config factory
 # ---------------------------------------------------------------------------
 
@@ -330,21 +243,11 @@ def make_config(attempt: str) -> OracleConfig:
         session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(),
-        validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
-        public_contract_diagnostics=contract_diagnostics,
         chance_level=50.0,  # binary SST-2 sentiment classification
         verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": _recompute},
         public_result_protocol=EVIDENCE,
         public_execution_command="python eval_sst2.py",
-        navigator_instruction=NAVIGATOR_INSTRUCTION,
-        reproducer_instruction=REPRODUCER_INSTRUCTION,
-        critic_instruction=CRITIC_INSTRUCTION,
-        reviewer_instruction=REVIEWER_INSTRUCTION,
-        repair_instruction=REPAIR_INSTRUCTION,
-        repair_mode_label="full_file_replacement",
-        repair_submit_name="submit_code",
-        repair_submit_description="Submit the repaired eval_sst2.py.",
         search_extra_exclude={
             "eval_sst2.py",
             "navigator_report.md",

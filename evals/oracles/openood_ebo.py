@@ -10,9 +10,7 @@ from pathlib import Path
 
 from agent.multi_rag import (
     OracleConfig,
-    _apply_code_patch,
     _extract_python,
-    _patch_tool,
     _review_requires_repair,
 )
 from exec.docker_session import DockerSession
@@ -434,7 +432,6 @@ def _make_assert_blind_workspace(workdir: Path):
     forbidden_names = {
         "run_nearood_ebo_cpu.py",
         "nearood_ebo_cpu_results.json",
-        "OPENOOD_EBO.md",
     }
 
     def _assert_blind_workspace() -> None:
@@ -498,151 +495,6 @@ def _make_validate_code(workdir: Path):
 
 
 # ---------------------------------------------------------------------------
-# Repair validator factory (patch mode)
-# ---------------------------------------------------------------------------
-
-def _make_repair_make_validator(workdir: Path, validate_code):
-    eval_path = workdir / "eval_ebo.py"
-
-    def repair_make_validator(
-        diagnostics: list[str],
-        protected_blocks: set[str],
-        accepted_new_blocks: list[str],
-    ):
-        change_terms = _diagnostic_change_terms(diagnostics)
-
-        def validator(payload: str) -> str:
-            return _apply_code_patch(
-                eval_path,
-                payload,
-                validate_code=validate_code,
-                protected_blocks=protected_blocks,
-                required_change_terms=change_terms,
-                accepted_new_blocks=accepted_new_blocks,
-            )
-
-        return validator
-
-    return repair_make_validator
-
-
-# ---------------------------------------------------------------------------
-# Role instructions
-# ---------------------------------------------------------------------------
-
-NAVIGATOR_INSTRUCTION = f"""You are the Navigator in a collaborative ML
-reproduction team. You receive no prewritten repository queries. Identify the
-most important unknowns in the task, formulate your own search_repo query, use
-the retrieved source to refine later queries when needed, then submit a concise
-grounded handoff. Include exact source paths, EBO and AUROC semantics, data and
-preprocessing, checkpoint layout, aggregation, and CPU/dependency risks.
-Do not guess or mention the private target.
-
-Task:
-{TASK}"""
-
-REPRODUCER_INSTRUCTION = f"""You are the Reproducer/Builder. Generate a complete
-CPU-safe `eval_ebo.py`. You receive a Navigator handoff but no prewritten RAG
-queries. Before coding, identify an implementation uncertainty and call
-search_repo with your own query. Use follow-up searches only when retrieved
-source exposes another uncertainty, then submit the complete script.
-
-Public execution contract:
-- exact OpenOOD ResNet18_32x32 and official s0/s1/s2 checkpoints;
-- official CIFAR-10 preprocessing and benchmark image lists; do not reimplement
-  the repository's ImglistDataset;
-- implement the small torchvision test transform directly from
-  `openood/preprocessors/transform.py`; retrieve the complete transform
-  pipeline (Resize, CenterCrop, ToTensor, Normalize) — not just the
-  normalization mean/std — before coding; do not parse checkpoint `config.yml`
-  files or instantiate `TestStandardPreProcessor`;
-- EBO energy sign semantics (OOD scores HIGHER than ID), evaluated over every
-  sample (id={_ID_COUNT}, cifar100=9000, tin=7793 — do not subset or drop items);
-- WRITE `predictions.json` with the per-sample EBO scores per run (id/cifar100/tin),
-  as described below — the verifier recomputes the AUROC, you do not print it;
-- accept `--root` and use batched DataLoader CPU inference;
-- import the model and dataset only from direct modules such as
-  `openood.networks.resnet18_32x32` and
-  `openood.datasets.imglist_dataset`; do not import `openood.evaluation_api`,
-  `openood.evaluators`, or `openood.postprocessors`, because their package
-  initializers pull unrelated optional dependencies;
-- implement the small EBO score and AUROC calculation locally from retrieved
-  repository semantics;
-- {EVIDENCE}
-
-Do not guess or mention the private target."""
-
-CRITIC_INSTRUCTION = f"""You are an independent Code Critic. Audit the
-generated evaluation script against repository source. You receive no
-prewritten queries: choose a search_repo query targeting the highest-risk
-unverified claim in the code, and issue follow-up queries only when evidence
-requires them. Submit a complete corrected script, not a prose review.
-
-Verify model import, benchmark paths, preprocessing, EBO/AUROC sign,
-`--root`, batched CPU execution, and that the eval WRITES `predictions.json` with
-the per-run per-sample EBO scores (id={_ID_COUNT}/cifar100=9000/tin=7793), from
-real inference over every sample (not subset).
-Treat every hardcoded normalization value and any custom Dataset
-implementation as high risk: verify them against repository source and prefer
-the official ImglistDataset.
-Use a small direct torchvision test transform from repository normalization
-source; retrieve the complete transform pipeline from the source file and verify
-it includes all steps (Resize, CenterCrop, ToTensor, Normalize) — not just the
-normalization values. Reject checkpoint `config.yml` parsing and
-`TestStandardPreProcessor`, which add irrelevant serialized-config failure modes.
-Allow only direct OpenOOD model/dataset module imports. Reject
-`openood.evaluation_api`, `openood.evaluators`, and `openood.postprocessors`;
-use a minimal local EBO/AUROC implementation instead.
-The script must satisfy:
-{EVIDENCE}
-
-Do not guess or mention the private target."""
-
-REVIEWER_INSTRUCTION = """You are the independent Reviewer. Audit the
-current implementation and public execution log. You receive no prewritten
-queries. Derive a search_repo query from the concrete execution error or the
-highest-risk semantic claim in the current code. Use repository evidence to
-explain the finding. The deterministic public-contract audit is authoritative:
-do not ignore its failures, and do not request changes to behavior already
-demonstrated by a successful execution unless repository evidence proves a
-semantic mismatch. When execution failed, focus the review on the latest
-blocking error; defer unrelated semantic concerns until the program runs.
-Check the per-dataset AUROC values in the execution log for anomalies: if one
-dataset's AUROC is substantially higher than the others (e.g. one near 98-100
-while others are in the 80s), this strongly indicates a preprocessing mismatch
-such as a missing image resize step — retrieve the repository transform source
-and verify the complete pipeline. Flag this as REPAIR_REQUIRED even when
-execution succeeded and the overall number looks plausible.
-End with exactly `REVIEW_STATUS: PASS` only when no repair is needed; otherwise
-end with exactly `REVIEW_STATUS: REPAIR_REQUIRED`.
-Do not guess or mention the private target."""
-
-REPAIR_INSTRUCTION = f"""You are Repair Agent {{round_index}}. Fix the
-concrete failure identified by the execution log and independent Reviewer.
-You receive no prewritten queries. Formulate a search_repo query from the
-specific error or disputed semantic claim, inspect the retrieved source, then
-submit a small structured patch to the current `eval_ebo.py` only. Never patch
-OpenOOD repository source or dependency files. Preserve all unrelated working code. Each
-patch edit must contain exact existing `old` code that occurs once and its
-replacement `new` code; do not submit the complete file.
-
-The deterministic public-contract audit is authoritative. When it lists a
-failure, the patch must directly change the code responsible for that failure.
-Do not revert code blocks already endorsed by the independent Reviewer; but code
-the Reviewer still disputes (e.g. a suspected EBO/AUROC sign) may and should be
-changed. Fix only the latest blocking execution error in this round. Submit at
-most two small edits; defer unrelated concerns until the next execution result.
-
-Preserve working behavior and the public contract: correct EBO/AUROC direction,
-exact per-sample coverage (cifar100=9000, tin=7793), a `predictions.json` with the
-per-run id={_ID_COUNT}/cifar100=9000/tin=7793 EBO scores, `--root`, batched
-DataLoader CPU inference, and no unrelated broad-package imports.
-{EVIDENCE}
-
-Do not guess or mention the private target."""
-
-
-# ---------------------------------------------------------------------------
 # Config factory
 # ---------------------------------------------------------------------------
 
@@ -650,7 +502,6 @@ def make_config(attempt: str) -> OracleConfig:
     workdir = ROOT / "workspaces" / "openood_ebo_multi_rag"
     artifact_dir = ROOT / "evals" / "runs" / f"openood_ebo_multi_rag_{attempt}"
 
-    validate_code = _make_validate_code(workdir)
     contract_diagnostics = _make_public_contract_diagnostics(workdir)
 
     def public_contract_passes(session) -> bool:
@@ -672,15 +523,7 @@ def make_config(attempt: str) -> OracleConfig:
         session_go_offline=True,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(workdir),
-        validate_code=validate_code,
         public_contract_passes=public_contract_passes,
-        public_contract_diagnostics=contract_diagnostics,
-        # No generic_safe_diagnostics: the generic path carries ZERO oracle-
-        # specific feedback. An ablation (re-running generic with this wiring
-        # removed) showed the agent recovers the std (anti-hallucination prompt)
-        # and the sign (framework below-chance) without it, so the hand-authored
-        # normalization hint was removed to keep generic mode fully task-agnostic.
-        # (The specialized path still uses _normalization_diagnostics_for_code.)
         chance_level=CHANCE_LEVEL,
         verify_kwargs={
             "expected_num_examples": None,
@@ -688,29 +531,6 @@ def make_config(attempt: str) -> OracleConfig:
         },
         public_result_protocol=EVIDENCE,
         public_execution_command=f"python eval_ebo.py --root {CHECKPOINT_ROOT}",
-        navigator_instruction=NAVIGATOR_INSTRUCTION,
-        reproducer_instruction=REPRODUCER_INSTRUCTION,
-        critic_instruction=CRITIC_INSTRUCTION,
-        reviewer_instruction=REVIEWER_INSTRUCTION,
-        repair_instruction=REPAIR_INSTRUCTION,
-        repair_mode_label="structured_exact_replacement_patch",
-        repair_submit_name="submit_patch",
-        repair_submit_description=(
-            "Submit small exact-replacement edits for the current eval_ebo.py."
-        ),
-        repair_submit_schema=_patch_tool(
-            "submit_patch",
-            "Submit small exact-replacement edits for the current eval_ebo.py.",
-            max_items=2,
-        ),
-        repair_submission_adapter=lambda arguments: json.dumps(arguments),
-        repair_synthesis_instruction=(
-            "Return only one JSON object with `edits` and `rationale`, "
-            "using the submit_patch schema. Every `old` string must come "
-            "from the current eval_ebo.py. Do not patch repository source "
-            "or return the complete file."
-        ),
-        repair_make_validator=_make_repair_make_validator(workdir, validate_code),
         make_endorsed=lambda run_ok, contract_passes, review_path: (
             run_ok and contract_passes and not _review_requires_repair(review_path)
         ),

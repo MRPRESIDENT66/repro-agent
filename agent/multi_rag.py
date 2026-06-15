@@ -847,19 +847,14 @@ class OracleConfig:
     execute_eval: Callable[[Any], Any] = field(default=lambda s: None)
 
     # Validation
-    validate_code: Callable[[str], str] = field(default=lambda s: s)
     validate_report: Callable[[str], str] = field(default_factory=lambda: _validate_report)
     validate_review: Callable[[str], str] = field(default_factory=lambda: _validate_review)
 
     # Contract
     public_contract_passes: Callable[[Any], bool] = field(default=lambda s: True)
-    public_contract_diagnostics: Callable[[Any], list[str]] = field(default=lambda s: [])
-    # Task-agnostic sanity diagnostics that are SAFE under generic prompt mode:
-    # each is derivable from the agent's own output + the repo's own files, never
-    # the hidden target (e.g. "your metric is below random chance — direction is
-    # inverted", "your hardcoded normalization disagrees with the repo source").
-    # generic mode appends these to the shape-only diagnostics; specialized mode
-    # already folds them into public_contract_diagnostics.
+    # Optional oracle hook, appended to the generic shape diagnostics. Must stay
+    # task-agnostic (derivable from the agent's own output + the repo's own files,
+    # never the hidden target). Default: none.
     generic_safe_diagnostics: Callable[[Any], list[str]] = field(default=lambda s: [])
     # Random-chance floor for a higher-is-better metric (e.g. 50.0 for binary
     # AUROC, 100/num_classes for balanced top-1 accuracy). When set, the generic
@@ -871,32 +866,12 @@ class OracleConfig:
     # Verify kwargs (forwarded to verify_run)
     verify_kwargs: dict = field(default_factory=dict)
 
-    # Public machine-readable artifact contract. Generic roles stay shared, while
-    # the benchmark still tells them what output the external verifier accepts.
+    # Public machine-readable artifact contract: what output the external verifier
+    # accepts, and the exact command the orchestrator uses to invoke the generated
+    # program. Interface information, not an oracle solution hint.
     public_result_protocol: str = ""
-    # Exact public command used by the orchestrator to invoke the generated
-    # program. This is interface information, not an oracle solution hint.
     public_execution_command: str = ""
 
-    # Role instructions
-    navigator_instruction: str = ""
-    reproducer_instruction: str = ""
-    critic_instruction: str = ""
-    reviewer_instruction: str = ""
-    repair_instruction: str = ""  # may contain {round_index}
-
-    # Repair configuration
-    repair_mode_label: str = "full_file_replacement"
-    repair_submit_name: str = "submit_code"
-    repair_submit_description: str = "Submit the repaired script."
-    repair_submit_schema: dict | None = None
-    repair_submission_adapter: Callable[[dict], str] | None = None
-    repair_synthesis_instruction: str | None = None
-    # Factory: (diagnostics, protected_blocks, accepted_new_blocks) -> validator
-    # If None, falls back to validate_code for repair rounds.
-    repair_make_validator: (
-        Callable[[list[str], set[str], list[str]], Callable[[str], str]] | None
-    ) = None
     # (run_ok, contract_passes, review_path) -> should we freeze accepted_new_blocks?
     make_endorsed: Callable[[bool, bool, Path], bool] | None = None
 
@@ -925,22 +900,13 @@ class _PipelineDone(Exception):
 
 
 _PIPELINES = ("solo", "team", "solo-retry", "solo-repair", "full")
-_PROMPT_MODES = ("specialized", "generic")
 # Every post-execution loop shares ONE execution budget so the conditions are
 # comparable: 1 initial run + up to MAX_REPAIR_ROUNDS follow-ups = 5 executions.
 MAX_REPAIR_ROUNDS = 4
 
 
-def _role_prompts(config: OracleConfig, prompt_mode: str) -> RolePrompts:
-    if prompt_mode == "generic":
-        return GENERIC_PROMPTS
-    return RolePrompts(
-        navigator=config.navigator_instruction,
-        reproducer=config.reproducer_instruction,
-        critic=config.critic_instruction,
-        reviewer=config.reviewer_instruction,
-        repair=config.repair_instruction,
-    )
+def _role_prompts() -> RolePrompts:
+    return GENERIC_PROMPTS
 
 
 def _generic_task_context(config: OracleConfig) -> str:
@@ -1226,13 +1192,13 @@ def _make_generic_contract_diagnostics(
 def run_oracle(
     config: OracleConfig,
     pipeline: str = "full",
-    prompt_mode: str = "specialized",
 ) -> None:
     """Run one blind reproduction under an ablation condition.
 
-    The five conditions share an identical execution budget (≤5 evals); they
-    differ only in *what* drives the follow-up attempts — which is what isolates
-    "another attempt" from "repair driven by the real error":
+    All role prompts are task-agnostic (generic mode); the only knob is the
+    pipeline depth. The five conditions share an identical execution budget
+    (≤5 evals); they differ only in *what* drives the follow-up attempts — which
+    is what isolates "another attempt" from "repair driven by the real error":
 
       * ``"solo"``        — Reproducer only → 1 execution. Single-agent baseline.
       * ``"team"``        — Navigator + Reproducer + Critic → 1 execution.
@@ -1251,16 +1217,9 @@ def run_oracle(
     """
     if pipeline not in _PIPELINES:
         raise ValueError(f"unknown pipeline {pipeline!r}; valid: {_PIPELINES}")
-    if prompt_mode not in _PROMPT_MODES:
-        raise ValueError(f"unknown prompt mode {prompt_mode!r}; valid: {_PROMPT_MODES}")
-    prompts = _role_prompts(config, prompt_mode)
-    generic_mode = prompt_mode == "generic"
-    task_context = (
-        _generic_task_context(config) if generic_mode else config.task
-    )
-    code_validator = (
-        _make_generic_code_validator(config) if generic_mode else config.validate_code
-    )
+    prompts = _role_prompts()
+    task_context = _generic_task_context(config)
+    code_validator = _make_generic_code_validator(config)
     # Generic pass gate — framework-level, with NO oracle-specific check (so a
     # normalization comparison etc. can be feedback but never the referee). When
     # the task is on V2 recomputation, "pass" = artifact present + recomputable +
@@ -1285,31 +1244,15 @@ def run_oracle(
             return False
         return True
 
-    generic_pass_gate = _generic_pass_gate if generic_mode else config.public_contract_passes
-    contract_diagnostics = (
-        _make_generic_contract_diagnostics(config, pass_gate=generic_pass_gate)
-        if generic_mode
-        else config.public_contract_diagnostics
-    )
-    repair_submit_name = "submit_code" if generic_mode else config.repair_submit_name
-    repair_submit_description = (
-        f"Submit the complete repaired {config.eval_script}."
-        if generic_mode
-        else config.repair_submit_description
-    )
-    repair_submit_schema = None if generic_mode else config.repair_submit_schema
-    repair_submission_adapter = (
-        None if generic_mode else config.repair_submission_adapter
-    )
-    repair_synthesis_instruction = (
-        None if generic_mode else config.repair_synthesis_instruction
-    )
+    generic_pass_gate = _generic_pass_gate
+    contract_diagnostics = _make_generic_contract_diagnostics(config, pass_gate=generic_pass_gate)
+    repair_submit_description = f"Submit the complete repaired {config.eval_script}."
+    repair_submit_schema = None
+    repair_submission_adapter = None
     generic_code_synthesis_instruction = (
         f"Return only the complete executable source code for {config.eval_script}. "
         "The program must produce the public result artifact when executed. "
         "Do not return the contents of predictions or result files."
-        if generic_mode
-        else None
     )
     run_critic = pipeline in ("team", "full")
     post_mode = {
@@ -1319,8 +1262,6 @@ def run_oracle(
     use_reviewer = pipeline == "full"
 
     artifact_suffixes = []
-    if prompt_mode != "specialized":
-        artifact_suffixes.append(prompt_mode)
     if pipeline != "full":
         artifact_suffixes.append(pipeline)
     artifact_dir = config.artifact_dir
@@ -1349,7 +1290,7 @@ def run_oracle(
             artifact_dir=artifact_dir,
             session=session,
             search_extra_exclude=config.search_extra_exclude,
-            allow_runtime_probe=generic_mode,
+            allow_runtime_probe=True,
             **kwargs,
         )
 
@@ -1382,13 +1323,9 @@ def run_oracle(
                 max_steps=7,
             )
             builder_context = (
-                (
-                    "# Public task and result protocol\n\n"
-                    + task_context
-                    + "\n\n"
-                    if generic_mode
-                    else ""
-                )
+                "# Public task and result protocol\n\n"
+                + task_context
+                + "\n\n"
                 + "# Navigator handoff\n\n"
                 + (config.workdir / "navigator_report.md").read_text(errors="replace")
             )
@@ -1411,13 +1348,9 @@ def run_oracle(
 
         if run_critic:
             critic_context = (
-                (
-                    "# Public task and result protocol\n\n"
-                    + task_context
-                    + "\n\n"
-                    if prompt_mode == "generic"
-                    else ""
-                )
+                "# Public task and result protocol\n\n"
+                + task_context
+                + "\n\n"
                 + "# Generated evaluation script\n\n"
                 + (config.workdir / config.eval_script).read_text(errors="replace")
                 + "\n\n# Navigator handoff\n\n"
@@ -1452,15 +1385,11 @@ def run_oracle(
 
         def review_current(round_index: int) -> None:
             diagnostics = contract_diagnostics(session)
-            review_log_start = latest_execution_start if generic_mode else execution_start
+            review_log_start = latest_execution_start
             review_context = (
-                (
-                    "# Public task and result protocol\n\n"
-                    + task_context
-                    + "\n\n"
-                    if prompt_mode == "generic"
-                    else ""
-                )
+                "# Public task and result protocol\n\n"
+                + task_context
+                + "\n\n"
                 + "# Navigator handoff\n\n"
                 + (config.workdir / "navigator_report.md").read_text(errors="replace")
                 + "\n\n# Evaluation implementation\n\n"
@@ -1468,11 +1397,7 @@ def run_oracle(
                     (config.workdir / config.eval_script).read_text(errors="replace"),
                     12000,
                 )
-                + (
-                    "\n\n# Latest public execution log\n\n"
-                    if generic_mode
-                    else "\n\n# Public execution logs\n\n"
-                )
+                + "\n\n# Latest public execution log\n\n"
                 + _clip(
                     _public_log(session, review_log_start),
                     12000,
@@ -1529,23 +1454,16 @@ def run_oracle(
                     synthesis_attempts=5,
                 )
             else:  # "repair": fix WITH the real execution error (solo-repair, full)
-                parts = []
-                if prompt_mode == "generic":
-                    parts.append("# Public task and result protocol\n\n" + task_context)
+                parts = ["# Public task and result protocol\n\n" + task_context]
                 parts.extend(
                     [
                         "# Current evaluation script\n\n"
                         + (config.workdir / config.eval_script).read_text(errors="replace"),
-                        (
-                            "# Latest public execution log\n\n"
-                            + _public_log(session, latest_execution_start)
-                            if generic_mode
-                            else "# Public execution log\n\n"
-                            + _public_log(session, execution_start)
-                        ),
+                        "# Latest public execution log\n\n"
+                        + _public_log(session, latest_execution_start),
                     ]
                 )
-                if generic_mode and latest_execution_start != execution_start:
+                if latest_execution_start != execution_start:
                     parts.append(
                         "# Prior execution history (clipped)\n\n"
                         + _clip(_public_log(session, execution_start), 6000)
@@ -1565,22 +1483,15 @@ def run_oracle(
                     + "\n".join(f"- {issue}" for issue in diagnostics)
                 )
                 repair_context = "\n\n".join(parts)
-                if generic_mode:
-                    repair_validator = _make_generic_repair_validator(
-                        code_validator,
-                        session,
-                        config.workdir,
-                        execution_start,
-                        current_code=(
-                            config.workdir / config.eval_script
-                        ).read_text(errors="replace"),
-                    )
-                elif config.repair_make_validator is not None:
-                    repair_validator = config.repair_make_validator(
-                        diagnostics, protected_code_blocks, accepted_new_blocks
-                    )
-                else:
-                    repair_validator = code_validator
+                repair_validator = _make_generic_repair_validator(
+                    code_validator,
+                    session,
+                    config.workdir,
+                    execution_start,
+                    current_code=(
+                        config.workdir / config.eval_script
+                    ).read_text(errors="replace"),
+                )
                 key = f"repair_{round_index}"
                 roles[key], rag[key] = rag_role(
                     name=key,
@@ -1591,19 +1502,15 @@ def run_oracle(
                     ),
                     context=repair_context,
                     output_path=config.workdir / config.eval_script,
-                    submit_name=repair_submit_name,
+                    submit_name="submit_code",
                     submit_description=repair_submit_description,
                     validator=repair_validator,
                     trigger="execution_error_and_reviewer_finding",
                     max_steps=7,
-                    max_queries=3 if generic_mode else 2,
+                    max_queries=3,
                     submit_schema=repair_submit_schema,
                     submission_adapter=repair_submission_adapter,
-                    synthesis_instruction=(
-                        generic_code_synthesis_instruction
-                        if generic_mode
-                        else repair_synthesis_instruction
-                    ),
+                    synthesis_instruction=generic_code_synthesis_instruction,
                     synthesis_attempts=4,
                 )
 
@@ -1670,10 +1577,6 @@ def run_oracle(
     output = {
         "task": config.task,
         "pipeline": pipeline,
-        "prompt_mode": prompt_mode,
-        "oracle_contract_mode": (
-            "public_artifact_only" if generic_mode else "task_specific"
-        ),
         "max_executions": MAX_REPAIR_ROUNDS + 1,  # shared budget across conditions
         "eval_executions": n_exec,                # actually consumed
         "blind_workspace_checked": config.assert_blind_workspace is not None,
@@ -1683,9 +1586,7 @@ def run_oracle(
         "rag": rag,
         "dynamic_rag": True,
         "retrieval_ranker": config.retrieval_ranker,
-        "repair_mode": (
-            "full_file_replacement" if generic_mode else config.repair_mode_label
-        ),
+        "repair_mode": "full_file_replacement",
         "workflow_error": workflow_error,
         "total_rag_calls": sum(stage["calls"] for stage in rag.values()),
         "rag_requirement_met": rag_requirement,
@@ -1696,8 +1597,8 @@ def run_oracle(
         "collaboration_pass": collaboration_pass,
         "total_cost_yuan": total_cost,
         "total_commands": len(session.transcript),
-        "runtime_probe_enabled": generic_mode,
-        "runtime_probe_budget": MAX_RUNTIME_PROBES if generic_mode else 0,
+        "runtime_probe_enabled": True,
+        "runtime_probe_budget": MAX_RUNTIME_PROBES,
         "total_runtime_probes": len(probe_transcript),
     }
     result_json = json.dumps(output, indent=2) + "\n"

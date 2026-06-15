@@ -81,7 +81,6 @@ def test_all_v2_oracles_publish_a_generic_artifact_contract() -> None:
             num_examples=10000,
             num_classes=100,
             expected=79.26,
-            label_hint="fine label",
             workspace_slug="detectors_resnet18_cifar100",
             gold_labels="cifar100_test_fine_labels.json",
         ),

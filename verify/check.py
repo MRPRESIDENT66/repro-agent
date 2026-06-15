@@ -425,8 +425,45 @@ def verify_run(
     expected_datasets: dict[str, int] | None = None,
     expected_runs: list[str] | None = None,
     expected_aggregation: str | None = None,
+    recompute_fn=None,
 ) -> Verdict:
-    """Full blind V1 gate: structured command evidence plus eval-script provenance."""
+    """Blind verification.
+
+    **V2 (``recompute_fn`` given):** the verifier IGNORES whatever the agent
+    printed and **computes the metric itself** from the per-sample predictions the
+    eval wrote into ``workdir``, scored against gold labels the verifier loads
+    independently (a pinned reference file, not the agent's environment). The agent
+    cannot forge a passing number — to hit the hidden target it must produce
+    per-sample outputs whose independently-computed metric equals it, i.e. actually
+    run the eval. ``recompute_fn(workdir)`` returns ``(actual, num_examples)`` or
+    ``None`` when predictions are missing / malformed / the wrong count. This
+    removes the AST provenance heuristic (which only proved the code *looked* like
+    an eval, and was forgeable with a dead-code block).
+
+    **V1 fallback (no ``recompute_fn``):** structured printed evidence + the
+    provenance heuristic — kept only for tasks not yet migrated.
+    """
+    workdir = Path(workdir)
+    if recompute_fn is not None:
+        result = recompute_fn(workdir)
+        if result is None:
+            return Verdict(
+                match=False, expected=expected, actual=None, abs_diff=None,
+                tolerance=tolerance, num_examples=None,
+                reason="no_recomputable_predictions",
+            )
+        actual, got_n = result
+        diff = abs(actual - expected)
+        ok = diff <= tolerance and (
+            expected_num_examples is None or got_n == expected_num_examples
+        )
+        return Verdict(
+            match=ok, expected=expected, actual=actual, abs_diff=diff,
+            tolerance=tolerance, num_examples=got_n,
+            evidence_line=f"verifier-recomputed {metric}={actual:.6g} over n={got_n}",
+            reason=None if ok else ("count_mismatch" if diff <= tolerance else "outside_tolerance"),
+        )
+
     verdict = verify_transcript(
         transcript,
         expected=expected,

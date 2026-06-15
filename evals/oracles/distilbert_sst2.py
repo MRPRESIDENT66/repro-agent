@@ -10,16 +10,19 @@ dataset are pre-cached, so the eval runs offline.
 from __future__ import annotations
 
 import ast
-import re
+import json
 import shutil
 from pathlib import Path
 
 from agent.multi_rag import OracleConfig, _extract_python
 from exec.session import Session
-from verify.check import extract_structured_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
 ORACLE_VENV = ROOT / ".venv-oracle"  # has transformers + datasets + torch
+# Pinned gold labels the verifier scores against — loaded independently of the
+# agent's environment (extracted once from GLUE/SST-2 validation; see
+# scripts/extract_gold or the commit that added it).
+GOLD_LABELS = ROOT / "evals" / "oracles" / "gold" / "sst2_val_labels.json"
 
 MODEL_NAME = "distilbert-base-uncased-finetuned-sst-2-english"
 HF_HUB = Path.home() / ".cache" / "huggingface" / "hub"
@@ -41,15 +44,41 @@ name from the cache). The environment is CPU-only and offline. Load the model wi
 its own tokenizer, evaluate on the SST-2 validation split, and report top-1
 classification accuracy as a percentage."""
 
-EVIDENCE = f"""A result counts only when an EXECUTED evaluation command prints:
-REPRO_RESULT {{"metric":"{METRIC}","actual":<number>,"num_examples":{N_EXAMPLES}}}
-The evaluation program itself must print the line. Do not echo or printf it.
-`actual` is classification accuracy in percentage points (0-100)."""
+EVIDENCE = f"""The eval must WRITE a file `predictions.json` in the working
+directory: a JSON list of exactly {N_EXAMPLES} integers — the model's predicted
+label (0 or 1) for each SST-2 validation example, in dataset order. An external
+verifier recomputes accuracy from this file against held-out gold labels it loads
+itself; it ignores anything you print. Do NOT hardcode the predictions or the
+accuracy — only the per-sample predictions from real model inference reproduce
+the target."""
 
 # Required-construct markers: the script must really load the model + dataset and
-# serialize the contract — it cannot just print a literal it never sees (blind).
-_REQUIRED_MARKERS = ("REPRO_RESULT", "json.dumps")
+# WRITE the per-sample predictions file — it cannot pass by printing a number.
+_REQUIRED_MARKERS = ("predictions.json",)
 _REQUIRED_USAGE = ("from_pretrained", "load_dataset")
+
+
+def _recompute(workdir: Path):
+    """Verifier-side metric: read the agent's per-sample predictions and score them
+    against the pinned gold labels. Returns ``(accuracy_pct, n)`` or ``None`` when
+    the predictions are missing / malformed / the wrong count. The agent cannot
+    forge this — it would have to make per-sample predictions whose independently
+    computed accuracy equals the hidden target."""
+    pred_path = workdir / "predictions.json"
+    if not pred_path.is_file():
+        return None
+    try:
+        preds = json.loads(pred_path.read_text())
+        gold = json.loads(GOLD_LABELS.read_text())
+    except (ValueError, OSError):
+        return None
+    if not isinstance(preds, list) or len(preds) != len(gold):
+        return None
+    try:
+        correct = sum(int(p) == int(g) for p, g in zip(preds, gold))
+    except (TypeError, ValueError):
+        return None
+    return (100.0 * correct / len(gold), len(gold))
 
 
 # ---------------------------------------------------------------------------
@@ -78,18 +107,15 @@ def _validate_code(content: str) -> str:
 # Contract
 # ---------------------------------------------------------------------------
 
-def _make_public_contract_diagnostics(n_examples: int):
+def _make_public_contract_diagnostics(workdir: Path, n_examples: int):
     def _public_contract_diagnostics(session) -> list[str]:
-        evidence = extract_structured_evidence(
-            session.transcript,
-            metric=METRIC,
-            expected_num_examples=n_examples,
-        )
-        if evidence is None:
+        # Feedback for the repair loop, recomputed from the predictions file (the
+        # agent's OWN accuracy — not the hidden target, which it can compute itself
+        # from the dataset anyway).
+        if not (workdir / "predictions.json").is_file():
             issue = (
-                f"No valid REPRO_RESULT was produced by a successful evaluation "
-                f'command. Need metric="{METRIC}" and num_examples={n_examples} in '
-                f"the stdout of a successful run."
+                f"No `predictions.json` written. The eval must write a JSON list of "
+                f"{n_examples} predicted labels (0/1) in SST-2 validation order."
             )
             latest = next(
                 (run for run in reversed(session.transcript) if not run.ok), None
@@ -99,18 +125,20 @@ def _make_public_contract_diagnostics(n_examples: int):
                 if tail:
                     issue += f"\nFix the latest blocking execution error first:\n{tail}"
             return [issue]
-        issues: list[str] = []
-        if not 0.0 <= evidence.actual <= 100.0:
-            issues.append("accuracy must be a percentage in the 0-100 scale.")
-        if evidence.actual < CHANCE_LEVEL:
-            issues.append(
-                f"The reported accuracy ({evidence.actual}) is below the "
-                f"{CHANCE_LEVEL} random-chance baseline for binary SST-2. This "
-                f"almost always means the label mapping is inverted — check the "
-                f"model's id2label in config.json against the SST-2 gold labels "
-                f"(0=negative, 1=positive); do not simply negate the number."
-            )
-        return issues
+        rec = _recompute(workdir)
+        if rec is None:
+            return [
+                f"`predictions.json` is malformed or not a list of exactly "
+                f"{n_examples} integer labels."
+            ]
+        acc, _ = rec
+        if acc < CHANCE_LEVEL:
+            return [
+                f"Recomputed accuracy ({acc:.2f}) is below the {CHANCE_LEVEL} "
+                f"random-chance baseline for binary SST-2 — the label mapping is "
+                f"almost certainly inverted. Check id2label (0=negative, 1=positive)."
+            ]
+        return []
 
     return _public_contract_diagnostics
 
@@ -224,10 +252,12 @@ Public execution contract:
   ({N_EXAMPLES} examples); the text field is `sentence`, the gold field is
   `label`; the GLUE config needs a namespaced id;
 - tokenize with the model's own tokenizer (padding + truncation), run batched CPU
-  inference, take `logits.argmax(-1)` and compare against the gold `label`
+  inference, take `logits.argmax(-1)` as the predicted label for each example
   (the model's LABEL_0/LABEL_1 already align with SST-2 0/1 — no remap);
-- compute accuracy as a percentage over all {N_EXAMPLES} examples;
-- print exactly one strict-JSON `REPRO_RESULT` line using `json.dumps`;
+- WRITE the per-sample predictions to `predictions.json` in the working directory:
+  a JSON list of the {N_EXAMPLES} predicted labels (0/1) in dataset order. You do
+  NOT need to print or compute the accuracy — the external verifier recomputes it
+  from this file;
 - {EVIDENCE}
 
 Do not guess or mention the private target."""
@@ -244,8 +274,8 @@ Verify:
   reading `sentence` and `label`;
 - the label mapping matches `model_card.md` and SST-2 gold labels with no
   spurious inversion;
-- accuracy is a percentage (0-100) over all examples;
-- exactly one strict-JSON `REPRO_RESULT` via `json.dumps`.
+- the eval WRITES `predictions.json` — a JSON list of {N_EXAMPLES} per-sample
+  predicted labels (0/1) in dataset order, from real inference (not hardcoded).
 {EVIDENCE}
 
 Do not guess or mention the private target."""
@@ -256,9 +286,9 @@ concrete execution error or the highest-risk semantic claim. The deterministic
 public-contract audit is authoritative. When execution succeeded, check:
 - accuracy is a percentage (0-100), not a fraction;
 - num_examples = {N_EXAMPLES} (the full validation split, not a subset);
-- the label mapping is correct — if accuracy is near or below 50%, suspect an
-  inverted label/argmax direction and verify against `model_card.md`;
-- the result came from real model inference, not a hardcoded constant.
+- the label mapping is correct — if the recomputed accuracy is near or below 50%,
+  suspect an inverted label/argmax direction and verify against `model_card.md`;
+- `predictions.json` has {N_EXAMPLES} entries from real inference, not hardcoded.
 End with exactly `REVIEW_STATUS: PASS` only when no repair is needed; otherwise
 end with exactly `REVIEW_STATUS: REPAIR_REQUIRED`.
 Do not guess or mention the private target."""
@@ -267,8 +297,8 @@ REPAIR_INSTRUCTION = f"""You are Repair Agent {{round_index}}. Fix the concrete
 failure identified by the execution log and the independent Reviewer. Search the
 model snapshot for the specific error or disputed claim, then submit a corrected
 complete `eval_sst2.py`. Preserve all working behavior and the public contract:
-percentage accuracy, num_examples={N_EXAMPLES}, correct label mapping, strict-JSON
-`REPRO_RESULT` via `json.dumps`, CPU-only offline loading.
+correct label mapping, and a `predictions.json` with {N_EXAMPLES} per-sample
+predicted labels (0/1) in dataset order from real inference, CPU-only offline.
 {EVIDENCE}
 
 Do not guess or mention the private target."""
@@ -282,7 +312,7 @@ def make_config(attempt: str) -> OracleConfig:
     workdir = ROOT / "workspaces" / "distilbert_sst2_multi_rag"
     artifact_dir = ROOT / "evals" / "runs" / f"distilbert_sst2_multi_rag_{attempt}"
 
-    contract_diagnostics = _make_public_contract_diagnostics(N_EXAMPLES)
+    contract_diagnostics = _make_public_contract_diagnostics(workdir, N_EXAMPLES)
 
     return OracleConfig(
         name="distilbert_sst2",
@@ -303,7 +333,7 @@ def make_config(attempt: str) -> OracleConfig:
         validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
         public_contract_diagnostics=contract_diagnostics,
-        verify_kwargs={"expected_num_examples": N_EXAMPLES},
+        verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": _recompute},
         navigator_instruction=NAVIGATOR_INSTRUCTION,
         reproducer_instruction=REPRODUCER_INSTRUCTION,
         critic_instruction=CRITIC_INSTRUCTION,

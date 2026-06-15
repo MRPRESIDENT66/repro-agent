@@ -46,6 +46,7 @@ class Session:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.default_timeout = default_timeout
         self.transcript: list[RunResult] = []
+        self.probe_transcript: list[RunResult] = []
         self._env = self._clean_env(venv_python)
 
     @staticmethod
@@ -64,8 +65,12 @@ class Session:
                 env[k] = os.environ[k]
         return env
 
-    def shell(self, command: str, timeout: int | None = None) -> RunResult:
-        """Run a shell command in the session. Never raises on command failure."""
+    def _run(
+        self,
+        command: str,
+        timeout: int | None,
+        transcript: list[RunResult],
+    ) -> RunResult:
         timeout = timeout or self.default_timeout
         start = time.monotonic()
         try:
@@ -89,8 +94,16 @@ class Session:
                 True,
                 time.monotonic() - start,
             )
-        self.transcript.append(r)
+        transcript.append(r)
         return r
+
+    def shell(self, command: str, timeout: int | None = None) -> RunResult:
+        """Run and record a verifier-visible evaluation command."""
+        return self._run(command, timeout, self.transcript)
+
+    def probe(self, command: str, timeout: int | None = None) -> RunResult:
+        """Run an audited diagnostic command outside the evaluation transcript."""
+        return self._run(command, timeout, self.probe_transcript)
 
     def read_file(self, path: str) -> str:
         f = self.workdir / path
@@ -103,6 +116,14 @@ class Session:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(content, encoding="utf-8")
 
+    def sync_file(self, path: str, timeout: float = 5.0) -> bool:
+        """Confirm a generated workspace file is visible before execution."""
+        del timeout
+        return (self.workdir / path).is_file()
+
     def replay_script(self) -> str:
         """The exact shell commands run, in order — the auditable, replayable log."""
         return "\n".join(r.command for r in self.transcript)
+
+    def probe_replay_script(self) -> str:
+        return "\n".join(r.command for r in self.probe_transcript)

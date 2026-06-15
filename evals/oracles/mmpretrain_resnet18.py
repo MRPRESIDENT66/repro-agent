@@ -56,6 +56,12 @@ this file against held-out gold labels it loads itself; it ignores anything you
 print. Do NOT hardcode predictions — only the model's real per-sample predictions
 reproduce the target."""
 
+PUBLIC_RESULT_PROTOCOL = f"""Write `predictions.json` in the working directory:
+a JSON list of exactly {N_EXAMPLES} integers, containing the model's predicted
+class id for each CIFAR-10 test image in test order. The external verifier
+recomputes top-1 accuracy from this file and ignores printed aggregate metrics.
+Generate the list from real model inference; do not hardcode predictions."""
+
 # The wrapper must run the repository's test entry AND write the per-sample
 # predictions file — it cannot print a literal it never sees (blind).
 _REQUIRED_MARKERS = ("predictions.json", "test.py")
@@ -307,7 +313,10 @@ def make_config(attempt: str) -> OracleConfig:
         validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
         public_contract_diagnostics=contract_diagnostics,
+        chance_level=10.0,  # CIFAR-10 top-1 (10 balanced classes)
         verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": _recompute},
+        public_result_protocol=PUBLIC_RESULT_PROTOCOL,
+        public_execution_command="python eval_mmpretrain.py",
         navigator_instruction=NAVIGATOR_INSTRUCTION,
         reproducer_instruction=REPRODUCER_INSTRUCTION,
         critic_instruction=CRITIC_INSTRUCTION,

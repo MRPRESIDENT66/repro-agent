@@ -331,7 +331,13 @@ def make_config(
         validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
         public_contract_diagnostics=contract_diagnostics,
+        chance_level=100.0 / num_classes,  # balanced top-1 over num_classes
         verify_kwargs={"expected_num_examples": num_examples, "recompute_fn": recompute},
+        public_result_protocol=evidence,
+        public_execution_command=(
+            "HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 "
+            "python eval_detectors.py"
+        ),
         navigator_instruction=nav,
         reproducer_instruction=rep,
         critic_instruction=crit,

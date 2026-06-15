@@ -67,20 +67,24 @@ held-out split; see caveats.)
 
 ---
 
-## Why a "pass" is trustworthy (blind + provenance gate)
+## What the verifier checks (and its real limit)
 
-The agent's prompt contains only the public task (`model + dataset + metric`);
-the expected value and tolerance live in an external verifier. A run matches only
-when a *successful* command prints structured evidence —
+The expected value and tolerance live in the external verifier, not in the
+runtime task. Under the V2 protocol, the generated evaluation writes per-sample
+predictions or scores to `predictions.json`; the verifier ignores any metric the
+agent prints and independently recomputes the metric against pinned reference
+labels or the fixed evaluation semantics.
 
-```text
-REPRO_RESULT {"metric":"top1_accuracy","actual":94.82,"num_examples":10000}
-```
+This prevents accidental passes from a guessed, echoed, or hardcoded aggregate
+number: without a complete per-sample output file, verification fails closed.
+All five reported task types use verifier-side recomputation.
 
-— **and** that evidence comes from a real evaluation: a script that loads a model
-+ data and computes the metric, or one that delegates to the repo's own eval
-entry against the checkpoint. A bare `echo`/`printf` of the number is rejected.
-Each run writes `result.json`, `commands.sh`, and per-role transcripts for replay.
+> **Threat model:** this is an experiment-integrity check for a cooperative,
+> non-adversarial Agent, **not a security sandbox**. It does not claim to stop an
+> adaptive attacker that deliberately searches outside the workspace, reads
+> verifier assets, or fabricates a full prediction vector engineered to match the
+> hidden target. Docker-backed tasks provide stronger filesystem isolation; the
+> subprocess backend does not.
 
 Tightening this gate repeatedly caught real problems — a `0.91` vs `91.0` unit
 ambiguity, an echo relay, and (during the final study) two false-negatives on
@@ -164,8 +168,11 @@ python run_distilbert_multi_rag.py
 PIPELINE=solo-retry  python run_openood_multi_rag.py   # re-generate, no feedback
 PIPELINE=solo-repair python run_openood_multi_rag.py   # single agent + feedback repair
 
+# shared role prompts + public-artifact-only validation/feedback
+PROMPT_MODE=generic DISTILBERT_ATTEMPT=generic_001 python run_distilbert_multi_rag.py
+
 python evals/report_tables.py                     # regenerate the E1/E2 tables from artifacts
-pytest -q                                          # 107 tests
+pytest -q                                          # run the full local regression suite
 ```
 
 The Docker-backed tasks (mmpretrain, OpenOOD) run inside pre-provisioned images;
@@ -177,14 +184,24 @@ the irreducible env-hell (mmcv) is solved once in the image, not by the agent.
   (OpenOOD). Pass rates are indicative, not significance-tested. All five are
   **development** tasks (prompts iterated against them) — **no held-out split**,
   so "runs across domains" is scoped to this suite.
-- **Oracle specialization is real:** the per-task prompts hand the agent task
-  knowledge (APIs, field names, known gotchas). A `prompt_mode=generic` path that
-  strips this is under active development — until it lands, read "generalizes"
-  with that caveat.
-- **The provenance gate is a heuristic, not a security boundary.** It fail-closes
-  the known forgeries (decoy files, `python -c` prints, comment markers, fake
-  wrappers — `tests/test_verify.py`), but is not proven robust to an adaptive
-  attacker; the subprocess backend is not a sandbox.
+- **Oracle specialization is real in the reported runs:** the per-task prompts
+  hand the agent APIs, field names, and known gotchas. `PROMPT_MODE=generic`
+  replaces every role prompt with one shared prompt and disables specialized code
+  validators and repair diagnostics. It exposes only the public task, the exact
+  command used to invoke the generated program, and the public result-artifact
+  schema required for scoring. Generic roles also share one restricted,
+  budgeted `runtime_probe` tool for import smoke tests, Python signatures,
+  workspace-relative path listings, and CLI help. Probe commands are recorded
+  separately from verifier-visible evaluation commands in
+  `runtime_probes.json`; this is an auditable non-malicious diagnostic guard,
+  not a security sandbox. Execution-driven generic repairs must use one probe
+  for concrete import/API/path failures, cannot re-enter package initializers
+  already proven broken by a public traceback, and cannot resubmit unchanged
+  code. Generic results are not yet included in the reported tables.
+- **Verifier-side recomputation prevents non-adversarial result fabrication, not
+  malicious attacks.** It rejects missing, malformed, wrong-count, or aggregate-only
+  outputs, but the subprocess backend is not a sandbox and does not defend against
+  an Agent deliberately trying to read verifier assets.
 - **mmpretrain is soft-blind** (94.82 is in the repo's own model-zoo metafile);
   the other four are strict-blind (RobustBench's README `52.00%` leak is scrubbed
   at provisioning). Don't mix blind levels when summarizing — hence the column.

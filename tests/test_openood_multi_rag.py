@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,14 +13,19 @@ from agent.multi_rag import (
     _missing_path_hints,
     _patch_tool,
     _review_requires_repair,
+    _runtime_probe_command,
     _validate_review,
 )
 from evals.oracles.openood_ebo import (
     NORMALIZATION_SOURCE_REL,
+    _ID_COUNT,
+    _OOD,
+    _RUNS,
     _diagnostic_change_terms,
     _make_public_contract_diagnostics,
     _make_validate_code,
     _normalization_diagnostics_for_code,
+    _recompute,
 )
 from exec.session import Session
 
@@ -29,8 +35,6 @@ from exec.session import Session
 
 _NO_WD = Path("/nonexistent")  # workdir that skips normalization check (file absent)
 _validate_code = _make_validate_code(_NO_WD)
-_public_contract_diagnostics = _make_public_contract_diagnostics(_NO_WD)
-_public_contract_passes = lambda session: not _public_contract_diagnostics(session)
 _round_code_is_endorsed = (
     lambda run_ok, contract_passes, review_path:
     run_ok and contract_passes and not _review_requires_repair(review_path)
@@ -50,110 +54,110 @@ def _normalization_diagnostics(workdir: Path | None = None) -> list[str]:
     )
 
 
-def _session(actual: float, run_value: float) -> SimpleNamespace:
-    result = {
-        "metric": "near_ood_auroc",
-        "actual": actual,
-        "datasets": {"cifar100": 9000, "tin": 7793},
-        "run_metrics": {
-            run: {"cifar100": run_value, "tin": run_value}
-            for run in ("s0", "s1", "s2")
-        },
-        "aggregation": "dataset_mean_then_run_mean",
-    }
+def _session(*, ok: bool = True, stderr: str = "") -> SimpleNamespace:
     run = SimpleNamespace(
-        ok=True,
+        ok=ok,
         command="python eval_ebo.py",
-        stdout=f"REPRO_RESULT {json.dumps(result)}\n",
+        stdout="",
+        stderr=stderr,
     )
     return SimpleNamespace(transcript=[run])
+
+
+def _write_scores(
+    workdir: Path,
+    *,
+    id_count: int = _ID_COUNT,
+    ood_counts: dict[str, int] | None = None,
+    ood_score: float = 1.0,
+) -> None:
+    """Write a compact deterministic V2 score artifact for contract tests."""
+    ood_counts = ood_counts or _OOD
+    data = {
+        run: {
+            "id": [0.0] * id_count,
+            **{name: [ood_score] * count for name, count in ood_counts.items()},
+        }
+        for run in _RUNS
+    }
+    (workdir / "predictions.json").write_text(json.dumps(data))
+
+
+def _contract(workdir: Path):
+    diagnostics = _make_public_contract_diagnostics(workdir)
+    return diagnostics, lambda session: not diagnostics(session)
 
 
 # ---------------------------------------------------------------------------
 # Contract tests
 # ---------------------------------------------------------------------------
 
-def test_public_contract_rejects_fractional_auroc() -> None:
-    assert not _public_contract_passes(_session(0.87, 0.87))
+def test_public_contract_rejects_incomplete_id_scores(tmp_path: Path) -> None:
+    _write_scores(tmp_path, id_count=2)
+    _, passes = _contract(tmp_path)
+
+    assert not passes(_session())
+    assert _recompute(tmp_path) is None
 
 
-def test_public_contract_accepts_percentage_auroc() -> None:
-    assert _public_contract_passes(_session(87.0, 87.0))
+def test_public_contract_accepts_complete_score_coverage(tmp_path: Path) -> None:
+    _write_scores(tmp_path)
+    _, passes = _contract(tmp_path)
+
+    assert passes(_session())
+    assert _recompute(tmp_path) == (100.0, 50379)
 
 
-def test_public_contract_accepts_two_decimal_aggregation_rounding() -> None:
-    assert _public_contract_passes(_session(87.09, 87.0916666667))
-
-
-def test_below_chance_result_flagged_as_inverted_without_leaking_target() -> None:
-    inverted = _public_contract_diagnostics(_session(12.42, 12.42))
+def test_below_chance_result_flagged_as_inverted_without_leaking_target(
+    tmp_path: Path,
+) -> None:
+    diagnostics, _ = _contract(tmp_path)
+    _write_scores(tmp_path, ood_score=-1.0)
+    inverted = diagnostics(_session())
     assert any("below" in d.lower() and "chance" in d.lower() for d in inverted)
     assert all("87.58" not in d for d in inverted)
 
-    correct = _public_contract_diagnostics(_session(87.58, 87.58))
+    _write_scores(tmp_path)
+    correct = diagnostics(_session())
     assert not any("chance" in d.lower() for d in correct)
 
 
-def test_public_contract_diagnostics_explain_counts_without_private_target() -> None:
-    session = _session(87.0, 87.0)
-    payload = json.loads(session.transcript[0].stdout.removeprefix("REPRO_RESULT "))
-    payload["datasets"] = {"cifar100": 3, "tin": 3}
-    session.transcript[0].stdout = f"REPRO_RESULT {json.dumps(payload)}\n"
+def test_public_contract_diagnostics_explain_counts_without_private_target(
+    tmp_path: Path,
+) -> None:
+    _write_scores(tmp_path, ood_counts={"cifar100": 3, "tin": 3})
+    diagnostics, _ = _contract(tmp_path)
 
-    diagnostics = _public_contract_diagnostics(session)
+    issues = diagnostics(_session())
 
-    assert len(diagnostics) == 1
-    assert diagnostics[0].startswith(
-        "Dataset counts mismatch: expected {'cifar100': 9000, 'tin': 7793}, "
-        "got {'cifar100': 3, 'tin': 3}."
-    )
-    assert "silently dropped" in diagnostics[0]
-    assert "87.58" not in diagnostics[0]
-    assert _diagnostic_change_terms(diagnostics) == {"datasets", "len("}
+    assert len(issues) == 1
+    assert f"id` (exactly {_ID_COUNT} scores)" in issues[0]
+    assert "cifar100` (exactly 9000 scores)" in issues[0]
+    assert "silently dropped" in issues[0]
+    assert "87.58" not in issues[0]
 
 
-def test_count_mismatch_surfaces_silent_drop_signals_from_log() -> None:
-    session = _session(87.0, 87.0)
-    payload = json.loads(session.transcript[0].stdout.removeprefix("REPRO_RESULT "))
-    payload["datasets"] = {"cifar100": 9000, "tin": 6526}
-    session.transcript[0].stdout = f"REPRO_RESULT {json.dumps(payload)}\n"
-    session.transcript[0].stderr = (
+def test_count_mismatch_surfaces_silent_drop_signals_from_log(tmp_path: Path) -> None:
+    _write_scores(tmp_path, ood_counts={"cifar100": 9000, "tin": 6526})
+    diagnostics, _ = _contract(tmp_path)
+    session = _session(stderr=(
         "ERROR:root:[/workspace/data/.../val_7.JPEG] broken\n"
         "FileNotFoundError: [Errno 2] No such file: val_9.JPEG\n"
-    )
+    ))
 
-    diagnostics = _public_contract_diagnostics(session)
+    issues = diagnostics(session)
 
-    assert any("drop/error signal" in d for d in diagnostics)
-    assert any("silently dropped" in d for d in diagnostics)
+    assert any("drop/error signal" in d for d in issues)
+    assert any("silently dropped" in d for d in issues)
 
 
-def test_public_contract_diagnostics_prioritize_malformed_successful_result() -> None:
-    session = SimpleNamespace(
-        transcript=[
-            SimpleNamespace(
-                ok=False,
-                command="python eval_ebo.py",
-                stdout="",
-                stderr="FileNotFoundError: old failure",
-            ),
-            SimpleNamespace(
-                ok=True,
-                command="python eval_ebo.py",
-                stdout="REPRO_RESULT {'metric': 'near_ood_auroc'}\n",
-                stderr="",
-            ),
-        ],
-        workdir=None,
-    )
+def test_missing_predictions_prioritizes_latest_execution_error(tmp_path: Path) -> None:
+    diagnostics, _ = _contract(tmp_path)
+    issues = diagnostics(_session(ok=False, stderr="FileNotFoundError: missing image"))
 
-    diagnostics = _public_contract_diagnostics(session)
-
-    assert diagnostics == [
-        "A successful evaluation printed REPRO_RESULT, but it was not valid strict "
-        "JSON. Serialize the result object with json.dumps."
-    ]
-    assert _diagnostic_change_terms(diagnostics) == {"json.dumps", "repro_result"}
+    assert len(issues) == 1
+    assert "No `predictions.json`" in issues[0]
+    assert "FileNotFoundError: missing image" in issues[0]
 
 
 def test_normalization_diagnostics_compare_generated_code_to_repo(
@@ -229,9 +233,15 @@ def test_round_code_endorsement_requires_all_three_signals(tmp_path: Path) -> No
     assert not _round_code_is_endorsed(True, True, tmp_path / "missing.md")
 
 
-def test_repair_loop_stops_once_contract_passes_regardless_of_reviewer() -> None:
-    assert not _repair_loop_should_continue(_public_contract_passes(_session(87.58, 87.58)))
-    assert _repair_loop_should_continue(_public_contract_passes(_session(12.42, 12.42)))
+def test_repair_loop_stops_once_contract_passes_regardless_of_reviewer(
+    tmp_path: Path,
+) -> None:
+    _, passes = _contract(tmp_path)
+    _write_scores(tmp_path)
+    assert not _repair_loop_should_continue(passes(_session()))
+
+    _write_scores(tmp_path, id_count=2)
+    assert _repair_loop_should_continue(passes(_session()))
 
 
 def test_review_status_fails_closed(tmp_path: Path) -> None:
@@ -344,6 +354,161 @@ def test_dynamic_rag_forces_synthesis_after_query_budget(
     assert (workspace / "handoff.md").read_text() == report
     assert rag["queries"] == ["find official evaluation entry"]
     assert role["steps"] == 2
+
+
+def test_restricted_runtime_probe_is_audited_and_not_an_eval_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import agent.multi_rag as module
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    artifacts = tmp_path / "artifacts"
+    role_llm = ScriptedLLM([
+        Reply("", [ToolCall("p1", "runtime_probe", {
+            "kind": "python_signature",
+            "target": "json.dumps",
+        })]),
+        Reply("", [ToolCall("q1", "search_repo", {
+            "query": "find official evaluation entry",
+        })]),
+        Reply("", [ToolCall("s1", "submit_handoff", {"content": "grounded"})]),
+    ])
+    llms = iter([role_llm, ScriptedLLM([]), ScriptedLLM([])])
+    monkeypatch.setattr(module, "ChatLLM", lambda: next(llms))
+    monkeypatch.setattr(module, "search_repo", lambda *args, **kwargs: "Most relevant files:\n")
+    session = Session(workspace, venv_python=sys.executable)
+
+    role, _ = _dynamic_rag_role(
+        name="probe_test",
+        task="Test task",
+        workdir=workspace,
+        artifact_dir=artifacts,
+        session=session,
+        instruction="Investigate then submit.",
+        context="Find the runtime interface.",
+        output_path=workspace / "handoff.md",
+        submit_name="submit_handoff",
+        submit_description="Submit handoff.",
+        validator=lambda content: content,
+        trigger="initial_task",
+        max_steps=4,
+        allow_runtime_probe=True,
+    )
+
+    assert session.transcript == []
+    assert len(session.probe_transcript) == 1
+    assert "SIGNATURE" in session.probe_transcript[0].stdout
+    assert role["runtime_probes"] == 1
+    assert role["tool_counts"] == {
+        "runtime_probe": 1,
+        "search_repo": 1,
+        "submit_handoff": 1,
+    }
+    assert (artifacts / "probe_test_probe_trace.md").exists()
+
+
+def test_generic_runtime_error_repair_requires_probe_before_submit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import agent.multi_rag as module
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    artifacts = tmp_path / "artifacts"
+    role_llm = ScriptedLLM([
+        Reply("", [ToolCall("q1", "search_repo", {
+            "query": "inspect failing optional import",
+        })]),
+        Reply("", [ToolCall("early", "submit_code", {"content": "fixed = True\n"})]),
+        Reply("", [ToolCall("p1", "runtime_probe", {
+            "kind": "import_smoke",
+            "target": "json",
+        })]),
+        Reply("", [ToolCall("s1", "submit_code", {"content": "fixed = True\n"})]),
+    ])
+    llms = iter([role_llm, ScriptedLLM([]), ScriptedLLM([])])
+    monkeypatch.setattr(module, "ChatLLM", lambda: next(llms))
+    monkeypatch.setattr(module, "search_repo", lambda *args, **kwargs: "Most relevant files:\n")
+    session = Session(workspace, venv_python=sys.executable)
+
+    role, _ = _dynamic_rag_role(
+        name="repair_1",
+        task="Test task",
+        workdir=workspace,
+        artifact_dir=artifacts,
+        session=session,
+        instruction="Repair from evidence.",
+        context="ModuleNotFoundError: No module named 'optional_dep'",
+        output_path=workspace / "eval.py",
+        submit_name="submit_code",
+        submit_description="Submit code.",
+        validator=lambda content: content,
+        trigger="execution_error_and_reviewer_finding",
+        max_steps=5,
+        allow_runtime_probe=True,
+    )
+
+    assert role["runtime_probe_required"] is True
+    assert role["runtime_probes"] == 1
+    assert role["format_errors"] == 1
+    assert (workspace / "eval.py").read_text() == "fixed = True\n"
+
+
+@pytest.mark.parametrize(
+    ("kind", "target"),
+    [
+        ("import_smoke", "os;system"),
+        ("python_signature", "json.dumps()"),
+        ("path_list", "../private"),
+        ("path_list", "/etc"),
+        ("cli_help", "README.md"),
+        ("shell", "ls"),
+    ],
+)
+def test_restricted_runtime_probe_rejects_raw_or_escaping_targets(kind, target) -> None:
+    with pytest.raises(ValueError):
+        _runtime_probe_command(kind, target)
+
+
+def test_python_signature_probe_resolves_class_attributes(tmp_path: Path) -> None:
+    session = Session(tmp_path, venv_python=sys.executable)
+
+    run = session.probe(
+        _runtime_probe_command("python_signature", "json.JSONEncoder.__init__"),
+        timeout=10,
+    )
+
+    assert run.ok
+    assert "SIGNATURE" in run.stdout
+    assert "json.JSONEncoder.__init__" in run.stdout
+
+
+def test_path_list_probe_allows_provisioned_workspace_symlink(tmp_path: Path) -> None:
+    external = tmp_path / "provisioned"
+    external.mkdir()
+    (external / "asset.bin").write_text("data")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "assets").symlink_to(external, target_is_directory=True)
+    session = Session(workspace, venv_python=sys.executable)
+
+    run = session.probe(_runtime_probe_command("path_list", "assets"), timeout=10)
+
+    assert run.ok
+    assert "assets/asset.bin" in run.stdout
+
+
+def test_openood_image_pins_faiss_for_optional_import_chain() -> None:
+    dockerfile = (
+        Path(__file__).resolve().parents[1] / "docker" / "openood.Dockerfile"
+    ).read_text()
+
+    assert "numpy==1.26.4" in dockerfile
+    assert "faiss-cpu==1.7.4" in dockerfile
+    assert "import torch, torchvision, numpy, sklearn, pandas, faiss" in dockerfile
 
 
 def _synthesis_harness(tmp_path, monkeypatch, synthesis_replies, validator):
@@ -461,7 +626,7 @@ paths = "data/benchmark_imglist data/images_classic"
 runs = ["s0", "s1", "s2"]
 datasets = ["cifar100", "tin"]
 score = logsumexp(x)
-print("REPRO_RESULT " + json.dumps({}))
+json.dump({}, open("predictions.json", "w"))
 """
     with pytest.raises(ValueError, match="fixed model/CLI contract"):
         _validate_code(code)
@@ -473,10 +638,10 @@ def test_extract_python_picks_the_real_script_not_a_preface_snippet() -> None:
         "```python\nscore = logsumexp(logits)  # illustrative snippet\n```\n\n"
         "Now the full evaluation script:\n\n"
         "```python\nimport json\n# ... full eval ...\n"
-        "print('REPRO_RESULT ' + json.dumps(result))\n```\n"
+        "json.dump(scores, open('predictions.json', 'w'))\n```\n"
     )
     code = _extract_python(reply)
-    assert "REPRO_RESULT" in code and "json.dumps" in code
+    assert "predictions.json" in code and "json.dump" in code
     assert "illustrative snippet" not in code
 
 
@@ -557,8 +722,13 @@ def test_normalization_diagnostics_allow_repo_dict_subscript(
     assert validate(code)
 
 
-def test_composite_rejects_obviously_fabricated_aggregate() -> None:
-    assert not _public_contract_passes(_session(99.0, 87.0))
+def test_recompute_rejects_missing_run_block(tmp_path: Path) -> None:
+    _write_scores(tmp_path)
+    data = json.loads((tmp_path / "predictions.json").read_text())
+    data.pop("s2")
+    (tmp_path / "predictions.json").write_text(json.dumps(data))
+
+    assert _recompute(tmp_path) is None
 
 
 def test_code_validator_rejects_broad_optional_dependency_imports() -> None:
@@ -606,7 +776,7 @@ import json
 from openood.networks import ResNet18_32x32
 from torch.utils.data import DataLoader
 root_flag = "--root"
-print("REPRO_RESULT " + json.dumps({}))
+json.dump({}, open("predictions.json", "w"))
 """
 
 

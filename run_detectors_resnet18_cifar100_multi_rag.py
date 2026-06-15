@@ -14,11 +14,8 @@ if __name__ == "__main__":
             num_examples=10000,
             num_classes=100,
             expected=79.26,
-            label_hint="image field 'img', gold field 'fine_label' (100 classes; "
-            "the split also has 'coarse_label' with only 20 classes — do not use it)",
             workspace_slug="detectors_resnet18_cifar100",
             gold_labels="cifar100_test_fine_labels.json",
         ),
         pipeline=os.environ.get("PIPELINE", "full"),
-        prompt_mode=os.environ.get("PROMPT_MODE", "specialized"),
     )

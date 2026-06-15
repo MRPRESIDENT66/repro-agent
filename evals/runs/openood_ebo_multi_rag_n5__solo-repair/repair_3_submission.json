@@ -1,9 +1,0 @@
-{
-  "edits": [
-    {
-      "old": "    data_dir = os.path.join(root, '..', 'data')",
-      "new": "    data_dir = os.path.join(root, '..', '..', 'data')"
-    }
-  ],
-  "rationale": "The execution log shows that the script constructs a path `results/cifar10_resnet18_32x32_base_e100_lr0.1_default/../data/benchmark_imglist/cifar10/test_cifar10.txt` which does not exist. The config.yml for the checkpoint reveals that the actual data directory is `./data/images_classic/` and the imglist paths are relative to `./data/benchmark_imglist/...`. The root directory is `results/cifar10_resnet18_32x32_base_e100_lr0.1_default`, so to reach the `data` directory at the repository root, we need to go up two levels (`../..`) instead of one (`..`). This single edit fixes the path resolution so that the image list files are found."
-}

@@ -56,7 +56,7 @@ Repository-agnostic procedure:
 1. Search the highest-risk unresolved implementation detail before coding.
 2. Prefer the repository's documented evaluation entry or public library API.
    But importing a high-level API often drags in optional/heavy dependencies
-   (specialized packages, GPU-only modules, config-file machinery) that may be
+   (domain-specific packages, GPU-only modules, config-file machinery) that may be
    absent or unusable under the task's environment constraints. When an import
    chain repeatedly fails or a dependency is missing, do NOT keep retrying the
    same API path: switch to reading the relevant constants and computation

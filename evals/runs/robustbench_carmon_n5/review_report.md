@@ -1,5 +1,0 @@
-## Audit Report
-
-The execution log shows the evaluation script ran successfully (exit=0) and produced a `REPRO_RESULT` with `"actual": 51.99999809265137` and `"num_examples": 50`. The robust accuracy is reported as a percentage (52.0%), not a fraction, satisfying the requirement that robust accuracy be in the 0–100 range. The `num_examples=50` matches the required value. AutoAttack was actually executed, as evidenced by the log lines showing `apgd-ce - 1/1 - 19 out of 46 successfully perturbed` and `apgd-dlr - 1/1 - 1 out of 27 successfully perturbed`, confirming the attack was not skipped. The result came from actual model evaluation, as the script loaded the model, ran AutoAttack, and computed accuracy on the adversarial examples. The initial accuracy of 92.00% and final robust accuracy of 52.00% are consistent with expected behavior for Carmon2019Unlabeled on CIFAR-10 under Linf perturbation. The earlier error (`TypeError: get_preprocessing() missing 1 required positional argument: 'preprocessing'`) was corrected in the final successful run by passing `None` as the preprocessing argument. All checks pass.
-
-REVIEW_STATUS: PASS

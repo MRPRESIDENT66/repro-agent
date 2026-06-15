@@ -7,6 +7,8 @@ the three tools and that its verify tool delegates correctly.
 
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 
 from verify.check import verify_evidence_line
@@ -53,6 +55,8 @@ def test_garbage_fails_closed(bad: str) -> None:
 
 
 def test_mcp_server_registers_three_tools() -> None:
+    if importlib.util.find_spec("mcp") is None:
+        pytest.skip("optional mcp dependency is not installed")
     import serve_mcp
 
     names = {t.name for t in serve_mcp.mcp._tool_manager.list_tools()}
@@ -60,6 +64,8 @@ def test_mcp_server_registers_three_tools() -> None:
 
 
 def test_mcp_verify_tool_delegates() -> None:
+    if importlib.util.find_spec("mcp") is None:
+        pytest.skip("optional mcp dependency is not installed")
     import serve_mcp
 
     out = serve_mcp.verify_evidence_line(

@@ -36,6 +36,7 @@ class _AutoLLM:
     def __init__(self) -> None:
         self.usage = Usage()
         self._queried = False
+        self._submissions = 0
 
     def chat(self, messages, tools=None) -> Reply:
         names = [t["function"]["name"] for t in (tools or [])]
@@ -47,9 +48,18 @@ class _AutoLLM:
             if "review" in submit:
                 content = "REVIEW_STATUS: PASS\n"
             else:
+                self._submissions += 1
                 system = str(messages[0].get("content", "")).lower()
-                repair_line = "repair_marker = True\n" if "repair agent" in system else ""
-                content = "output_path = 'predictions.json'\n" + repair_line
+                repair_line = (
+                    f"repair_marker = {self._submissions}\n"
+                    if "repair agent" in system
+                    else ""
+                )
+                content = (
+                    "output_path = 'predictions.json'\n"
+                    "print('REPRO_RESULT')\n"
+                    + repair_line
+                )
             return Reply("", [ToolCall("s", submit, {"content": content})])
         return Reply("synthesis fallback\nREVIEW_STATUS: PASS\n")
 
@@ -98,19 +108,10 @@ def _make_config(tmp_path: Path, outcomes: list[bool]) -> OracleConfig:
         make_session=lambda: Session(workdir),
         copy_clean_source=lambda: workdir.mkdir(exist_ok=True),
         execute_eval=execute_eval,
-        validate_code=lambda s: s or "code",
         validate_report=lambda s: s or "report",
         validate_review=lambda s: s or "review",
         public_contract_passes=contract_passes,
-        public_contract_diagnostics=lambda session: (
-            [] if contract_passes(session) else ["no valid REPRO_RESULT yet"]
-        ),
         verify_kwargs={"expected_num_examples": 10},
-        navigator_instruction="nav",
-        reproducer_instruction="rep",
-        critic_instruction="crit",
-        reviewer_instruction="rev",
-        repair_instruction="fix {round_index}",
     )
 
 
@@ -206,18 +207,10 @@ def test_unknown_pipeline_rejected(tmp_path, monkeypatch):
         run_oracle(cfg, pipeline="turbo")
 
 
-def test_generic_mode_replaces_all_specialized_role_prompts(tmp_path):
+def test_role_prompts_are_always_generic(tmp_path):
     cfg = _make_config(tmp_path, outcomes=[True])
 
-    generic = _role_prompts(cfg, "generic")
-    specialized = _role_prompts(cfg, "specialized")
-
-    assert generic == GENERIC_PROMPTS
-    assert specialized.navigator == "nav"
-    assert specialized.reproducer == "rep"
-    assert specialized.critic == "crit"
-    assert specialized.reviewer == "rev"
-    assert specialized.repair == "fix {round_index}"
+    assert _role_prompts() == GENERIC_PROMPTS
 
 
 def test_generic_task_context_exposes_protocol_but_not_private_target(tmp_path):
@@ -253,7 +246,7 @@ def test_generic_task_context_uses_v2_artifact_contract_when_provided(tmp_path):
     assert str(cfg.tolerance) not in context
 
 
-def test_generic_code_validator_checks_interface_without_specialized_solution(tmp_path):
+def test_generic_code_validator_checks_public_interface_only(tmp_path):
     cfg = _make_config(tmp_path, outcomes=[True])
     cfg.public_result_protocol = (
         "Write `predictions.json`: a JSON list of measured predictions."
@@ -267,14 +260,11 @@ def test_generic_code_validator_checks_interface_without_specialized_solution(tm
     assert "tools/test.py" not in str(exc.value)
 
 
-def test_generic_contract_diagnostics_hide_specialized_repair_hints(tmp_path):
+def test_generic_contract_diagnostics_report_shape_not_solution_hints(tmp_path):
     cfg = _make_config(tmp_path, outcomes=[False])
     cfg.public_result_protocol = (
         "Write `predictions.json`: a JSON list of measured predictions."
     )
-    cfg.public_contract_diagnostics = lambda _session: [
-        "Use AutoAttack and the fine_label field."
-    ]
     diagnostics = _make_generic_contract_diagnostics(cfg)
 
     issues = diagnostics(Session(cfg.workdir))
@@ -339,37 +329,14 @@ def test_generic_repair_rejects_reentering_failed_package_initializer(tmp_path):
     )
 
 
-def test_generic_mode_does_not_call_specialized_code_validator(tmp_path, monkeypatch):
-    _patch(monkeypatch)
-    cfg = _make_config(tmp_path, outcomes=[True])
-    cfg.public_result_protocol = (
-        "Write `predictions.json`: a JSON list of measured predictions."
-    )
-
-    def specialized_validator(_content):
-        raise AssertionError("specialized validator leaked into generic mode")
-
-    cfg.validate_code = specialized_validator
-    cfg.public_contract_diagnostics = lambda _session: (_ for _ in ()).throw(
-        AssertionError("specialized diagnostics leaked into generic mode")
-    )
-    run_oracle(cfg, pipeline="solo", prompt_mode="generic")
-
-    assert _result(cfg)["workflow_error"] is None
-
-
 def test_generic_repair_uses_shared_full_file_path(tmp_path, monkeypatch):
     _patch(monkeypatch)
     cfg = _make_config(tmp_path, outcomes=[False, True])
     cfg.public_result_protocol = (
         "Write `predictions.json`: a JSON list of measured predictions."
     )
-    cfg.repair_submit_name = "submit_specialized_patch"
-    cfg.repair_make_validator = lambda *_args: (_ for _ in ()).throw(
-        AssertionError("specialized repair validator leaked into generic mode")
-    )
 
-    run_oracle(cfg, pipeline="solo-repair", prompt_mode="generic")
+    run_oracle(cfg, pipeline="solo-repair")
 
     result = _result(cfg)
     assert result["workflow_error"] is None
@@ -377,55 +344,24 @@ def test_generic_repair_uses_shared_full_file_path(tmp_path, monkeypatch):
     assert "repair_1" in result["roles"]
 
 
-def test_generic_mode_is_recorded_and_uses_separate_artifact_dir(tmp_path, monkeypatch):
+def test_generic_context_and_runtime_probe_are_always_enabled(tmp_path, monkeypatch):
     _patch(monkeypatch)
     cfg = _make_config(tmp_path, outcomes=[True])
     cfg.public_result_protocol = (
         "Write `predictions.json`: a JSON list of exactly 10 measured predictions."
     )
 
-    run_oracle(cfg, pipeline="full", prompt_mode="generic")
+    run_oracle(cfg, pipeline="full")
 
     result = _result(cfg)
-    generic_artifact = cfg.artifact_dir.parent / f"{cfg.artifact_dir.name}__generic"
-    assert result["prompt_mode"] == "generic"
-    assert result["oracle_contract_mode"] == "public_artifact_only"
     assert result["runtime_probe_enabled"] is True
     assert result["runtime_probe_budget"] == multi_rag.MAX_RUNTIME_PROBES
     assert result["total_runtime_probes"] == 0
-    assert (generic_artifact / "result.json").exists()
-    assert json.loads((generic_artifact / "result.json").read_text())["prompt_mode"] == "generic"
 
     navigator_messages = [
         json.loads(line)
-        for line in (generic_artifact / "navigator_transcript.jsonl").read_text().splitlines()
+        for line in (cfg.artifact_dir / "navigator_transcript.jsonl").read_text().splitlines()
     ]
     assert navigator_messages[0]["content"] == GENERIC_PROMPTS.navigator
-    assert "nav" not in navigator_messages[0]["content"]
     assert "predictions.json" in navigator_messages[1]["content"]
     assert "REPRO_RESULT" not in navigator_messages[1]["content"]
-
-
-def test_specialized_mode_keeps_original_reproducer_context(tmp_path, monkeypatch):
-    _patch(monkeypatch)
-    cfg = _make_config(tmp_path, outcomes=[True])
-
-    run_oracle(cfg, pipeline="full", prompt_mode="specialized")
-
-    result = _result(cfg)
-    messages = [
-        json.loads(line)
-        for line in (cfg.artifact_dir / "reproducer_transcript.jsonl").read_text().splitlines()
-    ]
-    assert result["oracle_contract_mode"] == "task_specific"
-    assert result["runtime_probe_enabled"] is False
-    assert result["runtime_probe_budget"] == 0
-    assert "# Navigator handoff" in messages[1]["content"]
-    assert "# Public task and result protocol" not in messages[1]["content"]
-
-
-def test_unknown_prompt_mode_rejected(tmp_path, monkeypatch):
-    _patch(monkeypatch)
-    cfg = _make_config(tmp_path, outcomes=[True])
-    with pytest.raises(ValueError, match="unknown prompt mode"):
-        run_oracle(cfg, prompt_mode="oracle-whispers")

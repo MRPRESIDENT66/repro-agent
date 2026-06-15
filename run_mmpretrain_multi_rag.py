@@ -9,5 +9,4 @@ if __name__ == "__main__":
     run_oracle(
         make_config(os.environ.get("MMPRETRAIN_ATTEMPT", "001")),
         pipeline=os.environ.get("PIPELINE", "full"),
-        prompt_mode=os.environ.get("PROMPT_MODE", "specialized"),
     )

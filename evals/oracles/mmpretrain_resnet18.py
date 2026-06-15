@@ -201,90 +201,6 @@ def _make_execute_eval():
 
 
 # ---------------------------------------------------------------------------
-# Role instructions
-# ---------------------------------------------------------------------------
-
-NAVIGATOR_INSTRUCTION = f"""You are the Navigator in a collaborative ML
-reproduction team working inside a large cloned mmpretrain repository. You
-receive no prewritten queries. Formulate your own search_repo queries to locate,
-with exact repository paths, the things a correct evaluation needs:
-- the evaluation ENTRY POINT: the repo has many look-alike test launchers
-  (slurm_test.sh, dist_test.sh, mim launchers) — find the actual Python entry
-  `tools/test.py` that runs a single-process CPU test;
-- the matching ResNet-18 CIFAR-10 config under `configs/` (the b16x8 cifar10
-  variant) and the base configs it inherits (model / dataset / runtime);
-- how `tools/test.py` is invoked (config + checkpoint positional args) and what
-  metric it prints (the mmengine `accuracy/top1:` line) and on how many images;
-- that data is at `data/cifar10/` and the checkpoint at `ckpt.pth`.
-Submit a concise grounded handoff with the exact entry path, config path, and the
-run command shape. Do not guess or mention the private target.
-
-Task:
-{TASK}"""
-
-REPRODUCER_INSTRUCTION = f"""You are the Reproducer/Builder. Generate a complete
-CPU-safe `eval_mmpretrain.py` wrapper. You receive a Navigator handoff but no
-prewritten RAG queries; search the repo for any remaining uncertainty (exact
-config path, the entry's CLI, the metric key) before coding.
-
-Public execution contract:
-- run the repository's own evaluation entry `tools/test.py` as a
-  subprocess (use `sys.executable`), passing the ResNet-18 CIFAR-10 config and
-  the checkpoint `ckpt.pth`; do NOT re-implement the model, dataset, or metric;
-- the environment is CPU-only and offline — do not download anything; the data is
-  already at `data/cifar10/`;
-- make `tools/test.py` DUMP per-sample predictions (e.g. pass `--out results.pkl`,
-  which mmengine writes per-sample); then load that dump and extract the predicted
-  class id for each test image;
-- WRITE `predictions.json`: a JSON list of the {N_EXAMPLES} predicted class ids in
-  test order. The verifier recomputes top-1 from this — you need not parse the
-  printed accuracy;
-- {EVIDENCE}
-
-Do not guess or mention the private target."""
-
-CRITIC_INSTRUCTION = f"""You are an independent Code Critic. Audit the generated
-`eval_mmpretrain.py` against the repository. You receive no prewritten queries:
-search the highest-risk unverified claim (is `tools/test.py` the right entry? is
-the config path correct and the cifar10 b16x8 variant? how does the dump store the
-predicted label?) and submit a complete corrected wrapper, not a prose review.
-
-Verify:
-- it invokes `tools/test.py` with the correct config + `ckpt.pth`;
-- it does not re-implement evaluation or hardcode predictions;
-- it dumps per-sample predictions from the tool and writes `predictions.json`:
-  a JSON list of {N_EXAMPLES} predicted class ids in test order.
-{EVIDENCE}
-
-Do not guess or mention the private target."""
-
-REVIEWER_INSTRUCTION = f"""You are the independent Reviewer. Audit the current
-`eval_mmpretrain.py` and the public execution log. Derive a search_repo query
-from the concrete execution error or the highest-risk semantic claim. The
-deterministic public-contract audit is authoritative. When execution failed,
-focus on the latest blocking error (wrong config path, wrong entry, a data path
-the tool cannot find, a parse that returned nothing). When execution succeeded,
-check:
-- the accuracy came from the repository test tool's real output, not a constant;
-- it is a percentage (0-100) and num_examples={N_EXAMPLES};
-- the correct config + checkpoint were used.
-End with exactly `REVIEW_STATUS: PASS` only when no repair is needed; otherwise
-end with exactly `REVIEW_STATUS: REPAIR_REQUIRED`.
-Do not guess or mention the private target."""
-
-REPAIR_INSTRUCTION = f"""You are Repair Agent {{round_index}}. Fix the concrete
-failure identified by the execution log and the independent Reviewer. Search the
-repository for the specific error (e.g. the exact config path, the test entry's
-CLI, the metric key, the data root), then submit a corrected complete
-`eval_mmpretrain.py`. Preserve all working behavior and the public contract: run
-the real `tools/test.py`, parse the printed top-1 accuracy, percentage units,
-and a `predictions.json` with {N_EXAMPLES} per-sample predicted class ids in test order, CPU-only offline.
-{EVIDENCE}
-
-Do not guess or mention the private target."""
-
-
-# ---------------------------------------------------------------------------
 # Config factory
 # ---------------------------------------------------------------------------
 
@@ -310,21 +226,11 @@ def make_config(attempt: str) -> OracleConfig:
         session_go_offline=True,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(),
-        validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
-        public_contract_diagnostics=contract_diagnostics,
         chance_level=10.0,  # CIFAR-10 top-1 (10 balanced classes)
         verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": _recompute},
         public_result_protocol=PUBLIC_RESULT_PROTOCOL,
         public_execution_command="python eval_mmpretrain.py",
-        navigator_instruction=NAVIGATOR_INSTRUCTION,
-        reproducer_instruction=REPRODUCER_INSTRUCTION,
-        critic_instruction=CRITIC_INSTRUCTION,
-        reviewer_instruction=REVIEWER_INSTRUCTION,
-        repair_instruction=REPAIR_INSTRUCTION,
-        repair_mode_label="full_file_replacement",
-        repair_submit_name="submit_code",
-        repair_submit_description="Submit the repaired eval_mmpretrain.py.",
         search_extra_exclude={
             "eval_mmpretrain.py",
             "navigator_report.md",

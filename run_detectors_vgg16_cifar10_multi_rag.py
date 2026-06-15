@@ -14,10 +14,8 @@ if __name__ == "__main__":
             num_examples=10000,
             num_classes=10,
             expected=93.37,
-            label_hint="image field 'img', gold field 'label' (10 classes)",
             workspace_slug="detectors_vgg16_cifar10",
             gold_labels="cifar10_test_labels.json",
         ),
         pipeline=os.environ.get("PIPELINE", "full"),
-        prompt_mode=os.environ.get("PROMPT_MODE", "specialized"),
     )

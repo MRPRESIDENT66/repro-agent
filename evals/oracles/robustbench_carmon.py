@@ -194,76 +194,6 @@ def _make_execute_eval(n_examples: int, epsilon: float):
 
 
 # ---------------------------------------------------------------------------
-# Role instructions
-# ---------------------------------------------------------------------------
-
-NAVIGATOR_INSTRUCTION = f"""You are the Navigator in a collaborative ML reproduction team.
-Search the RobustBench repository to understand:
-- how to call load_model() to load {MODEL_NAME} from a pre-downloaded checkpoint
-  (model_dir=robustbench_models; checkpoint is at robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt)
-- how to load CIFAR-10 test data from data_dir=robustbench_data (first {N_EXAMPLES} examples)
-  and what preprocessing is used
-- how AutoAttack 'custom' version works: which attribute sets n_restarts, the
-  exact API to run attacks {AA_ATTACKS}
-- how robust accuracy is computed and returned (fraction or percentage?)
-- CPU-only constraints
-
-Write a concise grounded handoff with exact API calls and file paths.
-Task: {TASK}"""
-
-REPRODUCER_INSTRUCTION = f"""You are the Reproducer. Write a complete CPU-safe
-`eval_robustbench.py` that:
-- loads {MODEL_NAME} via robustbench's load_model() with model_dir=robustbench_models
-- loads CIFAR-10 test data (first {N_EXAMPLES} examples) from data_dir=robustbench_data
-  using the correct preprocessing from get_preprocessing()
-- runs AutoAttack in 'custom' version with attacks_to_run={AA_ATTACKS},
-  epsilon={EPSILON}, {AA_RESTARTS} restart per attack, on CPU
-- obtains the adversarial examples AutoAttack produces, runs the model on them,
-  and takes `argmax` to get the predicted class id for each example
-- accepts --model_name, --model_dir, --data_dir, --n_examples, --epsilon CLI args
-- WRITES `predictions.json`: a JSON list of the {N_EXAMPLES} predicted class ids on
-  the ADVERSARIAL examples, in dataset order (the verifier computes robust accuracy)
-
-Before coding, search for how to set n_restarts on the AutoAttack object.
-Use robustbench imports directly; do not reimplement model loading or data loading.
-{EVIDENCE}
-Do not guess or mention the private target."""
-
-CRITIC_INSTRUCTION = f"""You are an independent Code Critic. Audit the generated
-eval_robustbench.py against the RobustBench repository source. Verify:
-- load_model() args: model_name, dataset, threat_model, model_dir
-- get_preprocessing() is called correctly before load_clean_dataset()
-- AutoAttack instantiation: norm='Linf', eps={EPSILON}, version='custom',
-  attacks_to_run={AA_ATTACKS}, device=cpu
-- n_restarts={AA_RESTARTS} set correctly (check exact attribute path in source)
-- robust accuracy is percentage (0–100), not fraction (0–1)
-- predictions.json has {N_EXAMPLES} adversarial predictions (not hardcoded)
-- CLI args accepted correctly
-
-Submit a complete corrected script, not prose.
-{EVIDENCE}
-Do not guess or mention the private target."""
-
-REVIEWER_INSTRUCTION = f"""You are the independent Reviewer. Audit the
-implementation and execution log. Derive a search_repo query from the concrete
-error or highest-risk semantic claim. The deterministic public-contract audit is
-authoritative. When execution succeeded, check:
-- robust accuracy is percentage (0–100), not fraction
-- predictions.json has {N_EXAMPLES} adversarial predictions (not hardcoded)
-- AutoAttack was actually run (not skipped) and predictions are on the ADVERSARIAL examples
-- predictions.json came from actual model evaluation, not hardcoded
-End with exactly `REVIEW_STATUS: PASS` or `REVIEW_STATUS: REPAIR_REQUIRED`.
-Do not guess or mention the private target."""
-
-REPAIR_INSTRUCTION = f"""You are Repair Agent {{round_index}}. Fix the
-concrete failure identified by the execution log and Reviewer. Search the repo
-for the specific error or API question, then submit a corrected complete script.
-Preserve: predictions.json with {N_EXAMPLES} per-sample predictions on the adversarial examples, in dataset order.
-{EVIDENCE}
-Do not guess or mention the private target."""
-
-
-# ---------------------------------------------------------------------------
 # Config factory
 # ---------------------------------------------------------------------------
 
@@ -292,9 +222,7 @@ def make_config(attempt: str) -> OracleConfig:
         session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(N_EXAMPLES, EPSILON),
-        validate_code=_validate_code,
         public_contract_passes=lambda session: not contract_diagnostics(session),
-        public_contract_diagnostics=contract_diagnostics,
         verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": recompute},
         public_result_protocol=EVIDENCE,
         public_execution_command=(
@@ -305,14 +233,6 @@ def make_config(attempt: str) -> OracleConfig:
             f"--n_examples {N_EXAMPLES} "
             f"--epsilon {EPSILON}"
         ),
-        navigator_instruction=NAVIGATOR_INSTRUCTION,
-        reproducer_instruction=REPRODUCER_INSTRUCTION,
-        critic_instruction=CRITIC_INSTRUCTION,
-        reviewer_instruction=REVIEWER_INSTRUCTION,
-        repair_instruction=REPAIR_INSTRUCTION,
-        repair_mode_label="full_file_replacement",
-        repair_submit_name="submit_code",
-        repair_submit_description="Submit the repaired eval_robustbench.py.",
         search_extra_exclude={
             "eval_robustbench.py",
             "navigator_report.md",

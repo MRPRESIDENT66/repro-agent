@@ -11,7 +11,7 @@
 # pre-provisioned in the image. Blind: the agent never sees 94.82.
 paper: "mmpretrain model zoo — ResNet-18 b16x8 CIFAR-10 (mmclassification v0)"
 repo: "https://github.com/open-mmlab/mmpretrain"
-commit_sha: "main"             # TODO pin before freezing benchmark
+commit_sha: "ee7f2e88501f61aa95c742dd5f429f039935ee90"  # pinned; see evals/FREEZE.md
 backend: docker
 docker_image: "repro-mmpretrain:latest"
 local_repo: "repos/mmpretrain"  # copied into the session workdir for navigation

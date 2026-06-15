@@ -4,7 +4,7 @@
 paper: "Dadalto et al., `detectors` library — pretrained CIFAR-100 ResNet-18"
 repo: "https://github.com/edadaltocg/detectors"
 hf_model: "edadaltocg/resnet18_cifar100"
-commit_sha: "main"             # TODO pin before freezing benchmark
+commit_sha: "main"  # detectors/HF snapshot pinned by cache hash; see evals/FREEZE.md
 backend: subprocess_mps
 model: resnet18_cifar100
 

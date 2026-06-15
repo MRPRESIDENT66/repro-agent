@@ -1,7 +1,7 @@
 # First verified oracle (established by hand 2026-06-11). The Agent's M1 target.
 paper: "chenyaofo/pytorch-cifar-models — CIFAR model zoo (README results table)"
 repo: "https://github.com/chenyaofo/pytorch-cifar-models"
-commit_sha: "master"            # TODO pin to a SHA before freezing the benchmark
+commit_sha: "master"  # torch.hub (chenyaofo); pinned via HF/torch cache, see evals/FREEZE.md
 backend: subprocess_mps         # Mac; ~1 min eval on MPS
 model: cifar10_resnet20
 

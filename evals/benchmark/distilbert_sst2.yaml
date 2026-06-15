@@ -2,7 +2,7 @@
 paper: "HuggingFace distilbert-base-uncased-finetuned-sst-2-english (model card model-index)"
 repo: "https://huggingface.co/distilbert/distilbert-base-uncased-finetuned-sst-2-english"
 hf_model: "distilbert-base-uncased-finetuned-sst-2-english"
-commit_sha: "main"
+commit_sha: "main"  # HuggingFace snapshot pinned by cache hash; see evals/FREEZE.md
 backend: subprocess_mps
 model: distilbert-sst2
 domain: nlp

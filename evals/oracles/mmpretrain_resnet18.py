@@ -21,11 +21,10 @@ from verify.check import extract_structured_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "repos" / "mmpretrain"
-CKPT_SOURCE = ROOT / "workspaces" / "mmpretrain_resnet18_cifar10" / "ckpt.pth"
-CIFAR_SOURCE = (
-    ROOT / "workspaces" / "mmpretrain_resnet18_cifar10"
-    / "mmpretrain" / "data" / "cifar10"
-)
+# Provisioned assets live in a stable (gitignored) dir, like robustbench_models/
+# — not under the transient workspaces/ tree that gets wiped between runs.
+CKPT_SOURCE = ROOT / "repos" / "mmpretrain_assets" / "ckpt.pth"
+CIFAR_SOURCE = ROOT / "repos" / "mmpretrain_assets" / "cifar10"
 IMAGE = "repro-mmpretrain:latest"
 
 EXPECTED = 94.82

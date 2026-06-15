@@ -340,15 +340,15 @@ Retrieved source snippets:
 
 ## Query 2
 
-def load_cifar10 robustbench/data.py
+def load_clean_dataset robustbench data.py
 
 ## Result 2
 
 Most relevant files:
-  robustbench/data.py  —  PREPROCESSINGS = {
   robustbench/loaders.py  —  This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
+  robustbench/data.py  —  PREPROCESSINGS = {
   robustbench/eval.py  —  CORRUPTION_DATASET_LOADERS
-  robustbench/model_zoo/cifar10.py  —  DMWideResNet, Swish, DMPreActResNet
+  robustbench/model_zoo/models.py  —  ModelsDict = OrderedDictType[str, Dict[str, Any]]
   robustbench/utils.py  —  ACC_FIELDS = {
 
 Error evidence used for ranking:
@@ -358,82 +358,21 @@ TypeError: get_preprocessing() missing 1 required positional argument: 'preproce
 
 Retrieved source snippets:
 
-## Source: robustbench/data.py
-
-# Lines 13-24
-   13: from torch import nn
-   14: 
-   15: from robustbench.model_zoo import model_dicts as all_models
-   16: from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
-   17: from robustbench.zenodo_download import DownloadError, zenodo_download
-   18: from robustbench.loaders import CustomImageFolder
-   19: 
-   20: PREPROCESSINGS = {
-   21:     'Res256Crop224':
-   22:     transforms.Compose([
-   23:         transforms.Resize(256),
-   24:         transforms.CenterCrop(224),
-
-# Lines 43-54
-   43:         transforms.ToTensor()
-   44:     ])
-   45: }
-   46: 
-   47: 
-   48: def get_timm_model_preprocessing(model_name: str) -> Callable:
-   49:     model = timm.create_model(model_name)
-   50:     if isinstance(model, nn.Sequential):
-   51:         # Normalization has been applied, take the inner model to get the other info
-   52:         model = model.model
-   53:     interpolation = model.default_cfg['interpolation']
-   54:     crop_pct = model.default_cfg['crop_pct']
-
-# Lines 61-103
-   61:         transforms.CenterCrop(img_size),
-   62:         transforms.ToTensor()
-   63:     ])
-   64: 
-   65: 
-   66: def get_preprocessing(
-   67:         dataset: BenchmarkDataset, threat_model: ThreatModel,
-   68:         model_name: Optional[str],
-   69:         preprocessing: Optional[Union[str, Callable]]) -> Callable:
-   70:     # If preprocessing is already as a function, then return it
-   71:     if isinstance(preprocessing, Callable):
-   72:         return preprocessing
-   73:     # If preprocessing is already specified as a string, then fetch it and return it
-   74:     if preprocessing is not None:
-   75:         return PREPROCESSINGS[preprocessing]
-   76:     # If the dataset is not imagenet, then the only needed preprocessing is ToTensor
-   77:     if dataset != BenchmarkDataset.imagenet:
-   78:         return PREPROCESSINGS[None]
-   79:     # At this point the model name should be specified
-   80:     if model_name is None:
-   81:         raise Exception(
-   82:             "Preprocessing should be specified if the model is not already in the model zoo"
-   83:         )
-   84:     # See if the model is a timm model, if this is so, then use the custom function
-   85:     lower_model_name = model_name.lower().replace('-', '_')
-   86:     timm_model_name = f"{lower_model_name}_{dataset.value.lower()}_{threat_model.value.lower()}"
-   87:     if timm.is_model(timm_model_name):
-   88:         return get_timm_model_preprocessing(timm_model_name)
-   89:     # Or directly fetch the preprocessing for the model specified in the dictionary
-   90:     
-   91:     # since there is only `corruptions` folder for models in the Model Zoo
-   92:     threat_model = ThreatModel(threat_model.value.replace('_3d', ''))
-   93:     prepr = all_models[dataset][threat_model][model_name]['preprocessing']
-   94:     return PREPROCESSINGS[prepr]
-   95: 
-   96: 
-   97: def _load_dataset(
-   98:         dataset: Dataset,
-   99:         n_examples: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-  100:     batch_size = 100
-  101:     test_loader = data.DataLoader(dataset,
-  102:                                   batch_size=batch_size,
-  103:    
-
 ## Source: robustbench/loaders.py
+
+# Lines 1-12
+    1: """
+    2: This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
+    3: """
+    4: import pkg_resources
+    5: 
+    6: from torchvision.datasets.vision import VisionDataset
+    7: 
+    8: import torch
+    9: import torch.utils.data as data
+   10: import torchvision.transforms as transforms
+   11: 
+   12: from PIL import Image
 
 # Lines 14-36
    14: import os
@@ -460,7 +399,7 @@ Retrieved source snippets:
    35:         root/class_y/nsdf3.ext
    36:         root/class_y/asd932_.ext
 
-# Lines 49-60
+# Lines 49-74
    49:             both extensions and is_valid_file should not be passed.
    50:      Attributes:
    51:         classes (list): List of the class names.
@@ -473,68 +412,121 @@ Retrieved source snippets:
    58:                  root,
    59:                  loader,
    60:                  extensions=None,
+   61:                  transform=None,
+   62:                  target_transform=None,
+   63:                  is_valid_file=None):
+   64:         super(CustomDatasetFolder, self).__init__(root)
+   65:         self.transform = transform
+   66:         self.target_transform = target_transform
+   67:         classes, class_to_idx = self._find_classes(self.root)
+   68:         samples = make_custom_dataset(
+   69:             self.root, 'helper_files/imagenet_test_image_ids.txt',
+   70:             class_to_idx)
+   71:         if len(samples) == 0:
+   72:             raise (RuntimeError("Found 0 files in subfolders of: " +
+   73:                                 self.root + "\n"
+   74:                                 "Supported extensions are: " +
+
+# Lines 82-93
+   82:         self.samples = samples
+   83:         self.targets = [s[1] for s in samples]
+   84: 
+   85:     def _find_classes(self, dir):
+   86:         """
+   87:         Finds the class folders in a dataset.
+   88:         Args:
+   89:             dir (string): Root directory path.
+   90:         Returns:
+   91:             tuple: (classes, class_to_idx) where classes are relative to (dir), and class_to_idx is a dictionary.
+   92:         Ensures:
+   93:             No class is a subdirectory of another.
 
 # Lines 102-113
   102:             ]
   103:         classes.sort()
-  104:         class_to_idx = {classes[i]: i for i in range(len(classes))}
-  105:         return classes, class_to_idx
-  106: 
-  107:     def __getitem__(self, index):
-  108:         """
-  109:         Args:
-  110:             index (int): Index
-  111:         Returns:
-  112:             tuple: (sample, target) where target is class_index of the target class.
-  113:         """
+  104:         class_to_idx = {classe
 
-# Lines 125-161
-  125: 
-  126: IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif',
-  127:                   '.tiff', '.webp')
-  128: 
-  129: 
-  130: def pil_loader(path):
-  131:     # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
-  132:     with open(path, 'rb') as f:
-  133:         img = Image.open(f)
-  134:         return img.convert('RGB')
-  135: 
-  136: 
-  137: def accimage_loader(path):
-  138:     import accimage
-  139:     try:
-  140:         return accimage.Image(path)
-  141:     except IOError:
-  142:         # Potentially a decoding problem, fall back to PIL.Image
-  143:         return pil_loader(path)
-  144: 
-  145: 
-  146: def default_loader(path):
-  147:     from torchvision import get_image_backend
-  148:     if get_image_backend() == 'accimage':
-  149:         return accimage_loader(path)
-  150:     else:
-  151:         return pil_loader(path)
-  152: 
-  153: 
-  154: class CustomImageFolder(CustomDatasetFolder):
-  155:     """A generic data loader where the images are arranged in this way: ::
-  156:         root/dog/xxx.png
-  157:         root/dog/xxy.png
-  158:         root/dog/xxz.png
-  159:         root/cat/123.png
-  160:         root/cat/nsdf3.png
-  161:         root/cat/asd932_.png
+## Source: robustbench/data.py
 
-# Lines 176-187
-  176: 
-  177:     def __init__(self,
- 
+# Lines 43-54
+   43:         transforms.ToTensor()
+   44:     ])
+   45: }
+   46: 
+   47: 
+   48: def get_timm_model_preprocessing(model_name: str) -> Callable:
+   49:     model = timm.create_model(model_name)
+   50:     if isinstance(model, nn.Sequential):
+   51:         # Normalization has been applied, take the inner model to get the other info
+   52:         model = model.model
+   53:     interpolation = model.default_cfg['interpolation']
+   54:     crop_pct = model.default_cfg['crop_pct']
+
+# Lines 61-82
+   61:         transforms.CenterCrop(img_size),
+   62:         transforms.ToTensor()
+   63:     ])
+   64: 
+   65: 
+   66: def get_preprocessing(
+   67:         dataset: BenchmarkDataset, threat_model: ThreatModel,
+   68:         model_name: Optional[str],
+   69:         preprocessing: Optional[Union[str, Callable]]) -> Callable:
+   70:     # If preprocessing is already as a function, then return it
+   71:     if isinstance(preprocessing, Callable):
+   72:         return preprocessing
+   73:     # If preprocessing is already specified as a string, then fetch it and return it
+   74:     if preprocessing is not None:
+   75:         return PREPROCESSINGS[preprocessing]
+   76:     # If the dataset is not imagenet, then the only needed preprocessing is ToTensor
+   77:     if dataset != BenchmarkDataset.imagenet:
+   78:         return PREPROCESSINGS[None]
+   79:     # At this point the model name should be specified
+   80:     if model_name is None:
+   81:         raise Exception(
+   82:             "Preprocessing should be specified if the model is not already in the model zoo"
+
+# Lines 88-103
+   88:         return get_timm_model_preprocessing(timm_model_name)
+   89:     # Or directly fetch the preprocessing for the model specified in the dictionary
+   90:     
+   91:     # since there is only `corruptions` folder for models in the Model Zoo
+   92:     threat_model = ThreatModel(threat_model.value.replace('_3d', ''))
+   93:     prepr = all_models[dataset][threat_model][model_name]['preprocessing']
+   94:     return PREPROCESSINGS[prepr]
+   95: 
+   96: 
+   97: def _load_dataset(
+   98:         dataset: Dataset,
+   99:         n_examples: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+  100:     batch_size = 100
+  101:     test_loader = data.DataLoader(dataset,
+  102:                                   batch_size=batch_size,
+  103:                                   shuffle=False,
+
+# Lines 162-185
+  162:     x_test, y_test, paths = next(iter(test_loader))
+  163: 
+  164:     return x_test, y_test
+  165: 
+  166: 
+  167: CleanDatasetLoader = Callable[[Optional[int], str, Callable],
+  168:                               Tuple[torch.Tensor, torch.Tensor]]
+  169: _clean_dataset_loaders: Dict[BenchmarkDataset, CleanDatasetLoader] = {
+  170:     BenchmarkDataset.cifar_10: load_cifar10,
+  171:     BenchmarkDataset.cifar_100: load_cifar100,
+  172:     BenchmarkDataset.imagenet: load_imagenet,
+  173: }
+  174: 
+  175: 
+  176: def load_clean_dataset(dataset: BenchmarkDataset, n_examples: Optional[int],
+  177:                        data_dir: str,
+  178:                        prepr: Callable) -> Tuple[torch.Tensor, torch.Tensor]:
+  179:     return _c
 
 ## Source: robustbench/eval.py
 
-# Lines 10-31
+# Lines 10-24
    10: from autoattack import AutoAttack
    11: from autoattack.state import EvaluationState
    12: from torch import nn
@@ -550,15 +542,22 @@ Retrieved source snippets:
    22: def benchmark(
    23:     model: Union[nn.Module, Sequence[nn.Module]],
    24:     n_examples: int = 10000,
-   25:     dataset: Union[str, BenchmarkDataset] = BenchmarkDataset.cifar_10,
-   26:     threat_model: Union[str, ThreatModel] = ThreatModel.Linf,
-   27:     to_disk: bool = False,
-   28:     model_name: Optional[str] = None,
-   29:     data_dir: str = "./data",
-   30:     corruptions_data_dir: Optional[str] = None,
-   31:     device: Optional[Union[torch.device, Sequence[torch.device]]] = None,
 
-# Lines 77-88
+# Lines 46-57
+   46:     :param threat_model: The threat model to use to benchmark, must be one of {L2, Linf
+   47:     corruptions}
+   48:     :param to_disk: Whether the results must be saved on disk as .json.
+   49:     :param model_name: The name of the model to use to save the results. Must be specified if
+   50:     to_json is True.
+   51:     :param data_dir: The directory where the dataset is or where the dataset must be downloaded.
+   52:     :param device: The device to run the computations.
+   53:     :param batch_size: The batch size to run the computations. The larger, the faster the
+   54:     evaluation.
+   55:     :param eps: The epsilon to use for L2 and Linf threat models. Must not be specified for
+   56:     corruptions threat model.
+   57:     :param preprocessing: The preprocessing that should be used for ImageNet benchmarking. Should be
+
+# Lines 77-91
    77:     threat_model_: ThreatModel = ThreatModel(threat_model)
    78: 
    79:     device = device or torch.device("cpu")
@@ -571,6 +570,9 @@ Retrieved source snippets:
    86:                                                     data_dir, prepr)
    87: 
    88:     accuracy = clean_accuracy(model,
+   89:                               clean_x_test,
+   90:                               clean_y_test,
+   91:                               batch_size=batch_size,
 
 # Lines 121-132
   121:     
@@ -586,82 +588,28 @@ Retrieved source snippets:
   131:             batch_size, corruptions_data_dir, dataset_, threat_model_, 
   132:             device, model, n_examples, to_disk, prepr, model_name)
 
-# Lines 145-168
-  145:                     adv_accuracy, eps, extra_metrics)
-  146: 
-  147:     return accuracy, adv_accuracy
-  148: 
-  149: 
-  150: def corruptions_evaluation(batch_size: int, data_dir: str,
-  151:                            dataset: BenchmarkDataset, threat_model: ThreatModel, 
-  152:                            device: torch.device, model: nn.Module, n_examples: int, 
-  153:                            to_disk: bool, prepr: str, model_name: Optional[str]) -> float:
-  154:     if to_disk and model_name is None:
-  155:         raise ValueError(
-  156:             "If `to_disk` is True, `model_name` should be specified.")
+# Lines 157-168
   157: 
   158:     corruptions = CORRUPTIONS_DICT[dataset][threat_model]
-  159:     model_results_dict: Dict[Tup
+  159:     model_results_dict: D
 
-## Source: robustbench/model_zoo/cifar10.py
+## Source: robustbench/model_zoo/models.py
 
-# Lines 2-32
-    2: 
-    3: import timm
-    4: import torch
-    5: from torch import nn
-    6: 
-    7: from robustbench.model_zoo.architectures.dm_wide_resnet import CIFAR10_MEAN, CIFAR10_STD, \
-    8:     DMWideResNet, Swish, DMPreActResNet
-    9: from robustbench.model_zoo.architectures.resnet import Bottleneck, BottleneckChen2020AdversarialNet, \
-   10:     PreActBlock, PreActBlockV2, PreActResNet, ResNet, ResNet18, BasicBlock
-   11: from robustbench.model_zoo.architectures.resnext import CifarResNeXt, \
-   12:     ResNeXtBottleneck
-   13: from robustbench.model_zoo.architectures.resnest import ResNest152
-   14: from robustbench.model_zoo.architectures.wide_resnet import WideResNet
-   15: from robustbench.model_zoo.architectures.robust_wide_resnet import RobustWideResNet
-   16: from robustbench.model_zoo.architectures.boosting_wide_resnet import BoostingWideResNet
-   17: from robustbench.model_zoo.enums import ThreatModel
-   18: from robustbench.model_zoo.architectures.CARD_resnet import LRR_ResNet, WidePreActResNet
-   19: from robustbench.model_zoo.architectures.paf_wide_resnet import pssilu_wrn_28_10
-   20: from robustbench.model_zoo.architectures.sodef_layers import rebuffi_sodef
-   21: from robustbench.model_zoo.architectures import xcit
-   22: from robustbench.model_zoo.architectures import robust_resnet
-   23: from robustbench.model_zoo.architectures.comp_model import get_composite_model, \
-   24:     get_nonlin_mixed_classifier
-   25: from robustbench.model_zoo.architectures.robustarch_wide_resnet import get_model as get_robustarch_model
-   26: from robustbench.model_zoo.architectures.sparsified_model import get_sparse_model
-   27: 
-   28: 
-   29: class Hendrycks2020AugMixResNeXtNet(CifarResNeXt):
-   30: 
-   31:     def __init__(self, depth=29, num_classes=10, cardinality=4, base_width=32):
-   32:         super().__init__(ResNeXtBottleneck,
+from collections import OrderedDict
+from typing import Any, Dict, Dict as OrderedDictType
 
-# Lines 877-899
-  877:             lambda: WideResNet(depth=34, widen_factor=10, sub_block1=False),
-  878:             'gdrive_id':
-  879:             '1-ArD-TugRXUbH3VtM9qnzvby6NvdXNUN'
-  880:         }),
-  881:         ('Bai2023Improving_edm', {
-  882:             'model': lambda: get_composite_model('edm', 'cifar10'),  # TODO: check device calls.
-  883:             'gdrive_id': [
-  884:             '1-5EwY_5tQZudo9idwXiUGr3P4OUUGaQN',
-  885:             '1-RF7ZSS-PAh6bfQcuqx4lh9bc9BUGnap',
-  886:             '1-7oV7QDgz8McvhbaCj6Owx3Rz3daiPrT']
-  887:         }),
-  888:         ('Peng2023Robust', {
-  889:             'model': lambda: get_robustarch_model('ra_wrn70_16'),  # TODO: check device calls.
-  890:             'gdrive_id': '1-6M8KHZdPmgqYkBSkdZQ2fLwp86ZQ9VU'
-  891:         }),
-  892:         ('Bai2024MixedNUTS', {
-  893:             'model': lambda: get_nonlin_mixed_classifier('cifar10'),  # TODO: check device calls.
-  894:             'gdrive_id': [
-  895:             '1-5EwY_5tQZudo9idwXiUGr3P4OUUGaQN',
-  896:             '1-6M8KHZdPmgqYkBSkdZQ2fLwp86ZQ9VU']
-  897:         }),
-  898:         ('Chen2024Data_WRN_34_10', {
-  899:             'model': lambda: WideResNet(depth=34, widen_factor=10),
+from robustbench.model_zoo.cifar10 import cifar_10_models
+from robustbench.model_zoo.cifar100 import cifar_100_models
+from robustbench.model_zoo.imagenet import imagenet_models
+from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
 
-# Lines 903-914
-  903:             'model': lambda: WideResNet(depth=34, widen_factor=20),
+ModelsDict = OrderedDictType[str, Dict[str, Any]]
+ThreatModelsDict = OrderedDictType[ThreatModel, ModelsDict]
+BenchmarkDict = OrderedDictType[BenchmarkDataset, ThreatModelsDict]
+
+model_dicts: BenchmarkDict = OrderedDict([
+    (BenchmarkDataset.cifar_10, cifar_10_models),
+    (BenchmarkDataset.cifar_100, cifar_100_models),
+    (BenchmarkDataset.imagenet, imagenet_models)
+])
+

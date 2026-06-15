@@ -4,39 +4,36 @@
 
 ```python
 from robustbench.utils import load_model
+from robustbench.model_zoo.enums import ThreatModel
 
 model = load_model(
     model_name='Carmon2019Unlabeled',
-    model_dir='robustbench_models',          # base directory
+    model_dir='robustbench_models',          # base directory containing cifar10/Linf/
     dataset='cifar10',
-    threat_model='Linf',
-    custom_checkpoint='robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt'
+    threat_model=ThreatModel.Linf,
+    custom_checkpoint='robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt'  # explicit path
 )
-model.eval()
+model.eval()  # already eval by default, but explicit
 ```
 
 **Key details:**
-- `load_model` expects the checkpoint at `{model_dir}/{dataset}/{threat_model}/{model_name}.pt`
-- The checkpoint is already at `robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt`
-- Model architecture: `WideResNet(depth=28, widen_factor=10, sub_block1=True)`
-- Model includes built-in normalization (mean/std buffers) — no external preprocessing needed
+- `load_model` expects `model_dir` to contain subdirectory `cifar10/Linf/` where the checkpoint `Carmon2019Unlabeled.pt` resides
+- The model is a `WideResNet(depth=28, widen_factor=10, sub_block1=True)` with built-in normalization (CIFAR-10 mean/std)
+- Returns model on CPU by default (`map_location=torch.device('cpu')`)
 
 ### 2. Load CIFAR-10 Test Data (first 50 examples)
 
 ```python
-from robustbench.data import load_cifar10
+from robustbench.data import load_clean_dataset
 
-x_test, y_test = load_cifar10(
+x_test, y_test = load_clean_dataset(
+    dataset='cifar10',
     n_examples=50,
-    data_dir='robustbench_data',
-    transforms=None  # model handles normalization internally
+    data_dir='robustbench_data'
 )
 ```
 
-**Key details:**
-- `load_cifar10` returns `(torch.Tensor, torch.Tensor)` with shape `(50, 3, 32, 32)` and `(50,)`
-- No external preprocessing needed — the DMWideResNet architecture applies `(x - mean) / std` internally
-- Internal normalization constants: `mean=(0.4914, 0.4822, 0.4465)`, `std=(0.2471, 0.2435, 0.2616)`
+**Preprocessing:** `transforms.ToTensor()` only (no normalization — model handles it internally via `ImageNormalizer`).
 
 ### 3. AutoAttack Custom Configuration
 
@@ -47,21 +44,20 @@ adversary = AutoAttack(
     model,
     norm='Linf',
     eps=0.031372549,
-    version='custom',
-    device='cpu'
+    version='custom',           # enables custom attack list
+    attacks_to_run=['apgd-ce', 'apgd-dlr'],  # only these two attacks
+    device='cpu',
+    log_path='./aa_log.txt'
 )
 
-# Configure attacks: 1 restart each for apgd-ce and apgd-dlr
-adversary.attacks_to_run = ['apgd-ce', 'apgd-dlr']
-adversary.apgd.n_restarts = 1
-adversary.apgd_targeted.n_restarts = 1  # not used but set for completeness
+# Set number of restarts for each attack
+adversary.apgd.n_restarts = 1   # APGD-CE restarts
+adversary.apgd_targeted.n_restarts = 1  # APGD-DLR (uses targeted variant internally)
 ```
 
-**Key details:**
-- `version='custom'` enables manual attack selection
-- `attacks_to_run` attribute controls which attacks execute
-- `n_restarts` is set via `adversary.apgd.n_restarts` (not a constructor argument)
-- CPU-only: set `device='cpu'` in constructor
+**Key attributes:**
+- `adversary.apgd.n_restarts` — controls restarts for APGD-CE
+- `adversary.apgd_targeted.n_restarts` — controls restarts for APGD-DLR
 
 ### 4. Run Attack and Compute Robust Accuracy
 
@@ -70,35 +66,19 @@ adversary.apgd_targeted.n_restarts = 1  # not used but set for completeness
 x_adv = adversary.run_standard_evaluation(x_test, y_test)
 
 # Compute robust accuracy
-batch_size = 50
-n_batches = 1  # only 50 examples
-correct = 0
-total = 0
+from robustbench.utils import clean_accuracy
 
-with torch.no_grad():
-    for i in range(0, len(x_test), batch_size):
-        x_batch = x_adv[i:i+batch_size]
-        y_batch = y_test[i:i+batch_size]
-        outputs = model(x_batch)
-        _, predicted = outputs.max(1)
-        total += y_batch.size(0)
-        correct += predicted.eq(y_batch).sum().item()
-
-robust_acc = correct / total  # fraction (not percentage)
-print(f'Robust accuracy: {robust_acc:.4f}')
+robust_acc = clean_accuracy(model, x_adv, y_test)
+# Returns fraction (e.g., 0.86 for 86%)
 ```
-
-**Key details:**
-- `run_standard_evaluation` returns adversarial examples tensor
-- Robust accuracy is computed as fraction (0.0–1.0), not percentage
-- Model outputs logits; use `outputs.max(1)` for predictions
 
 ### 5. Complete Script
 
 ```python
 import torch
-from robustbench.utils import load_model
-from robustbench.data import load_cifar10
+from robustbench.utils import load_model, clean_accuracy
+from robustbench.data import load_clean_dataset
+from robustbench.model_zoo.enums import ThreatModel
 from autoattack import AutoAttack
 
 # Load model
@@ -106,34 +86,35 @@ model = load_model(
     model_name='Carmon2019Unlabeled',
     model_dir='robustbench_models',
     dataset='cifar10',
-    threat_model='Linf',
+    threat_model=ThreatModel.Linf,
     custom_checkpoint='robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt'
 )
-model.eval()
 
 # Load data (first 50 examples)
-x_test, y_test = load_cifar10(n_examples=50, data_dir='robustbench_data')
+x_test, y_test = load_clean_dataset(
+    dataset='cifar10',
+    n_examples=50,
+    data_dir='robustbench_data'
+)
 
 # Configure AutoAttack
-adversary = AutoAttack(model, norm='Linf', eps=0.031372549, version='custom', device='cpu')
-adversary.attacks_to_run = ['apgd-ce', 'apgd-dlr']
+adversary = AutoAttack(
+    model,
+    norm='Linf',
+    eps=0.031372549,
+    version='custom',
+    attacks_to_run=['apgd-ce', 'apgd-dlr'],
+    device='cpu',
+    log_path='./aa_log.txt'
+)
 adversary.apgd.n_restarts = 1
+adversary.apgd_targeted.n_restarts = 1
 
-# Run attack
+# Evaluate
 x_adv = adversary.run_standard_evaluation(x_test, y_test)
+robust_acc = clean_accuracy(model, x_adv, y_test)
 
-# Compute robust accuracy
-correct = (model(x_adv).argmax(1) == y_test).sum().item()
-robust_acc = correct / len(x_test)
-print(f'Robust accuracy: {robust_acc:.4f}')
+print(f"Robust accuracy: {robust_acc:.4f}")  # fraction, e.g., 0.8600
 ```
 
-### File Paths Summary
-| Item | Path |
-|------|------|
-| Model checkpoint | `robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt` |
-| CIFAR-10 data | `robustbench_data/` (standard torchvision structure) |
-| RobustBench repo | `robustbench/` (installed package) |
-
-### Expected Output
-- Robust accuracy ≈ 0.60–0.65 (fraction) for first 50 examples with 1 restart each
+**Expected output:** Robust accuracy as a fraction (e.g., ~0.86 for 86%).

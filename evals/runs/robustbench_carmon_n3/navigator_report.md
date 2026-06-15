@@ -3,85 +3,67 @@
 Reproduce robust accuracy of Carmon2019Unlabeled on CIFAR-10 under Linf threat model
 using AutoAttack custom version with ['apgd-ce', 'apgd-dlr'], 1 restart each.
 
-Environment: CPU-only, offline.
-Checkpoint: robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt
-Data: robustbench_data (first 50 CIFAR-10 test examples)
-Epsilon: 0.031372549
+Environment: CPU-only, offline. Uses pre-downloaded checkpoint and CIFAR-10 test data.
 """
 
 import torch
 import torchvision.transforms as transforms
-from robustbench.utils import load_model
+from robustbench.utils import load_model, clean_accuracy
 from robustbench.data import load_clean_dataset
 from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
 from autoattack import AutoAttack
 
-# ── Configuration ──────────────────────────────────────────────────────────
+# Configuration
 MODEL_NAME = "Carmon2019Unlabeled"
 DATASET = BenchmarkDataset.cifar_10
 THREAT_MODEL = ThreatModel.Linf
-EPS = 0.031372549
-N_EXAMPLES = 50
-MODEL_DIR = "robustbench_models"
 DATA_DIR = "robustbench_data"
+MODEL_DIR = "robustbench_models"
+N_EXAMPLES = 50
+EPS = 0.031372549
 DEVICE = torch.device("cpu")
 
-# ── 1. Load model from local checkpoint ────────────────────────────────────
-# load_model() automatically looks for the checkpoint in MODEL_DIR/<dataset>/<threat_model>/<model_name>.pt
+# 1. Load model from pre-downloaded checkpoint
 model = load_model(
     model_name=MODEL_NAME,
+    model_dir=MODEL_DIR,
     dataset=DATASET,
     threat_model=THREAT_MODEL,
-    model_dir=MODEL_DIR,
-    device=DEVICE,
+    device=DEVICE
 )
 model.eval()
 
-# ── 2. Load CIFAR-10 test data (first 50 examples) ────────────────────────
-# The preprocessing for Carmon2019Unlabeled under Linf is identity (no normalization)
-# because the model architecture (DMWideResNet) applies its own normalization internally.
-# We pass transforms.ToTensor() as the preprocessing.
+# 2. Load CIFAR-10 test data (first 50 examples) with correct preprocessing
+# Carmon2019Unlabeled uses DMWideResNet which applies its own normalization internally,
+# so we only need ToTensor() for the data loader.
 preprocessing = transforms.Compose([transforms.ToTensor()])
-
 x_test, y_test = load_clean_dataset(
     dataset=DATASET,
     n_examples=N_EXAMPLES,
     data_dir=DATA_DIR,
-    prepr=preprocessing,
+    prepr=preprocessing
 )
+x_test, y_test = x_test.to(DEVICE), y_test.to(DEVICE)
 
-# ── 3. Set up AutoAttack custom version ────────────────────────────────────
+# 3. Configure AutoAttack custom version
 adversary = AutoAttack(
     model,
-    norm="Linf",
+    norm='Linf',
     eps=EPS,
-    version="custom",           # enables custom attack list
+    version='custom',
     device=DEVICE,
-    log_path=None,              # no logging to disk
+    log_path=None
 )
+# Set attacks and number of restarts
+adversary.attacks_to_run = ['apgd-ce', 'apgd-dlr']
+adversary.apgd.n_restarts = 1  # APGD-CE uses n_restarts
+adversary.apgd_targeted.n_restarts = 1  # APGD-DLR uses n_restarts (same attribute)
 
-# Set the attacks and number of restarts via the `attacks_to_run` attribute
-adversary.attacks_to_run = ["apgd-ce", "apgd-dlr"]
+# 4. Run evaluation
+x_adv = adversary.run_standard_evaluation(x_test, y_test)
 
-# Set number of restarts for each attack via the `apgd` attribute
-adversary.apgd.n_restarts = 1   # applies to both apgd-ce and apgd-dlr
+# 5. Compute robust accuracy (fraction, not percentage)
+robust_acc = clean_accuracy(model, x_adv, y_test, device=DEVICE)
 
-# ── 4. Run evaluation ──────────────────────────────────────────────────────
-# run_standard_evaluation returns adversarial examples and also prints robust accuracy
-x_adv = adversary.run_standard_evaluation(
-    x_test,
-    y_test,
-    bs=50,                      # batch size = number of examples
-)
-
-# ── 5. Compute and print robust accuracy ───────────────────────────────────
-# robust accuracy is computed as fraction (not percentage) by AutoAttack
-# We can also compute it manually:
-with torch.no_grad():
-    logits = model(x_adv)
-    preds = logits.argmax(dim=1)
-    robust_acc = (preds == y_test).float().mean().item()
-
-print(f"Robust accuracy (fraction): {robust_acc:.4f}")
-print(f"Robust accuracy (percentage): {robust_acc * 100:.2f}%")
+print(f"Robust accuracy: {robust_acc:.4f} (fraction)")
 ```

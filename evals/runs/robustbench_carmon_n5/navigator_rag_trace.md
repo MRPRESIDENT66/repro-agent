@@ -15,7 +15,7 @@ Most relevant files:
   robustbench/model_zoo/models.py  —  ModelsDict = OrderedDictType[str, Dict[str, Any]]
   robustbench/model_zoo/__init__.py  —  
   robustbench/model_zoo/architectures/dm_wide_resnet.py  —  https://github.com/deepmind/deepmind-research/blob/master/adversarial_robustness/pytorch/model_zoo.py
-  robustbench/eval.py  —  CORRUPTION_DATASET_LOADERS
+  robustbench/model_zoo/architectures/robust_wide_resnet.py  —  class RobustWideResNet(nn.Module):
 
 Retrieved source snippets:
 
@@ -188,90 +188,18 @@ from .models import model_dicts
 
 ## Query 2
 
-AutoAttack custom apgd-ce apgd-dlr n_restarts robustbench
+load_model function robustbench.utils load_cifar10
 
 ## Result 2
 
 Most relevant files:
-  robustbench/eval.py  —  CORRUPTION_DATASET_LOADERS
-  robustbench/model_zoo/models.py  —  ModelsDict = OrderedDictType[str, Dict[str, Any]]
   robustbench/model_zoo/cifar10.py  —  DMWideResNet, Swish, DMPreActResNet
-  robustbench/model_zoo/cifar100.py  —  DMWideResNet, Swish, DMPreActResNet
-  robustbench/model_zoo/imagenet.py  —  mu = (0.485, 0.456, 0.406)
+  robustbench/utils.py  —  ACC_FIELDS = {
+  robustbench/model_zoo/models.py  —  ModelsDict = OrderedDictType[str, Dict[str, Any]]
+  robustbench/__init__.py  —  
+  robustbench/model_zoo/enums.py  —  class BenchmarkDataset(Enum):
 
 Retrieved source snippets:
-
-## Source: robustbench/eval.py
-
-# Lines 5-25
-    5: 
-    6: import numpy as np
-    7: import pandas as pd
-    8: import torch
-    9: import random
-   10: from autoattack import AutoAttack
-   11: from autoattack.state import EvaluationState
-   12: from torch import nn
-   13: from tqdm import tqdm
-   14: 
-   15: from robustbench.data import CORRUPTIONS_DICT, get_preprocessing, load_clean_dataset, \
-   16:     CORRUPTION_DATASET_LOADERS
-   17: from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
-   18: from robustbench.utils import clean_accuracy, load_model, parse_args, update_json
-   19: from robustbench.model_zoo import model_dicts as all_models
-   20: 
-   21: 
-   22: def benchmark(
-   23:     model: Union[nn.Module, Sequence[nn.Module]],
-   24:     n_examples: int = 10000,
-   25:     dataset: Union[str, BenchmarkDataset] = BenchmarkDataset.cifar_10,
-
-# Lines 96-107
-   96:     if threat_model_ in {ThreatModel.Linf, ThreatModel.L2}:
-   97:         if eps is None:
-   98:             raise ValueError(
-   99:                 "If the threat model is L2 or Linf, `eps` must be specified.")
-  100: 
-  101:         adversary = AutoAttack(model,
-  102:                                norm=threat_model_.value,
-  103:                                eps=eps,
-  104:                                version='standard',
-  105:                                device=device,
-  106:                                log_path=log_path)
-  107:         x_adv = adversary.run_standard_evaluation(clean_x_test,
-
-# Lines 243-252
-  243:               eps=args.eps)
-  244: 
-  245: 
-  246: if __name__ == '__main__':
-  247:     # Example:
-  248:     # python -m robustbench.eval --n_ex=5000 --dataset=imagenet --threat_model=Linf \
-  249:     #                            --model_name=Salman2020Do_R18 --data_dir=/tmldata1/andriush/imagenet/val \
-  250:     #                            --batch_size=128 --eps=0.0156862745
-  251:     args_ = parse_args()
-  252:     main(args_)
-
-## Source: robustbench/model_zoo/models.py
-
-from collections import OrderedDict
-from typing import Any, Dict, Dict as OrderedDictType
-
-from robustbench.model_zoo.cifar10 import cifar_10_models
-from robustbench.model_zoo.cifar100 import cifar_100_models
-from robustbench.model_zoo.imagenet import imagenet_models
-from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
-
-ModelsDict = OrderedDictType[str, Dict[str, Any]]
-ThreatModelsDict = OrderedDictType[ThreatModel, ModelsDict]
-BenchmarkDict = OrderedDictType[BenchmarkDataset, ThreatModelsDict]
-
-model_dicts: BenchmarkDict = OrderedDict([
-    (BenchmarkDataset.cifar_10, cifar_10_models),
-    (BenchmarkDataset.cifar_100, cifar_100_models),
-    (BenchmarkDataset.imagenet, imagenet_models)
-])
-
 
 ## Source: robustbench/model_zoo/cifar10.py
 
@@ -308,305 +236,151 @@ model_dicts: BenchmarkDict = OrderedDict([
    31:     def __init__(self, depth=29, num_classes=10, cardinality=4, base_width=32):
    32:         super().__init__(ResNeXtBottleneck,
 
-# Lines 473-484
-  473:             'model':
-  474:             lambda: WideResNet(depth=34, widen_factor=10, sub_block1=True),
-  475:             'gdrive_id':
-  476:             '1kB2qqPQ8qUNmK8VKuTOhT1X4GT46kAoA',
-  477:         }),
-  478:         ('Zhang2020Attacks', {
-  479:             'model':
-  480:             lambda: WideResNet(depth=34, widen_factor=10, sub_block1=True),
-  481:             'gdrive_id':
-  482:             '1lBVvLG6JLXJgQP2gbsTxNHl6s3YAopqk',
-  483:         }),
-  484:         ('Wu2020Adversarial_extra', {
+# Lines 877-899
+  877:             lambda: WideResNet(depth=34, widen_factor=10, sub_block1=False),
+  878:             'gdrive_id':
+  879:             '1-ArD-TugRXUbH3VtM9qnzvby6NvdXNUN'
+  880:         }),
+  881:         ('Bai2023Improving_edm', {
+  882:             'model': lambda: get_composite_model('edm', 'cifar10'),  # TODO: check device calls.
+  883:             'gdrive_id': [
+  884:             '1-5EwY_5tQZudo9idwXiUGr3P4OUUGaQN',
+  885:             '1-RF7ZSS-PAh6bfQcuqx4lh9bc9BUGnap',
+  886:             '1-7oV7QDgz8McvhbaCj6Owx3Rz3daiPrT']
+  887:         }),
+  888:         ('Peng2023Robust', {
+  889:             'model': lambda: get_robustarch_model('ra_wrn70_16'),  # TODO: check device calls.
+  890:             'gdrive_id': '1-6M8KHZdPmgqYkBSkdZQ2fLwp86ZQ9VU'
+  891:         }),
+  892:         ('Bai2024MixedNUTS', {
+  893:             'model': lambda: get_nonlin_mixed_classifier('cifar10'),  # TODO: check device calls.
+  894:             'gdrive_id': [
+  895:             '1-5EwY_5tQZudo9idwXiUGr3P4OUUGaQN',
+  896:             '1-6M8KHZdPmgqYkBSkdZQ2fLwp86ZQ9VU']
+  897:         }),
+  898:         ('Chen2024Data_WRN_34_10', {
+  899:             'model': lambda: WideResNet(depth=34, widen_factor=10),
 
-## Source: robustbench/model_zoo/cifar100.py
+# Lines 903-914
+  903:             'model': lambda: WideResNet(depth=34, widen_factor=20),
 
-# Lines 2-24
-    2: 
-    3: import timm
-    4: import torch
-    5: from torch import nn
-    6: 
-    7: from robustbench.model_zoo.architectures.dm_wide_resnet import CIFAR100_MEAN, CIFAR100_STD, \
-    8:     DMWideResNet, Swish, DMPreActResNet
-    9: from robustbench.model_zoo.architectures.resnet import PreActBlock, PreActResNet,PreActBlockV2, \
-   10:     ResNet, BasicBlock
-   11: from robustbench.model_zoo.architectures.resnext import CifarResNeXt, ResNeXtBottleneck
-   12: from robustbench.model_zoo.architectures.wide_resnet import WideResNet
-   13: from robustbench.model_zoo.enums import ThreatModel
-   14: from robustbench.model_zoo.architectures.CARD_resnet import LRR_ResNet, WidePreActResNet
-   15: from robustbench.model_zoo.architectures import xcit
-   16: from robustbench.model_zoo.architectures.comp_model import get_composite_model, \
-   17:     get_nonlin_mixed_classifier
-   18: from robustbench.model_zoo.architectures.sparsified_model import get_sparse_model
+## Source: robustbench/utils.py
+
+# Lines 12-24
+   12: import timm
+   13: import torch
+   14: from torch import nn
+   15: import gdown
+   16: 
+   17: from robustbench.model_zoo import model_dicts as all_models
+   18: from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
    19: 
-   20: 
-   21: class Chen2020EfficientNet(WideResNet):
-   22: 
-   23:     def __init__(self, depth=34, widen_factor=10):
-   24:         super().__init__(depth=depth,
+   20: ACC_FIELDS = {
+   21:     ThreatModel.corruptions: "corruptions_acc",
+   22:     ThreatModel.corruptions_3d: "corruptions_acc_3d",
+   23:     ThreatModel.L2: ("external", "autoattack_acc"),
+   24:     ThreatModel.Linf: ("external", "autoattack_acc")
 
-# Lines 503-514
-  503:         lambda: WideResNet(
-  504:             depth=34, widen_factor=10, num_classes=100, sub_block1=False),
-  505:         'gdrive_id':
-  506:         '1whziIioVu5SGI1fBKyc331IfG_1MgenN'  # '1-7GbBqZRaHLFA-kYqcnWl9Q0Ohpicq07'
-  507:     }),
-  508:     ('Cui2023Decoupled_WRN-34-10_autoaug', {
-  509:         'model':
-  510:         lambda: WideResNet(
-  511:             depth=34, widen_factor=10, num_classes=100, sub_block1=False),
-  512:         'gdrive_id':
-  513:         '18hjcLa1V3JTNUOshafLvw1ncxL2gu50M'
-  514:     }),
+# Lines 101-119
+  101:     for k, v in state_dict.items():
+  102:         new_state_dict[substr + k] = v
+  103:     return new_state_dict
+  104: 
+  105: 
+  106: def load_model(model_name: str,
+  107:                model_dir: Union[str, Path] = './models',
+  108:                dataset: Union[str,
+  109:                               BenchmarkDataset] = BenchmarkDataset.cifar_10,
+  110:                threat_model: Union[str, ThreatModel] = ThreatModel.Linf,
+  111:                custom_checkpoint: str = "",
+  112:                norm: Optional[str] = None) -> nn.Module:
+  113:     """Loads a model from the model_zoo.
+  114: 
+  115:      The model is trained on the given ``dataset``, for the given ``threat_model``.
+  116: 
+  117:     :param model_name: The name used in the model zoo.
+  118:     :param model_dir: The base directory where the models are saved.
+  119:     :param dataset: The dataset on which the model is trained.
+
+# Lines 159-171
+  159:             return model.eval()
+  160: 
+  161:         if not os.path.exists(model_dir_):
+  162:             os.makedirs(model_dir_)
+  163:         if not os.path.isfile(model_path):
+  164:             download_gdrive_new(models[model_name]['gdrive_id'], model_path)
+  165:         checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+  166: 
+  167:         if 'Kireev2021Effectiveness' in model_name or model_name == 'Andriushchenko2020Understanding':
+  168:             checkpoint = checkpoint[
+  169:                 'last']  # we take the last model (choices: 'last', 'best')
+  170:         try:
+  171:             # needed for the model of `Carmon2019Unlabeled`
+
+# Lines 204-238
+  204:                 'Xu2024MIMIR_Swin-B',
+  205:                 'Xu2024MIMIR_Swin-L',
+  206:                 ]:
+  207:                 state_dict = add_substr_to_state_dict(state_dict, 'model.')
+  208: 
+  209:         model = _safe_load_state_dict(model, model_name, state_dict, dataset_)
+  210: 
+  211:         return model.eval()
+  212: 
+  213:     # If we have an ensemble of models (e.g., Chen2020Adversarial, Diffenderfer2021Winning_LRR_CARD_Deck)
+  214:     else:
+  215:         model = models[model_name]['model']()
+  216:         if not os.path.exists(model_dir_):
+  217:             os.makedirs(model_dir_)
+  218:         for i, gid in enumerate(models[model_name]['gdrive_id']):
+  219:             if not os.path.isfile('{}_m{}.pt'.format(model_path, i)):
+  220:                 download_gdrive_new(gid, '{}_m{}.pt'.format(model_path, i))
+  221:             checkpoint = torch.load('{}_m{}.pt'.format(model_path, i),
+  222:                                     map_location=torch.device('cpu'))
+  223: 
+
+## Source: robustbench/model_zoo/models.py
+
+from collections import OrderedDict
+from typing import Any, Dict, Dict as OrderedDictType
+
+from robustbench.model_zoo.cifar10 import cifar_10_models
+from robustbench.model_zoo.cifar100 import cifar_100_models
+from robustbench.model_zoo.imagenet import imagenet_models
+from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
+
+ModelsDict = OrderedDictType[str, Dict[str, Any]]
+ThreatModelsDict = OrderedDictType[ThreatModel, ModelsDict]
+BenchmarkDict = OrderedDictType[BenchmarkDataset, ThreatModelsDict]
+
+model_dicts: BenchmarkDict = OrderedDict([
+    (BenchmarkDataset.cifar_10, cifar_10_models),
+    (BenchmarkDataset.cifar_100, cifar_100_models),
+    (BenchmarkDataset.imagenet, imagenet_models)
+])
+
+
+## Source: robustbench/__init__.py
+
+from .data import load_cifar10
+from .utils import load_model
+from .eval import benchmark
+
 
 ## Query 3
 
-load_clean_dataset cifar10 robustbench data.py
+load_cifar10 function robustbench.data
 
 ## Result 3
 
 Most relevant files:
+  robustbench/model_zoo/cifar10.py  —  DMWideResNet, Swish, DMPreActResNet
   robustbench/data.py  —  PREPROCESSINGS = {
   robustbench/loaders.py  —  This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
-  robustbench/eval.py  —  CORRUPTION_DATASET_LOADERS
-  robustbench/model_zoo/cifar10.py  —  DMWideResNet, Swish, DMPreActResNet
-  robustbench/utils.py  —  ACC_FIELDS = {
+  robustbench/model_zoo/models.py  —  ModelsDict = OrderedDictType[str, Dict[str, Any]]
+  robustbench/model_zoo/enums.py  —  class BenchmarkDataset(Enum):
 
 Retrieved source snippets:
-
-## Source: robustbench/data.py
-
-# Lines 11-22
-   11: import torchvision.transforms as transforms
-   12: from torch.utils.data import Dataset
-   13: from torch import nn
-   14: 
-   15: from robustbench.model_zoo import model_dicts as all_models
-   16: from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
-   17: from robustbench.zenodo_download import DownloadError, zenodo_download
-   18: from robustbench.loaders import CustomImageFolder
-   19: 
-   20: PREPROCESSINGS = {
-   21:     'Res256Crop224':
-   22:     transforms.Compose([
-
-# Lines 92-103
-   92:     threat_model = ThreatModel(threat_model.value.replace('_3d', ''))
-   93:     prepr = all_models[dataset][threat_model][model_name]['preprocessing']
-   94:     return PREPROCESSINGS[prepr]
-   95: 
-   96: 
-   97: def _load_dataset(
-   98:         dataset: Dataset,
-   99:         n_examples: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-  100:     batch_size = 100
-  101:     test_loader = data.DataLoader(dataset,
-  102:                                   batch_size=batch_size,
-  103:                                   shuffle=False,
-
-# Lines 162-185
-  162:     x_test, y_test, paths = next(iter(test_loader))
-  163: 
-  164:     return x_test, y_test
-  165: 
-  166: 
-  167: CleanDatasetLoader = Callable[[Optional[int], str, Callable],
-  168:                               Tuple[torch.Tensor, torch.Tensor]]
-  169: _clean_dataset_loaders: Dict[BenchmarkDataset, CleanDatasetLoader] = {
-  170:     BenchmarkDataset.cifar_10: load_cifar10,
-  171:     BenchmarkDataset.cifar_100: load_cifar100,
-  172:     BenchmarkDataset.imagenet: load_imagenet,
-  173: }
-  174: 
-  175: 
-  176: def load_clean_dataset(dataset: BenchmarkDataset, n_examples: Optional[int],
-  177:                        data_dir: str,
-  178:                        prepr: Callable) -> Tuple[torch.Tensor, torch.Tensor]:
-  179:     return _clean_dataset_loaders[dataset](n_examples, data_dir, prepr)
-  180: 
-  181: 
-  182: CORRUPTIONS = ("shot_noise", "motion_blur", "snow", "pixelate",
-  183:                "gaussian_noise", "defocus_blur", "brightness", "fog",
-  184:                "zoom_blur", "frost", "glass_blur", "impulse_noise", "contrast",
-  185:                "jpeg_compression", "elastic_transform")
-
-# Lines 214-237
-  214:         data_dir: str = './data',
-  215:         shuffle: bool = False,
-  216:         corruptions: Sequence[str] = CORRUPTIONS,
-  217:         _: Callable = PREPROCESSINGS[None]
-  218: ) -> Tuple[torch.Tensor, torch.Tensor]:
-  219:     return load_corruptions_cifar(BenchmarkDataset.cifar_10, n_examples,
-  220:                                   severity, data_dir, corruptions, shuffle)
-  221: 
-  222: 
-  223: def load_cifar100c(
-  224:         n_examples: int,
-  225:         severity: int = 5,
-  226:         data_dir: str = './data',
-  227:         shuffle: bool = False,
-  228:         corruptions: Sequence[str] = CORRUPTIONS,
-  229:         _: Callable = PREPROCESSINGS[None]
-  230: ) -> Tuple[torch.Tensor, torch.Tensor]:
-  231:     return load_corruptions_cifar(BenchmarkDataset.cifar_100, n_examples,
-  232:                                   severity, data_dir, corruptions, shuffle)
-  233: 
-  234: 
-  235: def load_imagenetc(
-  
-
-## Source: robustbench/loaders.py
-
-# Lines 1-45
-    1: """
-    2: This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
-    3: """
-    4: import pkg_resources
-    5: 
-    6: from torchvision.datasets.vision import VisionDataset
-    7: 
-    8: import torch
-    9: import torch.utils.data as data
-   10: import torchvision.transforms as transforms
-   11: 
-   12: from PIL import Image
-   13: 
-   14: import os
-   15: import os.path
-   16: import sys
-   17: 
-   18: 
-   19: def make_custom_dataset(root, path_imgs, class_to_idx):
-   20:     with open(pkg_resources.resource_filename(__name__, path_imgs), 'r') as f:
-   21:         fnames = f.readlines()
-   22:     images = [(os.path.join(root,
-   23:                             c.split('\n')[0]), class_to_idx[c.split('/')[0]])
-   24:               for c in fnames]
-   25: 
-   26:     return images
-   27: 
-   28: 
-   29: class CustomDatasetFolder(VisionDataset):
-   30:     """A generic data loader where the samples are arranged in this way: ::
-   31:         root/class_x/xxx.ext
-   32:         root/class_x/xxy.ext
-   33:         root/class_x/xxz.ext
-   34:         root/class_y/123.ext
-   35:         root/class_y/nsdf3.ext
-   36:         root/class_y/asd932_.ext
-   37:     Args:
-   38:         root (string): Root directory path.
-   39:         loader (callable): A function to load a sample given its path.
-   40:         extensions (tuple[string]): A list of allowed extensions.
-   41:             both extensions and is_valid_file should not be passed.
-   42:         transform (callable, optional): A function/transform that takes in
-   43:             a sample and returns a transformed version.
-   44:             E.g, ``transforms.RandomCrop`` for images.
-   45:         target_transform (callable, optional): A function/transform that takes
-
-# Lines 49-74
-   49:             both extensions and is_valid_file should not be passed.
-   50:      Attributes:
-   51:         classes (list): List of the class names.
-   52:         class_to_idx (dict): Dict with items (class_name, class_index).
-   53:         samples (list): List of (sample path, class_index) tuples
-   54:         targets (list): The class_index value for each image in the dataset
-   55:     """
-   56: 
-   57:     def __init__(self,
-   58:                  root,
-   59:                  loader,
-   60:                  extensions=None,
-   61:                  transform=None,
-   62:                  target_transform=None,
-   63:                  is_valid_file=None):
-   64:         super(CustomDatasetFolder, self).__init__(root)
-   65:         self.transform = transform
-   66:         self.target_transform = target_transform
-   67:         classes, class_to_idx = self._find_classes(self.root)
-   68:         samples = make_custom_dataset(
-   69:             self.root, 'helper_files/imagenet_test_image_ids.txt',
-   70:             class_to_idx)
-   71:         if len(samples) == 0:
-   72:             raise (RuntimeError("Found 0 files in subfolders of: " +
-   73:                                 self.root + "\n"
-   74:                                 "Supported extensions are: " +
-
-# Lines 82-93
-   82:         self.samples = samples
-  
-
-## Source: robustbench/eval.py
-
-# Lines 10-31
-   10: from autoattack import AutoAttack
-   11: from autoattack.state import EvaluationState
-   12: from torch import nn
-   13: from tqdm import tqdm
-   14: 
-   15: from robustbench.data import CORRUPTIONS_DICT, get_preprocessing, load_clean_dataset, \
-   16:     CORRUPTION_DATASET_LOADERS
-   17: from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
-   18: from robustbench.utils import clean_accuracy, load_model, parse_args, update_json
-   19: from robustbench.model_zoo import model_dicts as all_models
-   20: 
-   21: 
-   22: def benchmark(
-   23:     model: Union[nn.Module, Sequence[nn.Module]],
-   24:     n_examples: int = 10000,
-   25:     dataset: Union[str, BenchmarkDataset] = BenchmarkDataset.cifar_10,
-   26:     threat_model: Union[str, ThreatModel] = ThreatModel.Linf,
-   27:     to_disk: bool = False,
-   28:     model_name: Optional[str] = None,
-   29:     data_dir: str = "./data",
-   30:     corruptions_data_dir: Optional[str] = None,
-   31:     device: Optional[Union[torch.device, Sequence[torch.device]]] = None,
-
-# Lines 40-57
-   40:     It is possible to benchmark on 3 different threat models, and to save the results on disk. In
-   41:     the future benchmarking multiple models in parallel is going to be possible.
-   42: 
-   43:     :param model: The model to benchmark.
-   44:     :param n_examples: The number of examples to use to benchmark the model.
-   45:     :param dataset: The dataset to use to benchmark. Must be one of {cifar10, cifar100}
-   46:     :param threat_model: The threat model to use to benchmark, must be one of {L2, Linf
-   47:     corruptions}
-   48:     :param to_disk: Whether the results must be saved on disk as .json.
-   49:     :param model_name: The name of the model to use to save the results. Must be specified if
-   50:     to_json is True.
-   51:     :param data_dir: The directory where the dataset is or where the dataset must be downloaded.
-   52:     :param device: The device to run the computations.
-   53:     :param batch_size: The batch size to run the computations. The larger, the faster the
-   54:     evaluation.
-   55:     :param eps: The epsilon to use for L2 and Linf threat models. Must not be specified for
-   56:     corruptions threat model.
-   57:     :param preprocessing: The preprocessing that should be used for ImageNet benchmarking. Should be
-
-# Lines 80-91
-   80:     model = model.to(device)
-   81: 
-   82:     prepr = get_preprocessing(dataset_, threat_model_, model_name,
-   83:                               preprocessing)
-   84: 
-   85:     clean_x_test, clean_y_test = load_clean_dataset(dataset_, n_examples,
-   86:                                                     data_dir, prepr)
-   87: 
-   88:     accuracy = clean_accuracy(model,
-   89:                               clean_x_test,
-   90:                               clean_y_test,
-   91:                               batch_size=batch_size,
-
-# Lines 157-168
-  157: 
-  158:     corruptions = CORRUPTIONS_DICT[dataset][threat_model]
-  159:     model_results_dict: Dict[Tuple[str, int], float] = {}
-  160:     for corruption in tqdm(corruptions):
-  161:         for severity in range(1, 6):
-  162:             x
 
 ## Source: robustbench/model_zoo/cifar10.py
 
@@ -668,3 +442,173 @@ Retrieved source snippets:
   921:         ('Bartoldson2024Adversarial_WRN-94-16', {
   922:             'model':
   923:        
+
+## Source: robustbench/data.py
+
+# Lines 165-177
+  165: 
+  166: 
+  167: CleanDatasetLoader = Callable[[Optional[int], str, Callable],
+  168:                               Tuple[torch.Tensor, torch.Tensor]]
+  169: _clean_dataset_loaders: Dict[BenchmarkDataset, CleanDatasetLoader] = {
+  170:     BenchmarkDataset.cifar_10: load_cifar10,
+  171:     BenchmarkDataset.cifar_100: load_cifar100,
+  172:     BenchmarkDataset.imagenet: load_imagenet,
+  173: }
+  174: 
+  175: 
+  176: def load_clean_dataset(dataset: BenchmarkDataset, n_examples: Optional[int],
+  177:                        data_dir: str,
+
+# Lines 214-237
+  214:         data_dir: str = './data',
+  215:         shuffle: bool = False,
+  216:         corruptions: Sequence[str] = CORRUPTIONS,
+  217:         _: Callable = PREPROCESSINGS[None]
+  218: ) -> Tuple[torch.Tensor, torch.Tensor]:
+  219:     return load_corruptions_cifar(BenchmarkDataset.cifar_10, n_examples,
+  220:                                   severity, data_dir, corruptions, shuffle)
+  221: 
+  222: 
+  223: def load_cifar100c(
+  224:         n_examples: int,
+  225:         severity: int = 5,
+  226:         data_dir: str = './data',
+  227:         shuffle: bool = False,
+  228:         corruptions: Sequence[str] = CORRUPTIONS,
+  229:         _: Callable = PREPROCESSINGS[None]
+  230: ) -> Tuple[torch.Tensor, torch.Tensor]:
+  231:     return load_corruptions_cifar(BenchmarkDataset.cifar_100, n_examples,
+  232:                                   severity, data_dir, corruptions, shuffle)
+  233: 
+  234: 
+  235: def load_imagenetc(
+  236:     n_examples: Optional[int] = 5000,
+  237:     severity: int = 5,
+
+# Lines 245-256
+  245:             'The evaluation is currently possible on at most 5000 points.')
+  246: 
+  247:     assert len(
+  248:         corruptions
+  249:     ) == 1, "so far only one corruption is supported (that's how this function is called in eval.py"
+  250:     # TODO: generalize this (although this would probably require writing a function similar to `load_corruptions_cifar`
+  251:     #  or alternatively creating yet another CustomImageFolder class that fetches images from multiple corruption types
+  252:     #  at once -- perhaps this is a cleaner solution)
+  253: 
+  254:     data_folder_path = Path(data_dir) / CORRUPTIONS_DIR_NAMES[
+  255:         BenchmarkDataset.imagenet][ThreatModel.corruptions] / corruptions[0] / str(severity)
+  256:     imagenet = CustomImageFolder(data_folder_path, prepr)
+
+# Lines 277-288
+  277:             'The evaluation is currently possible on at most 5000 points.')
+  278: 
+  279:     assert len(
+  280:         corruptions
+  281:     ) == 1, "so far only one corruption is supported (that's how this function is called in eval.py"
+  282:     # TODO: generalize this (although this would probably require writing a function similar to `load_corruptions_cifar`
+  283:     #  or alternatively creating yet another CustomImageFolder class that fetches images from multiple corruption types
+  284:     #  at once -- perhaps this is a cleaner solution)
+  285: 
+  286:     data_folder_path = Path(data_dir) / CORRUPTIONS_DIR_NAMES[
+  287:         BenchmarkDataset.imagenet][ThreatModel.corruptions_3d] / corruptions[0] / str(severity)
+  288:     
+
+## Source: robustbench/loaders.py
+
+# Lines 1-51
+    1: """
+    2: This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
+    3: """
+    4: import pkg_resources
+    5: 
+    6: from torchvision.datasets.vision import VisionDataset
+    7: 
+    8: import torch
+    9: import torch.utils.data as data
+   10: import torchvision.transforms as transforms
+   11: 
+   12: from PIL import Image
+   13: 
+   14: import os
+   15: import os.path
+   16: import sys
+   17: 
+   18: 
+   19: def make_custom_dataset(root, path_imgs, class_to_idx):
+   20:     with open(pkg_resources.resource_filename(__name__, path_imgs), 'r') as f:
+   21:         fnames = f.readlines()
+   22:     images = [(os.path.join(root,
+   23:                             c.split('\n')[0]), class_to_idx[c.split('/')[0]])
+   24:               for c in fnames]
+   25: 
+   26:     return images
+   27: 
+   28: 
+   29: class CustomDatasetFolder(VisionDataset):
+   30:     """A generic data loader where the samples are arranged in this way: ::
+   31:         root/class_x/xxx.ext
+   32:         root/class_x/xxy.ext
+   33:         root/class_x/xxz.ext
+   34:         root/class_y/123.ext
+   35:         root/class_y/nsdf3.ext
+   36:         root/class_y/asd932_.ext
+   37:     Args:
+   38:         root (string): Root directory path.
+   39:         loader (callable): A function to load a sample given its path.
+   40:         extensions (tuple[string]): A list of allowed extensions.
+   41:             both extensions and is_valid_file should not be passed.
+   42:         transform (callable, optional): A function/transform that takes in
+   43:             a sample and returns a transformed version.
+   44:             E.g, ``transforms.RandomCrop`` for images.
+   45:         target_transform (callable, optional): A function/transform that takes
+   46:             in the target and transforms it.
+   47:         is_valid_file (callable, optional): A function that takes path of an Image file
+   48:             and check if the file is a valid_file (used to check of corrupt files)
+   49:             both extensions and is_valid_file should not be passed.
+   50:      Attributes:
+   51:         classes (list): List of the class names.
+
+# Lines 150-161
+  150:     else:
+  151:         return pil_loader(path)
+  152: 
+  153: 
+  154: class CustomImageFolder(CustomDatasetFolder):
+  155:     """A generic data loader where the images are arranged in this way: ::
+  156:         root/dog/xxx.png
+  157:         root/dog/xxy.png
+  158:         root/dog/xxz.png
+  159:         root/cat/123.png
+  160:         root/cat/nsdf3.png
+  161:         root/cat/asd932_.png
+
+# Lines 163-174
+  163:         root (string): Root directory path.
+  164:         transform (callable, optional): A function/transform that  takes in an PIL image
+  165:             and returns a transformed version. E.g, ``transforms.RandomCrop``
+  166:         target_transform (callable, optional): A function/transform that takes in the
+  167:             target and transforms it.
+  168:         loader (callable, optional): A function to load an image given its path.
+  169:         is_valid_file (callable, optional): A function that takes path of 
+
+## Source: robustbench/model_zoo/models.py
+
+from collections import OrderedDict
+from typing import Any, Dict, Dict as OrderedDictType
+
+from robustbench.model_zoo.cifar10 import cifar_10_models
+from robustbench.model_zoo.cifar100 import cifar_100_models
+from robustbench.model_zoo.imagenet import imagenet_models
+from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
+
+ModelsDict = OrderedDictType[str, Dict[str, Any]]
+ThreatModelsDict = OrderedDictType[ThreatModel, ModelsDict]
+BenchmarkDict = OrderedDictType[BenchmarkDataset, ThreatModelsDict]
+
+model_dicts: BenchmarkDict = OrderedDict([
+    (BenchmarkDataset.cifar_10, cifar_10_models),
+    (BenchmarkDataset.cifar_100, cifar_100_models),
+    (BenchmarkDataset.imagenet, imagenet_models)
+])
+

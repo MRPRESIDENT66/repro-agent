@@ -64,54 +64,80 @@ untouched.
 
 ## E1 — Feasibility & generality (RQ1, RQ2)
 
-Full pipeline, N=5 blind, provenance-gated.
+Full pipeline, N=5, provenance-gated. Tables are generated from the run
+artifacts by `python evals/report_tables.py` (single source of truth). `blind`:
+*strict* = the target is absent from the agent's workspace; *soft* = present in
+the public repo (never surfaced by the task/verifier) — the agent must still run
+the real eval to produce it.
 
-| Task | difficulty | passed | repair fired | ~cost/run |
+| Task | blind | passed | repair fired | ~cost/run |
 |---|---|---|---|---|
-| DistilBERT SST-2 | easy | **5/5** | 1/5 | ¥0.029 |
-| mmpretrain ResNet-18 | medium | **5/5** | 0/5 | ¥0.093 |
-| detectors ResNet-18 CIFAR-100 | medium | **4/5** | 2/5 | ¥0.086 |
-| OpenOOD EBO | hard | **3/5** | 3/5 | ¥0.262 |
-| RobustBench Carmon2019 | hard | **5/5** | 5/5 | ¥0.242 |
-| **total** | | **22/25 (88%)** | | |
+| DistilBERT SST-2 | strict | **5/5** | 1/5 | ¥0.029 |
+| mmpretrain ResNet-18 | **soft** | **5/5** | 0/5 | ¥0.093 |
+| detectors ResNet-18 CIFAR-100 | strict | **4/5** | 2/5 | ¥0.086 |
+| OpenOOD EBO | strict | **3/5** | 3/5 | ¥0.262 |
+| RobustBench Carmon2019 | strict | **4/5** | 4/5 | ¥0.268 |
+| **total** | | **21/25** | | |
 
-**Read:** blind reproduction works across all four task-types and both backends —
+**Read:** blind reproduction works across four task-types and both backends —
 the same agent, no orchestration changes. Difficulty tracks the repair rate:
 easy tasks pass first-try (repair idle); the hard tasks fail first and lean on the
-repair loop (OpenOOD 3/3 of its passes used repair; RobustBench fired repair on
-all 5 and recovered all 5 — its first attempt reliably gets the unit/output wrong,
-then repair fixes it).
+repair loop. *Honest correction:* an earlier draft reported RobustBench at 5/5,
+but that run was **soft-blind** — the repo README leaked a `52.00%` worked
+example. After scrubbing it (strict-blind) and re-running, RobustBench is **4/5**;
+the total is **21/25**, not 22/25.
 
 ---
 
 ## E2 — Where the complexity pays off (RQ3) — the controlled ablation
 
-The same task, run under three pipeline depths, N=5 each:
+The same task, run under five conditions that **share one execution budget**
+(≤5 evaluations) so "more attempts" is held constant, N=5 each:
 
-- **solo** — Reproducer only (its own RAG) → execute. Single-agent baseline.
-- **team** — Navigator + Reproducer + Critic → execute. Pre-execution
-  collaboration (handoff + audit), no repair.
-- **full** — adds the Reviewer + Repair loop.
+- **solo** — Reproducer only → 1 execution. Single-agent baseline.
+- **team** — Navigator + Reproducer + Critic → 1 execution. Pre-execution
+  collaboration, no follow-ups.
+- **solo-retry** — Reproducer; on failure RE-GENERATE with **no execution
+  feedback**, ≤5 executions. The budget-matched control for "just more tries".
+- **solo-repair** — Reproducer; on failure a Repair role fixes it **with the
+  real error**, ≤5 executions. Single agent + feedback repair, no Navigator/
+  Critic/Reviewer.
+- **full** — Navigator + Reproducer + Critic + Reviewer + Repair loop, ≤5 executions.
 
-| | solo | team | full |
+| condition | easy — DistilBERT | hard — OpenOOD | execs (hard) |
 |---|---|---|---|
-| **easy — DistilBERT** | 5/5 | 5/5 | 5/5 |
-| ↳ cost/run | ¥0.005 | ¥0.015 | ¥0.029 |
-| **hard — OpenOOD** | 0/5 | 0/5 | 3/5 |
-| ↳ cost/run | ¥0.036 | ¥0.122 | ¥0.262 |
+| solo | 5/5 | 0/5 | 1 |
+| team | 5/5 | 0/5 | 1 |
+| solo-retry | 5/5 | **0/5** | 5 |
+| solo-repair | 5/5 | **0/5** | 5 |
+| **full** | 5/5 | **3/5** | ≤5 |
 
-**The decisive result, in one paragraph:** on the easy task the extra machinery
-buys **nothing** — solo already passes 5/5, and team and full add 0 success at
-**6× the cost**. On the hard task, pre-execution collaboration also buys
-**nothing** — team is still **0/5**, same as solo. Success appears **only** when
-the post-execution **repair loop** is switched on: **0/5 → 3/5**. So the value of
-the multi-agent design is concentrated entirely in the **repair loop**, and only
-on tasks that fail first; the Navigator handoff + Critic audit do not move the
-success rate on either end of the difficulty range.
+**The decisive result — and a correction of an earlier, premature claim.** On the
+easy task every condition passes 5/5: the machinery is unnecessary, and the extra
+roles only add cost. On the hard task, **no reduced condition produces any
+success**: not more attempts (solo-retry **0/5** at the full 5-execution budget),
+not single-agent feedback repair (solo-repair **0/5**, also 5 executions), not
+pre-execution collaboration (team **0/5**). **Only the full pipeline reaches
+3/5.**
 
-This sharpens the earlier multi-agent ablation (Appendix A, "M5"), which already
-found that on easy independent tasks multi-agent buys parallelism and context
-isolation but **not** success (single 3/3 vs multi 2/3).
+So the components are **complementary on hard tasks, not redundant**: success
+requires the pre-execution grounding (Navigator + Critic) **and** the
+reviewer-guided repair loop *together*; removing any major piece drops it to 0.
+An earlier draft of this report — comparing only solo / team / full, where solo
+and team ran *once* and full ran up to *five* times — concluded that "the value is
+all in the repair loop, the Critic is overhead." The budget-matched controls
+(solo-retry, solo-repair) **overturn that**: feedback-repair *alone* (solo-repair)
+is 0/5, so the repair loop is necessary but **not sufficient** — it only works
+on top of the full multi-agent pipeline.
+
+What this does **not** isolate: which of Navigator / Critic / Reviewer is the
+critical addition over solo-repair (the difference is the whole pre-execution team
++ the reviewer's anomaly audit at once), and the result rests on a single hard
+task (OpenOOD). See Limitations.
+
+This refines the earlier multi-agent ablation (Appendix A, "M5"), which found
+that on *easy* independent tasks multi-agent buys parallelism + isolation but not
+success — consistent with the easy row here.
 
 ---
 
@@ -134,40 +160,57 @@ Compact, reused from the development study (illustrative, small-N).
 
 ## Key findings
 
-1. **Blind reproduction is feasible and trustworthy** — 22/25 across four
-   task-types and two backends, behind a provenance gate that rejects fabricated
-   evidence.
-2. **One design generalizes** — adding a task is config, not orchestration code.
-3. **The repair loop is where the multi-agent complexity earns its keep, and only
-   on hard tasks** (E2): easy tasks need none of it; on the hard task, success
-   appears only with repair (0→3/5), while pre-execution collaboration adds none.
-4. **Difficulty, not luck, is the variable** — repair rate rises monotonically
-   with difficulty; easy tasks are first-try, hard tasks are repair-driven.
+1. **Blind reproduction is feasible and provenance-gated** — 21/25 across four
+   task-types and two backends, behind a gate (bound to the evidence-emitting
+   command, AST-checked) that rejects echoed/decoy evidence. Not proven secure
+   against a determined adversary, but the listed forgeries fail closed.
+2. **One design runs many tasks with no orchestration changes** — adding a task is
+   config. (Generalization is scoped to *development* tasks; see Limitations.)
+3. **On hard tasks the multi-agent components are complementary, not redundant**
+   (E2): at a shared execution budget, no reduced condition produces any success
+   (more attempts 0/5, single-agent feedback-repair 0/5, pre-execution
+   collaboration 0/5); only the full pipeline reaches 3/5. On easy tasks the whole
+   apparatus is unnecessary.
+4. **Difficulty, not luck, is the variable** — easy tasks are first-try; the hard
+   tasks fail first and need the full pipeline.
 5. **For code navigation, the LLM reranker matters; the retrieval algorithm does
    not.**
 
-A practical implication: the pipeline could be **simplified** — Reproducer +
-repair loop carry the weight; the pre-execution Critic is cost without measured
-success benefit on this suite.
+This **corrects** an earlier draft's claim that "the Critic is overhead, keep only
+the Reproducer + repair loop." The budget-matched controls show feedback-repair
+alone (solo-repair) is 0/5 on the hard task — the pipeline cannot be reduced to it.
 
 ---
 
 ## Limitations (stated plainly)
 
-- **Small N** (5). Pass rates are indicative, not significance-tested. Tasks are
-  development tasks, **not held-out**.
-- **E2 separates *pre-execution collaboration* from *repair*, but not *Critic*
-  from *Navigator***, and does not isolate "Reproducer + repair (no Critic)". The
-  clean claim is: repair is necessary for hard-task success; the Critic's
-  marginal value *given* repair is untested.
+- **Small N** (5). Pass rates are indicative, not significance-tested. All five
+  tasks are **development** tasks (prompts were iterated against them) — there is
+  **no held-out split**, so the generality claim is scoped to this suite.
+- **The hard-task E2 result rests on ONE hard task (OpenOOD).** The
+  complementarity finding (only `full` succeeds) is a single data point at N=5;
+  RobustBench would be a useful second hard task for E2 but was not run under the
+  five conditions.
+- **E2 does not pin down *which* component is critical.** It shows the full
+  pipeline beats every reduced condition, but the gap between solo-repair (0/5)
+  and full (3/5) bundles the Navigator, the Critic, and the Reviewer together; a
+  finer ablation (e.g. Reproducer + Reviewer + repair, no Navigator/Critic) is not
+  run.
+- **Oracle specialization is real.** The per-task prompts hand the agent
+  substantial task knowledge (APIs, field names, known gotchas); "generalizes" must
+  be read with that caveat. (A `prompt_mode=generic` path that strips this is under
+  development.)
 - **The two `detectors` tasks are not new papers** — same library as the existing
   `resnet18_cifar100` task; included to exercise repair, not for paper breadth.
-  (Only `resnet18_cifar100` is in the suite above; `vgg16_bn_cifar10` is an extra.)
 - **mmpretrain blindness is soft** — its 94.82 is in the public repo's own
-  model-zoo metafile; "blind" means the task/verifier never reveal it, and the
-  agent must still run the real `tools/test.py`.
-- **RobustBench truth is `52.0` on n=50 examples** (a small slice chosen for CPU
-  feasibility), not the full-test-set headline number.
+  model-zoo metafile; the task/verifier never reveal it and the agent must still
+  run the real `tools/test.py`, but it is not strict-blind.
+- **RobustBench truth is `52.0` on n=50 examples** (a CPU-feasible slice), not the
+  full-test-set headline number.
+- **The provenance gate is a heuristic, not a security boundary.** It fail-closes
+  the known forgeries (decoy files, `python -c` prints, comment markers, fake
+  wrappers — see `tests/test_verify.py`) but is not proven robust to an adaptive
+  attacker; the subprocess backend is not a sandbox.
 
 ---
 
@@ -204,4 +247,26 @@ Also corrected: a DistilBERT provisioning trap (a weightless `model/` dir that
 baited the Critic into a local-load crash) that had confounded the E2 easy-task
 team condition; replaced with a prose `model_card.md`.
 
-All 98 unit tests pass after the fixes.
+## Appendix C — hardening after an external review
+
+An external critique of an earlier draft was largely correct and prompted these
+fixes (all with regression/attack tests):
+
+- **Provenance was forgeable.** The gate scanned *any* workspace `.py` for marker
+  substrings, so a decoy file + a hardcoded print could pass. It now binds to the
+  source the **evidence-emitting command actually ran**, requires AST-proven
+  load+predict calls (or a real subprocess delegation to the repo entry), and
+  fail-closes decoys / `python -c` prints / comment markers (`tests/test_verify.py`).
+- **The ablation budget was unfair** (solo/team ran once, full up to five). Added
+  the budget-matched `solo-retry` and `solo-repair` conditions; this **overturned**
+  the earlier "drop the Critic" conclusion (see E2).
+- **RobustBench was only soft-blind** (README `52.00%` leak). Added a provisioning
+  scrub + a uniform blind-workspace check; re-running strict-blind gives 4/5, and
+  the suite total is restated as 21/25.
+- **Reproducibility:** added `evals/FREEZE.md` (pinned repo SHAs, checkpoint
+  SHA-256s, per-task blind level) and `evals/report_tables.py` (tables generated
+  from `result.json`, so prose can't drift from artifacts).
+
+All **107** unit tests pass (orchestration + provenance-attack suites added).
+Still open: a true held-out split, a finer component ablation, a second hard task
+for E2, and the in-progress `prompt_mode=generic` path to reduce specialization.

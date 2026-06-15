@@ -1,85 +1,119 @@
+## Handoff: Reproduce Carmon2019Unlabeled Robust Accuracy (CIFAR-10, Linf)
+
+### 1. Load Model
+
 ```python
-"""
-Reproduce robust accuracy of Carmon2019Unlabeled on CIFAR-10 under Linf threat model
-using AutoAttack custom version with ['apgd-ce', 'apgd-dlr'], 1 restart each.
-
-Environment: CPU-only, offline.
-Checkpoint: robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt
-Data: robustbench_data (first 50 CIFAR-10 test examples)
-Epsilon: 0.031372549
-"""
-
-import torch
-import torchvision.transforms as transforms
 from robustbench.utils import load_model
-from robustbench.data import load_clean_dataset
-from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
+
+model = load_model(
+    model_name='Carmon2019Unlabeled',
+    model_dir='robustbench_models',          # base directory
+    dataset='cifar10',
+    threat_model='Linf',
+    custom_checkpoint='robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt'
+)
+```
+
+- `load_model` expects the checkpoint at `{model_dir}/{dataset}/{threat_model}/{model_name}.pt`
+- The checkpoint is already at `robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt`
+- Model architecture: `WideResNet(depth=28, widen_factor=10, sub_block1=True)`
+- Model is returned in `eval()` mode
+
+### 2. Load CIFAR-10 Test Data (first 50 examples)
+
+```python
+from robustbench.data import load_cifar10
+
+x_test, y_test = load_cifar10(
+    n_examples=50,
+    data_dir='robustbench_data',
+    transforms_test=None  # no additional transforms; model handles normalization internally
+)
+```
+
+- `load_cifar10` returns `(torch.Tensor, torch.Tensor)` with shape `(50, 3, 32, 32)` and `(50,)`
+- The model (DMWideResNet) applies its own normalization using `CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)` and `CIFAR10_STD = (0.2471, 0.2435, 0.2616)` via registered buffers
+- No external preprocessing needed
+
+### 3. AutoAttack Custom Version
+
+```python
 from autoattack import AutoAttack
 
-# ── Configuration ──────────────────────────────────────────────────────────
-MODEL_NAME = "Carmon2019Unlabeled"
-DATASET = BenchmarkDataset.cifar_10
-THREAT_MODEL = ThreatModel.Linf
-EPS = 0.031372549
-N_EXAMPLES = 50
-MODEL_DIR = "robustbench_models"
-DATA_DIR = "robustbench_data"
-DEVICE = torch.device("cpu")
-
-# ── 1. Load model from local checkpoint ────────────────────────────────────
-# load_model() automatically looks for the checkpoint at:
-#   robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt
-model = load_model(
-    model_name=MODEL_NAME,
-    model_dir=MODEL_DIR,
-    dataset=DATASET,
-    threat_model=THREAT_MODEL,
-    device=DEVICE,
-)
-model.eval()
-
-# ── 2. Load CIFAR-10 test data (first 50 examples) ────────────────────────
-# The preprocessing used by Carmon2019Unlabeled is the default identity
-# (no extra transforms) because the model's DMWideResNet normalizes internally
-# using its own mean/std buffers.
-preprocessing = transforms.Compose([transforms.ToTensor()])
-
-x_test, y_test = load_clean_dataset(
-    dataset=DATASET,
-    n_examples=N_EXAMPLES,
-    data_dir=DATA_DIR,
-    prepr=preprocessing,
-)
-
-# ── 3. Set up AutoAttack custom version ────────────────────────────────────
 adversary = AutoAttack(
     model,
-    norm="Linf",
-    eps=EPS,
-    version="custom",           # enables custom attack list
-    device=DEVICE,
-    log_path=None,              # suppress logging
+    norm='Linf',
+    eps=0.031372549,
+    version='custom',
+    device='cpu'
 )
 
-# Set the attacks and number of restarts via the `attacks_to_run` attribute
-adversary.attacks_to_run = ["apgd-ce", "apgd-dlr"]
-
-# Set n_restarts for each APGD attack via the `apgd` attribute
+# Set number of restarts for each attack
 adversary.apgd.n_restarts = 1
+adversary.apgd_targeted = None  # not used
 
-# ── 4. Run evaluation ──────────────────────────────────────────────────────
+# Run attacks: ['apgd-ce', 'apgd-dlr']
 x_adv = adversary.run_standard_evaluation(
     x_test,
     y_test,
-    bs=50,                      # batch size = number of examples
+    bs=50  # batch size; can be smaller if memory limited
+)
+```
+
+- `adversary.apgd.n_restarts` controls restarts for APGD-CE and APGD-DLR
+- `run_standard_evaluation` returns adversarial examples `x_adv`
+
+### 4. Compute Robust Accuracy
+
+```python
+with torch.no_grad():
+    logits = model(x_adv)
+    preds = logits.argmax(dim=1)
+    robust_acc = (preds == y_test).float().mean().item()
+
+print(f"Robust accuracy: {robust_acc:.4f}")  # fraction (e.g., 0.8600)
+```
+
+- Returns fraction (0.0 to 1.0), not percentage
+
+### 5. Complete Script
+
+```python
+import torch
+from robustbench.utils import load_model
+from robustbench.data import load_cifar10
+from autoattack import AutoAttack
+
+# Load model
+model = load_model(
+    model_name='Carmon2019Unlabeled',
+    model_dir='robustbench_models',
+    dataset='cifar10',
+    threat_model='Linf',
+    custom_checkpoint='robustbench_models/cifar10/Linf/Carmon2019Unlabeled.pt'
 )
 
-# ── 5. Compute robust accuracy ─────────────────────────────────────────────
-with torch.no_grad():
-    outputs = model(x_adv)
-    _, predicted = outputs.max(1)
-    correct = (predicted == y_test).sum().item()
-    robust_acc = correct / N_EXAMPLES   # fraction (not percentage)
+# Load data (first 50 examples)
+x_test, y_test = load_cifar10(n_examples=50, data_dir='robustbench_data')
 
-print(f"Robust accuracy: {robust_acc:.4f} ({100 * robust_acc:.2f}%)")
+# Setup AutoAttack
+adversary = AutoAttack(model, norm='Linf', eps=0.031372549, version='custom', device='cpu')
+adversary.apgd.n_restarts = 1
+
+# Generate adversarial examples
+x_adv = adversary.run_standard_evaluation(x_test, y_test, bs=50)
+
+# Compute robust accuracy
+with torch.no_grad():
+    logits = model(x_adv)
+    preds = logits.argmax(dim=1)
+    robust_acc = (preds == y_test).float().mean().item()
+
+print(f"Robust accuracy: {robust_acc:.4f}")
 ```
+
+### Key Notes
+
+- **CPU-only**: All tensors and models are on CPU; `device='cpu'` in AutoAttack
+- **Offline**: No downloads needed; checkpoint and data are pre-downloaded
+- **Expected output**: Robust accuracy ~0.86 (fraction) for Carmon2019Unlabeled on CIFAR-10 Linf with epsilon=0.031372549

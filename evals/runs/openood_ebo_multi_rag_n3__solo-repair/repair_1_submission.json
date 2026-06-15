@@ -1,0 +1,11 @@
+```json
+{
+  "edits": [
+    {
+      "old": "    checkpoint_dir = os.path.join(root, 'results', 'cifar10_resnet18_32x32_base_e100_lr0.1_default')",
+      "new": "    checkpoint_dir = os.path.join(root, 'results', 'cifar10_resnet18_32x32_base_e100_lr0.1_default') if not root.endswith('cifar10_resnet18_32x32_base_e100_lr0.1_default') else root"
+    }
+  ],
+  "rationale": "The execution log shows the script was invoked with `--root results/cifar10_resnet18_32x32_base_e100_lr0.1_default`, but the code then double-joins that path with the same directory name, producing a non-existent path. The fix detects when `root` already ends with the checkpoint directory name and uses `root` directly as `checkpoint_dir`; otherwise it joins as before. This preserves the original behavior when `--root` points to the workspace root."
+}
+```

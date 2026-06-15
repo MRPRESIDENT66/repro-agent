@@ -1,15 +1,28 @@
-## Audit Report
+REVIEW_STATUS: REPAIR_REQUIRED
 
-The execution log shows that the evaluation script ran successfully in Command 6, producing a `REPRO_RESULT` with `"actual": 51.99999809265137` and `"num_examples": 50`. I verify the following required checks:
+**Audit findings:**
 
-1. **Robust accuracy is percentage (0–100), not fraction**: The reported value `51.99999809265137` is a percentage (approximately 52%), not a fraction. This is correct.
+1. **No valid REPRO_RESULT line** – The execution never reached the `print(f"REPRO_RESULT ...")` line because the script crashed with a `RuntimeError` in all successful attack runs (Commands 4, 8, 10). The error is:
+   ```
+   RuntimeError: The size of tensor a (32) must match the size of tensor b (50) at non-singleton dimension 2
+   ```
+   This indicates a shape mismatch: `x_adv.argmax(1)` has shape `[32]` (batch size from AutoAttack's internal batching) while `y_test` has shape `[50]` (the requested 50 examples). The `run_standard_evaluation` method processes data in batches internally, and the returned `x_adv` may not align with the original `y_test` tensor when `n_examples` is not a multiple of the batch size.
 
-2. **num_examples=50 in REPRO_RESULT**: The output contains `"num_examples": 50`, matching the required `--n_examples 50` argument. This is correct.
+2. **robust accuracy is percentage (0–100)** – The code correctly converts to percentage with `robust_acc_pct = robust_acc * 100.0`, so this requirement is met in the implementation.
 
-3. **AutoAttack was actually run (not skipped)**: The log shows AutoAttack execution with `apgd-ce - 1/1 - 18 out of 46 successfully perturbed` and `apgd-dlr - 1/1 - 2 out of 28 successfully perturbed`, followed by `robust accuracy: 52.00%`. The attack was executed, not skipped.
+3. **num_examples=50 in REPRO_RESULT** – The implementation includes `"num_examples": args.n_examples` in the result dict, which would be 50. However, no REPRO_RESULT was ever printed.
 
-4. **The result came from actual model evaluation**: The log shows `initial accuracy: 92.00%` (clean accuracy), then the attack perturbations, and finally the robust accuracy computation. The model was evaluated on the adversarial examples produced by AutoAttack.
+4. **AutoAttack was actually run** – The logs show AutoAttack ran successfully (APGD-CE and APGD-DLR completed), so this requirement is satisfied.
 
-All four checks pass. The execution succeeded with no errors in the final run.
+5. **Result came from actual model evaluation** – The attack ran and produced robust accuracy values (e.g., 52.00%), but the final computation failed due to the shape mismatch, so the result was never captured.
 
-REVIEW_STATUS: PASS
+**Root cause:** The `run_standard_evaluation` method returns adversarial examples in batches, and the final `x_adv` tensor may have a different first dimension than `y_test` when `n_examples` is not a multiple of the internal batch size. The comparison `x_adv.argmax(1) == y_test` fails because `x_adv` has shape `[32, 3, 32, 32]` (last batch of 32) while `y_test` has shape `[50]`.
+
+**Required repair:** The evaluation must handle the batching correctly. Either:
+- Use `adversary.run_standard_evaluation` with a batch size that divides `n_examples` evenly, or
+- Recompute predictions on the full `x_adv` tensor after the attack, or
+- Use the robust accuracy reported by AutoAttack's internal logging (e.g., "robust accuracy: 52.00%") instead of recomputing.
+
+The script must be fixed to produce a valid `REPRO_RESULT` with `metric="robust_accuracy"`, `actual` as a percentage (0–100), and `num_examples=50`.
+
+REVIEW_STATUS: REPAIR_REQUIRED

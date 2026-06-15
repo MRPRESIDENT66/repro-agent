@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Evaluate Carmon2019Unlabeled robust accuracy on CIFAR-10 under Linf AutoAttack."""
+"""
+Reproduce robust accuracy of Carmon2019Unlabeled on CIFAR-10 under Linf threat model.
+Uses AutoAttack custom version with ['apgd-ce', 'apgd-dlr'], 1 restart each.
+Evaluates on first 50 test examples with epsilon=0.031372549.
+CPU-only, offline.
+"""
 
 import argparse
 import json
@@ -19,57 +24,59 @@ def main():
     parser.add_argument('--epsilon', type=float, default=0.031372549)
     args = parser.parse_args()
 
-    # 1. Load model
+    device = torch.device('cpu')
+    dataset = BenchmarkDataset.cifar_10
+    threat_model = ThreatModel.Linf
+
+    # 1. Load model (no device argument - move to device after loading)
     model = load_model(
         model_name=args.model_name,
-        dataset='cifar10',
-        threat_model='Linf',
         model_dir=args.model_dir,
+        dataset=dataset,
+        threat_model=threat_model
     )
+    model = model.to(device)
     model.eval()
 
-    # 2. Load CIFAR-10 test data (first n_examples)
-    prepr = get_preprocessing(
-        BenchmarkDataset.cifar_10,
-        ThreatModel.Linf,
-        args.model_name,
-        None,
-    )
+    # 2. Get preprocessing and load CIFAR-10 test data
+    prepr = get_preprocessing(dataset, threat_model, args.model_name, None)
     x_test, y_test = load_clean_dataset(
-        dataset=BenchmarkDataset.cifar_10,
+        dataset=dataset,
         n_examples=args.n_examples,
         data_dir=args.data_dir,
-        prepr=prepr,
+        prepr=prepr
     )
 
-    # 3. Setup AutoAttack (custom version, only APGD-CE and APGD-DLR)
+    # 3. Configure AutoAttack custom version
     adversary = AutoAttack(
         model,
         norm='Linf',
         eps=args.epsilon,
         version='custom',
-        device='cpu',
-        log_path='./log.txt',
+        device=device,
+        log_path=None
     )
+
+    # Set attacks and number of restarts
     adversary.attacks_to_run = ['apgd-ce', 'apgd-dlr']
     adversary.apgd.n_restarts = 1
+    adversary.apgd_targeted.n_restarts = 1
 
-    # 4. Run attack
+    # 4. Generate adversarial examples
     x_adv = adversary.run_standard_evaluation(x_test, y_test)
 
-    # 5. Compute robust accuracy
+    # 5. Compute robust accuracy as percentage (0-100)
     with torch.no_grad():
         outputs = model(x_adv)
-        _, y_pred = outputs.max(1)
-
-    robust_acc_frac = (y_pred == y_test).float().mean().item()
-    robust_acc_pct = robust_acc_frac * 100.0
+        _, predicted = outputs.max(1)
+        correct = (predicted == y_test).sum().item()
+        robust_accuracy_pct = 100.0 * correct / args.n_examples
 
     # 6. Print result in required format
     result = {
         "metric": "robust_accuracy",
-        "actual": robust_acc_pct,
-        "num_examples": args.n_examples,
+        "actual": robust_accuracy_pct,
+        "num_examples": args.n_examples
     }
     print(f"REPRO_RESULT {json.dumps(result)}")
 

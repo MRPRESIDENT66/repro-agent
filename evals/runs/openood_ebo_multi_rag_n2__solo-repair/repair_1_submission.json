@@ -1,0 +1,15 @@
+```json
+{
+  "edits": [
+    {
+      "old": "from openood.datasets.imglist_dataset import ImglistDataset",
+      "new": "from openood.datasets.imglist_dataset import ImglistDataset\nfrom openood.preprocessors.base_preprocessor import BasePreprocessor"
+    },
+    {
+      "old": "    # Build test transform\n    transform = get_test_transform()\n\n    # Load ID dataset (CIFAR-10 test) once for all runs\n    id_imglist = os.path.join(root, 'data/benchmark_imglist/cifar10/test_cifar10.txt')\n    id_data_dir = os.path.join(root, 'data/images_classic')\n    id_dataset = ImglistDataset(\n        imglist_pth=id_imglist,\n        data_dir=id_data_dir,\n        transform=transform\n    )",
+      "new": "    # Build test transform\n    transform = get_test_transform()\n\n    # Create a minimal preprocessor that wraps our transform\n    class SimplePreprocessor(BasePreprocessor):\n        def __init__(self, transform):\n            self.transform = transform\n        def setup(self, **kwargs):\n            pass\n        def __call__(self, image):\n            return self.transform(image)\n\n    preprocessor = SimplePreprocessor(transform)\n\n    # Load ID dataset (CIFAR-10 test) once for all runs\n    id_imglist = os.path.join(root, 'data/benchmark_imglist/cifar10/test_cifar10.txt')\n    id_data_dir = os.path.join(root, 'data/images_classic')\n    id_dataset = ImglistDataset(\n        name='cifar10_test',\n        imglist_pth=id_imglist,\n        data_dir=id_data_dir,\n        num_classes=NUM_CLASSES,\n        preprocessor=preprocessor,\n        data_aux_preprocessor=preprocessor\n    )"
+    }
+  ],
+  "rationale": "Fixed edit 2 to use the exact old snippet from the current file. The patch adds the BasePreprocessor import and replaces the ImglistDataset instantiation with one that passes all required arguments (name, num_classes, preprocessor, data_aux_preprocessor) using a minimal SimplePreprocessor subclass that wraps our existing transform."
+}
+```

@@ -1,0 +1,11 @@
+```json
+{
+  "edits": [
+    {
+      "old": "    # Paths\n    data_dir = os.path.join(root, 'data', 'images_classic')\n    imglist_dir = os.path.join(root, 'data', 'benchmark_imglist', 'cifar10')\n    ood_imglist_dir = os.path.join(root, 'data', 'benchmark_imglist')\n    checkpoint_dir = os.path.join(root, 'results',\n                                  'cifar10_resnet18_32x32_base_e100_lr0.1_default')\n    # If root already points to the checkpoint directory, adjust\n    if os.path.basename(root) == 'cifar10_resnet18_32x32_base_e100_lr0.1_default':\n        checkpoint_dir = root",
+      "new": "    # Paths\n    data_dir = os.path.join(root, 'data', 'images_classic')\n    imglist_dir = os.path.join(root, 'data', 'benchmark_imglist', 'cifar10')\n    ood_imglist_dir = os.path.join(root, 'data', 'benchmark_imglist')\n    checkpoint_dir = os.path.join(root, 'results',\n                                  'cifar10_resnet18_32x32_base_e100_lr0.1_default')\n    # If root already points to the checkpoint directory, adjust\n    if os.path.basename(root) == 'cifar10_resnet18_32x32_base_e100_lr0.1_default':\n        checkpoint_dir = root\n        data_dir = os.path.join(os.path.dirname(root), 'data', 'images_classic')\n        imglist_dir = os.path.join(os.path.dirname(root), 'data', 'benchmark_imglist', 'cifar10')\n        ood_imglist_dir = os.path.join(os.path.dirname(root), 'data', 'benchmark_imglist')"
+    }
+  ],
+  "rationale": "The execution log shows that when --root points to the checkpoint directory, the script incorrectly constructs paths by appending 'results/...' again, leading to 'Error: Checkpoint not found'. The fix adjusts data_dir, imglist_dir, and ood_imglist_dir to use the parent directory when root is the checkpoint directory, so that all paths resolve correctly."
+}
+```

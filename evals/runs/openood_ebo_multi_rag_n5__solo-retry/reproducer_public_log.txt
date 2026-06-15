@@ -1,0 +1,124 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Error: Checkpoint not found at results/cifar10_resnet18_32x32_base_e100_lr0.1_default/results/cifar10_resnet18_32x32_base_e100_lr0.1_default/s0/best.ckpt
+
+```
+
+## Command 3
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=1 timed_out=False
+
+```text
+
+Sorry: IndentationError: expected an indented block after 'if' statement on line 168 (eval_ebo.py, line 169)
+```
+
+## Command 4
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 5
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 240, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 130, in main
+    id_dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: 'results/cifar10_resnet18_32x32_base_e100_lr0.1_default/benchmark_imglist/cifar10/test.txt'
+
+```
+
+## Command 6
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 7
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 198, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 104, in main
+    id_dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: 'results/cifar10_resnet18_32x32_base_e100_lr0.1_default/data/cifar10_test.txt'
+
+```
+
+## Command 8
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=1 timed_out=False
+
+```text
+
+  File "eval_ebo.py", line 183
+    'tin': {
+           ^
+SyntaxError: '{' was never closed
+
+```

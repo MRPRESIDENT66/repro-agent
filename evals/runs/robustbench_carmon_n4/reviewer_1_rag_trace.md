@@ -340,16 +340,16 @@ Retrieved source snippets:
 
 ## Query 2
 
-run_standard_evaluation returns shape batch size
+def load_clean_dataset robustbench/data.py
 
 ## Result 2
 
 Most relevant files:
-  robustbench/eval.py  —  CORRUPTION_DATASET_LOADERS
   robustbench/data.py  —  PREPROCESSINGS = {
+  robustbench/eval.py  —  CORRUPTION_DATASET_LOADERS
   robustbench/loaders.py  —  This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
-  tests/test_eval.py  —  class CleanAccTester(TestCase):
-  robustbench/model_zoo/cifar10.py  —  DMWideResNet, Swish, DMPreActResNet
+  robustbench/utils.py  —  ACC_FIELDS = {
+  tests/test_clean_acc.py  —  def _accuracy_computation(success_criterion: Callable[[str, float, str, str], bool], n_ex: int = 200) -> None:
 
 Error evidence used for ranking:
 Users/jinmingyi/PycharmProjects/repro-agent/.venv/lib/python3.12/site-packages/torchvision/datasets/cifar.py
@@ -358,13 +358,91 @@ RuntimeError: The size of tensor a (32) must match the size of tensor b (50) at 
 
 Retrieved source snippets:
 
+## Source: robustbench/data.py
+
+# Lines 5-16
+    5: 
+    6: import numpy as np
+    7: import timm
+    8: import torch
+    9: import torch.utils.data as data
+   10: import torchvision.datasets as datasets
+   11: import torchvision.transforms as transforms
+   12: from torch.utils.data import Dataset
+   13: from torch import nn
+   14: 
+   15: from robustbench.model_zoo import model_dicts as all_models
+   16: from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
+
+# Lines 71-82
+   71:     if isinstance(preprocessing, Callable):
+   72:         return preprocessing
+   73:     # If preprocessing is already specified as a string, then fetch it and return it
+   74:     if preprocessing is not None:
+   75:         return PREPROCESSINGS[preprocessing]
+   76:     # If the dataset is not imagenet, then the only needed preprocessing is ToTensor
+   77:     if dataset != BenchmarkDataset.imagenet:
+   78:         return PREPROCESSINGS[None]
+   79:     # At this point the model name should be specified
+   80:     if model_name is None:
+   81:         raise Exception(
+   82:             "Preprocessing should be specified if the model is not already in the model zoo"
+
+# Lines 92-103
+   92:     threat_model = ThreatModel(threat_model.value.replace('_3d', ''))
+   93:     prepr = all_models[dataset][threat_model][model_name]['preprocessing']
+   94:     return PREPROCESSINGS[prepr]
+   95: 
+   96: 
+   97: def _load_dataset(
+   98:         dataset: Dataset,
+   99:         n_examples: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+  100:     batch_size = 100
+  101:     test_loader = data.DataLoader(dataset,
+  102:                                   batch_size=batch_size,
+  103:                                   shuffle=False,
+
+# Lines 122-145
+  122: def load_cifar10(
+  123:     n_examples: Optional[int] = None,
+  124:     data_dir: str = './data',
+  125:     transforms_test: Callable = PREPROCESSINGS[None]
+  126: ) -> Tuple[torch.Tensor, torch.Tensor]:
+  127:     dataset = datasets.CIFAR10(root=data_dir,
+  128:                                train=False,
+  129:                                transform=transforms_test,
+  130:                                download=True)
+  131:     return _load_dataset(dataset, n_examples)
+  132: 
+  133: 
+  134: def load_cifar100(
+  135:     n_examples: Optional[int] = None,
+  136:     data_dir: str = './data',
+  137:     transforms_test: Callable = PREPROCESSINGS[None]
+  138: ) -> Tuple[torch.Tensor, torch.Tensor]:
+  139:     dataset = datasets.CIFAR100(root=data_dir,
+  140:                                 train=False,
+  141:                                 transform=transforms_test,
+  142:                                 download=True)
+  143:     return _load_dataset(dataset, n_examples)
+  144: 
+  145: 
+
+# Lines 162-185
+  162:     x_test, y_test, paths = next(iter(test_loader))
+  163: 
+  164:     return x_test, y_test
+  165: 
+  166: 
+  167: CleanDatasetLoader = Callable[[Optional[int], str, Callable],
+  168:                               Tuple[torch.Tensor, torch.Tensor]]
+  169: _clean_dataset_loaders: Dict[BenchmarkDataset, CleanDatasetLoader] = {
+  170:     BenchmarkDataset.cifar_10: load_cifar10,
+  171:     BenchmarkDataset.cifar_100: l
+
 ## Source: robustbench/eval.py
 
-# Lines 6-17
-    6: import numpy as np
-    7: import pandas as pd
-    8: import torch
-    9: import random
+# Lines 10-31
    10: from autoattack import AutoAttack
    11: from autoattack.state import EvaluationState
    12: from torch import nn
@@ -373,8 +451,22 @@ Retrieved source snippets:
    15: from robustbench.data import CORRUPTIONS_DICT, get_preprocessing, load_clean_dataset, \
    16:     CORRUPTION_DATASET_LOADERS
    17: from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
+   18: from robustbench.utils import clean_accuracy, load_model, parse_args, update_json
+   19: from robustbench.model_zoo import model_dicts as all_models
+   20: 
+   21: 
+   22: def benchmark(
+   23:     model: Union[nn.Module, Sequence[nn.Module]],
+   24:     n_examples: int = 10000,
+   25:     dataset: Union[str, BenchmarkDataset] = BenchmarkDataset.cifar_10,
+   26:     threat_model: Union[str, ThreatModel] = ThreatModel.Linf,
+   27:     to_disk: bool = False,
+   28:     model_name: Optional[str] = None,
+   29:     data_dir: str = "./data",
+   30:     corruptions_data_dir: Optional[str] = None,
+   31:     device: Optional[Union[torch.device, Sequence[torch.device]]] = None,
 
-# Lines 40-71
+# Lines 40-57
    40:     It is possible to benchmark on 3 different threat models, and to save the results on disk. In
    41:     the future benchmarking multiple models in parallel is going to be possible.
    42: 
@@ -393,116 +485,33 @@ Retrieved source snippets:
    55:     :param eps: The epsilon to use for L2 and Linf threat models. Must not be specified for
    56:     corruptions threat model.
    57:     :param preprocessing: The preprocessing that should be used for ImageNet benchmarking. Should be
-   58:     specified if `dataset` is `imageget`.
-   59:     :param aa_state_path: The path where the AA state will be saved and from where should be
-   60:     loaded if it already exists. If `None` no state will be used.
-   61: 
-   62:     :return: A Tuple with the clean accuracy and the accuracy in the given threat model.
-   63:     """
-   64:     if isinstance(model, Sequence) or isinstance(device, Sequence):
-   65:         # Multiple models evaluation in parallel not yet implemented
-   66:         raise NotImplementedError
-   67: 
-   68:     try:
-   69:         if model.training:
-   70:             warnings.warn(Warning("The given model is *not* in eval mode."))
-   71:     except AttributeError:
 
-# Lines 102-113
-  102:                                norm=threat_model_.value,
-  103:                                eps=eps,
-  104:                                version='standard',
-  105:                                device=device,
-  106:                                log_path=log_path)
-  107:         x_adv = adversary.run_standard_evaluation(clean_x_test,
-  108:                                                   clean_y_test,
-  109:                                                   bs=batch_size,
-  110:                                                   state_path=aa_state_path)
-  111:         if aa_state_path is None:
-  112:             adv_accuracy = clean_accuracy(model,
-  113:                   
+# Lines 80-91
+   80:     model = model.to(device)
+   81: 
+   82:     prepr = get_preprocessing(dataset_, threat_model_, model_name,
+   83:                               preprocessing)
+   84: 
+   85:     clean_x_test, clean_y_test = load_clean_dataset(dataset_, n_examples,
+   86:                                                     data_dir, prepr)
+   87: 
+   88:     accuracy = clean_accuracy(model,
+   89:                               clean_x_test,
+   90:                               clean_y_test,
+   91:                               batch_size=batch_size,
 
-## Source: robustbench/data.py
-
-# Lines 5-16
-    5: 
-    6: import numpy as np
-    7: import timm
-    8: import torch
-    9: import torch.utils.data as data
-   10: import torchvision.datasets as datasets
-   11: import torchvision.transforms as transforms
-   12: from torch.utils.data import Dataset
-   13: from torch import nn
-   14: 
-   15: from robustbench.model_zoo import model_dicts as all_models
-   16: from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
-
-# Lines 65-82
-   65: 
-   66: def get_preprocessing(
-   67:         dataset: BenchmarkDataset, threat_model: ThreatModel,
-   68:         model_name: Optional[str],
-   69:         preprocessing: Optional[Union[str, Callable]]) -> Callable:
-   70:     # If preprocessing is already as a function, then return it
-   71:     if isinstance(preprocessing, Callable):
-   72:         return preprocessing
-   73:     # If preprocessing is already specified as a string, then fetch it and return it
-   74:     if preprocessing is not None:
-   75:         return PREPROCESSINGS[preprocessing]
-   76:     # If the dataset is not imagenet, then the only needed preprocessing is ToTensor
-   77:     if dataset != BenchmarkDataset.imagenet:
-   78:         return PREPROCESSINGS[None]
-   79:     # At this point the model name should be specified
-   80:     if model_name is None:
-   81:         raise Exception(
-   82:             "Preprocessing should be specified if the model is not already in the model zoo"
-
-# Lines 105-116
-  105: 
-  106:     x_test, y_test = [], []
-  107:     for i, (x, y) in enumerate(test_loader):
-  108:         x_test.append(x)
-  109:         y_test.append(y)
-  110:         if n_examples is not None and batch_size * i >= n_examples:
-  111:             break
-  112:     x_test_tensor = torch.cat(x_test)
-  113:     y_test_tensor = torch.cat(y_test)
-  114: 
-  115:     if n_examples is not None:
-  116:         x_test_tensor = x_test_tensor[:n_examples]
-
-# Lines 148-159
-  148:     data_dir: str = './data',
-  149:     transforms_test: Callable = PREPROCESSINGS['Res256Crop224']
-  150: ) -> Tuple[torch.Tensor, torch.Tensor]:
-  151:     if n_examples > 5000:
-  152:         raise ValueError(
-  153:             'The evaluation is currently possible on at most 5000 points-')
-  154: 
-  155:     imagenet = CustomImageFolder(data_dir + '/val', transforms_test)
-  156: 
-  157:     test_loader = data.DataLoader(imagenet,
-  158:                                   batch_size=n_examples,
-  159:                                   shuffle=False,
-
-# Lines 240-251
-  240:     corruptions: Sequence[str] = CORRUPTIONS,
-  241:     prepr: Callable = PREPROCESSINGS[None]
-  242: ) -> Tuple[torch.Tensor, torch.Tensor]:
-  243:     if n_examples > 5000:
-  244:         raise ValueError(
-  245:             'The evaluation is currently possible on at most 5000 points.')
-  246: 
-  247:     assert len(
-  248:         corruptions
-  249:     ) == 1, "so far only one corruption is supported (that's how this function is called in eval.py"
-  250:     # TODO: generalize this (although this would probably require writing a function similar to `load_corruptions_cifar`
-  251:     #  or alternatively creating yet another CustomImageFolder class that fetches ima
+# Lines 145-156
+  145:                     adv_accuracy, eps, extra_metrics)
+  146: 
+  147:     return accuracy, adv_accuracy
+  148: 
+  149: 
+  150: def corruptions_evaluation(batch_size: int, data_dir: str,
+  151:                            dataset: BenchmarkDatase
 
 ## Source: robustbench/loaders.py
 
-# Lines 1-16
+# Lines 1-12
     1: """
     2: This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
     3: """
@@ -515,12 +524,19 @@ Retrieved source snippets:
    10: import torchvision.transforms as transforms
    11: 
    12: from PIL import Image
-   13: 
+
+# Lines 14-36
    14: import os
    15: import os.path
    16: import sys
-
-# Lines 25-36
+   17: 
+   18: 
+   19: def make_custom_dataset(root, path_imgs, class_to_idx):
+   20:     with open(pkg_resources.resource_filename(__name__, path_imgs), 'r') as f:
+   21:         fnames = f.readlines()
+   22:     images = [(os.path.join(root,
+   23:                             c.split('\n')[0]), class_to_idx[c.split('/')[0]])
+   24:               for c in fnames]
    25: 
    26:     return images
    27: 
@@ -534,18 +550,7 @@ Retrieved source snippets:
    35:         root/class_y/nsdf3.ext
    36:         root/class_y/asd932_.ext
 
-# Lines 38-78
-   38:         root (string): Root directory path.
-   39:         loader (callable): A function to load a sample given its path.
-   40:         extensions (tuple[string]): A list of allowed extensions.
-   41:             both extensions and is_valid_file should not be passed.
-   42:         transform (callable, optional): A function/transform that takes in
-   43:             a sample and returns a transformed version.
-   44:             E.g, ``transforms.RandomCrop`` for images.
-   45:         target_transform (callable, optional): A function/transform that takes
-   46:             in the target and transforms it.
-   47:         is_valid_file (callable, optional): A function that takes path of an Image file
-   48:             and check if the file is a valid_file (used to check of corrupt files)
+# Lines 49-74
    49:             both extensions and is_valid_file should not be passed.
    50:      Attributes:
    51:         classes (list): List of the class names.
@@ -572,31 +577,108 @@ Retrieved source snippets:
    72:             raise (RuntimeError("Found 0 files in subfolders of: " +
    73:                                 self.root + "\n"
    74:                                 "Supported extensions are: " +
-   75:                                 ",".join(extensions)))
-   76: 
-   77:         self.loader = loader
-   78:         self.extensions = extensions
 
 # Lines 82-93
-   82:         self.sa
+   82:         self.samples = samples
+   83:         self.targets = [s[1] for s in samples]
+   84: 
+   85:     def _find_classes(self, dir):
+   86:         """
+   87:         Finds the class folders in a dataset.
+   88:         Args:
+   89:             dir (string): Root directory path.
+   90:         Returns:
+   91:             tuple: (classes, class_to_idx) where classes are relative to (dir), and class_to_idx is a dictionary.
+   92:         Ensures:
+   93:             No class is a subdirectory of another.
 
-## Source: tests/test_eval.py
+# Lines 125-143
+  125: 
+  126: IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif'
 
-from unittest import TestCase
+## Source: robustbench/utils.py
 
-from robustbench import benchmark
-from robustbench.model_zoo.enums import ThreatModel
-from tests.utils import DummyModel
+# Lines 13-36
+   13: import torch
+   14: from torch import nn
+   15: import gdown
+   16: 
+   17: from robustbench.model_zoo import model_dicts as all_models
+   18: from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
+   19: 
+   20: ACC_FIELDS = {
+   21:     ThreatModel.corruptions: "corruptions_acc",
+   22:     ThreatModel.corruptions_3d: "corruptions_acc_3d",
+   23:     ThreatModel.L2: ("external", "autoattack_acc"),
+   24:     ThreatModel.Linf: ("external", "autoattack_acc")
+   25: }
+   26: 
+   27: 
+   28: DATASET_CLASSES = {
+   29:     BenchmarkDataset.cifar_10: 10,
+   30:     BenchmarkDataset.cifar_100: 100,
+   31:     BenchmarkDataset.imagenet: 1000,
+   32: }
+   33: 
+   34: CANNED_USER_AGENT="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36"  # NOQA
+   35: 
+   36: 
 
+# Lines 104-125
+  104: 
+  105: 
+  106: def load_model(model_name: str,
+  107:                model_dir: Union[str, Path] = './models',
+  108:                dataset: Union[str,
+  109:                               BenchmarkDataset] = BenchmarkDataset.cifar_10,
+  110:                threat_model: Union[str, ThreatModel] = ThreatModel.Linf,
+  111:                custom_checkpoint: str = "",
+  112:                norm: Optional[str] = None) -> nn.Module:
+  113:     """Loads a model from the model_zoo.
+  114: 
+  115:      The model is trained on the given ``dataset``, for the given ``threat_model``.
+  116: 
+  117:     :param model_name: The name used in the model zoo.
+  118:     :param model_dir: The base directory where the models are saved.
+  119:     :param dataset: The dataset on which the model is trained.
+  120:     :param threat_model: The threat model for which the model is trained.
+  121:     :param norm: Deprecated argument that can be used in place of ``threat_model``. If specified, it
+  122:       overrides ``threat_model``
+  123: 
+  124:     :return: A ready-to-used trained model.
+  125:     """
 
-class CleanAccTester(TestCase):
-    def test_benchmark_train(self):
-        model = DummyModel()
-        model.train()
-        with self.assertWarns(Warning):
-            benchmark(model,
-                      n_examples=1,
-                      threat_model=ThreatModel.Linf,
-                      eps=8/255, batch_size=100)
+# Lines 204-215
+  204:                 'Xu2024MIMIR_Swin-B',
+  205:                 'Xu2024MIMIR_Swin-L',
+  206:                 ]:
+  207:                 state_dict = add_substr_to_state_dict(state_dict, 'model.')
+  208: 
+  209:         model = _safe_load_state_dict(model, model_name, state_dict, dataset_)
+  210: 
+  211:         return model.eval()
+  212: 
+  213:     # If we have an ensemble of models (e.g., Chen2020Adversarial, Diffenderfer2021Winning_LRR_CARD_Deck)
+  214:     else:
+  215:         model = models[model_name]['model']()
 
+# Lines 334-345
+  334:             if k in x.keys():
+  335:                 return float(x[k])
+  336: 
+  337: 
+  338: def list_available_models(
+  339:         dataset: Union[str, BenchmarkDataset] = BenchmarkDataset.cifar_10,
+  340:         threat_model: Union[str, ThreatModel] = ThreatModel.Linf,
+  341:         norm: Optional[str] = None):
+  342:     dataset_: BenchmarkDataset = BenchmarkDataset(dataset)
+  343: 
+  344:     if norm is None:
+  345:         threat_model_: ThreatModel = ThreatModel(threat_model)
+
+# Lines 412-423
+  412:             f"\tjournal\t= {{{venue}}},\n"
+  413:             f"\tyear\t= {{{year}}}\n"
+  414:             "}\n")
+  415: 
 

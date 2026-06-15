@@ -24,11 +24,11 @@ exit=1 timed_out=False
 /Users/jinmingyi/PycharmProjects/repro-agent/workspaces/robustbench_multi_rag/robustbench/loaders.py:4: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
   import pkg_resources
 Traceback (most recent call last):
-  File "/Users/jinmingyi/PycharmProjects/repro-agent/workspaces/robustbench_multi_rag/eval_robustbench.py", line 95, in <module>
+  File "/Users/jinmingyi/PycharmProjects/repro-agent/workspaces/robustbench_multi_rag/eval_robustbench.py", line 83, in <module>
     main()
-  File "/Users/jinmingyi/PycharmProjects/repro-agent/workspaces/robustbench_multi_rag/eval_robustbench.py", line 42, in main
-    preprocessing = get_preprocessing(
-                    ^^^^^^^^^^^^^^^^^^
+  File "/Users/jinmingyi/PycharmProjects/repro-agent/workspaces/robustbench_multi_rag/eval_robustbench.py", line 36, in main
+    prepr = get_preprocessing('cifar10', 'Linf', args.model_name)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 TypeError: get_preprocessing() missing 1 required positional argument: 'preprocessing'
 
 ```
@@ -58,12 +58,12 @@ exit=0 timed_out=False
 using custom version including apgd-ce, apgd-dlr.
 initial accuracy: 92.00%
 apgd-ce - 1/1 - 19 out of 46 successfully perturbed
-robust accuracy after APGD-CE: 54.00% (total time 229.3 s)
+robust accuracy after APGD-CE: 54.00% (total time 234.8 s)
 apgd-dlr - 1/1 - 1 out of 27 successfully perturbed
-robust accuracy after APGD-DLR: 52.00% (total time 372.8 s)
+robust accuracy after APGD-DLR: 52.00% (total time 373.0 s)
 max Linf perturbation: 0.03137, nan in tensor: 0, max: 1.00000, min: 0.00000
 robust accuracy: 52.00%
-REPRO_RESULT {"metric": "robust_accuracy", "actual": 52.0, "num_examples": 50}
+REPRO_RESULT {"metric": "robust_accuracy", "actual": 51.99999809265137, "num_examples": 50}
 
 /Users/jinmingyi/PycharmProjects/repro-agent/workspaces/robustbench_multi_rag/robustbench/loaders.py:4: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
   import pkg_resources

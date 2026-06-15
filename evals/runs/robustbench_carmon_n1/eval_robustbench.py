@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
+"""
+Evaluate Carmon2019Unlabeled robust accuracy on CIFAR-10 under Linf threat model.
+Uses AutoAttack with apgd-ce and apgd-dlr attacks, 1 restart each.
+Prints REPRO_RESULT line with robust accuracy in percentage points.
+"""
+
 import argparse
 import json
 import torch
-from robustbench.utils import load_model
-from robustbench.data import load_cifar10
+from robustbench.utils import load_model, clean_accuracy
+from robustbench.data import load_clean_dataset, get_preprocessing
+from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
 from autoattack import AutoAttack
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -20,15 +28,24 @@ def main():
         model_name=args.model_name,
         model_dir=args.model_dir,
         dataset='cifar10',
-        threat_model='Linf',
+        threat_model=ThreatModel.Linf,
     )
     model.eval()
 
-    # Load data (no external preprocessing needed - model handles normalization internally)
-    # Use default transforms_test=PREPROCESSINGS[None] which is transforms.ToTensor()
-    x_test, y_test = load_cifar10(
-        n_examples=args.n_examples,
-        data_dir=args.data_dir,
+    # Get preprocessing (ToTensor only for CIFAR-10)
+    prepr = get_preprocessing(
+        BenchmarkDataset.cifar_10,
+        ThreatModel.Linf,
+        args.model_name,
+        None,
+    )
+
+    # Load clean dataset
+    x_test, y_test = load_clean_dataset(
+        BenchmarkDataset.cifar_10,
+        args.n_examples,
+        args.data_dir,
+        prepr,
     )
 
     # Configure AutoAttack
@@ -37,28 +54,31 @@ def main():
         norm='Linf',
         eps=args.epsilon,
         version='custom',
-        device='cpu'
+        attacks_to_run=['apgd-ce', 'apgd-dlr'],
+        device='cpu',
+        log_path='./aa_log.txt',
     )
-    adversary.attacks_to_run = ['apgd-ce', 'apgd-dlr']
+    # Set number of restarts for each attack
     adversary.apgd.n_restarts = 1
+    adversary.apgd_targeted.n_restarts = 1
 
     # Run attack
     x_adv = adversary.run_standard_evaluation(x_test, y_test)
 
-    # Compute robust accuracy
-    with torch.no_grad():
-        outputs = model(x_adv)
-        _, predicted = outputs.max(1)
-        correct = predicted.eq(y_test).sum().item()
-    robust_acc_pct = 100.0 * correct / args.n_examples
+    # Compute robust accuracy (fraction)
+    robust_acc_frac = clean_accuracy(model, x_adv, y_test)
 
-    # Print result line
+    # Convert to percentage points (0–100)
+    robust_acc_pct = robust_acc_frac * 100.0
+
+    # Print exactly one line with REPRO_RESULT
     result = {
         "metric": "robust_accuracy",
         "actual": robust_acc_pct,
-        "num_examples": args.n_examples
+        "num_examples": args.n_examples,
     }
     print(f"REPRO_RESULT {json.dumps(result)}")
+
 
 if __name__ == '__main__':
     main()

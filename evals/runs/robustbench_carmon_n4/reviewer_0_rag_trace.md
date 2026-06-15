@@ -340,15 +340,15 @@ Retrieved source snippets:
 
 ## Query 2
 
-def load_cifar10 robustbench/data.py
+load_clean_dataset function signature robustbench
 
 ## Result 2
 
 Most relevant files:
-  robustbench/data.py  —  PREPROCESSINGS = {
   robustbench/loaders.py  —  This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
+  robustbench/data.py  —  PREPROCESSINGS = {
   robustbench/eval.py  —  CORRUPTION_DATASET_LOADERS
-  robustbench/model_zoo/cifar10.py  —  DMWideResNet, Swish, DMPreActResNet
+  tests/test_clean_acc.py  —  def _accuracy_computation(success_criterion: Callable[[str, float, str, str], bool], n_ex: int = 200) -> None:
   robustbench/utils.py  —  ACC_FIELDS = {
 
 Error evidence used for ranking:
@@ -357,6 +357,84 @@ Users/jinmingyi/PycharmProjects/repro-agent/workspaces/robustbench_multi_rag/eva
 TypeError: get_preprocessing() missing 1 required positional argument: 'preprocessing'
 
 Retrieved source snippets:
+
+## Source: robustbench/loaders.py
+
+# Lines 1-12
+    1: """
+    2: This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
+    3: """
+    4: import pkg_resources
+    5: 
+    6: from torchvision.datasets.vision import VisionDataset
+    7: 
+    8: import torch
+    9: import torch.utils.data as data
+   10: import torchvision.transforms as transforms
+   11: 
+   12: from PIL import Image
+
+# Lines 14-65
+   14: import os
+   15: import os.path
+   16: import sys
+   17: 
+   18: 
+   19: def make_custom_dataset(root, path_imgs, class_to_idx):
+   20:     with open(pkg_resources.resource_filename(__name__, path_imgs), 'r') as f:
+   21:         fnames = f.readlines()
+   22:     images = [(os.path.join(root,
+   23:                             c.split('\n')[0]), class_to_idx[c.split('/')[0]])
+   24:               for c in fnames]
+   25: 
+   26:     return images
+   27: 
+   28: 
+   29: class CustomDatasetFolder(VisionDataset):
+   30:     """A generic data loader where the samples are arranged in this way: ::
+   31:         root/class_x/xxx.ext
+   32:         root/class_x/xxy.ext
+   33:         root/class_x/xxz.ext
+   34:         root/class_y/123.ext
+   35:         root/class_y/nsdf3.ext
+   36:         root/class_y/asd932_.ext
+   37:     Args:
+   38:         root (string): Root directory path.
+   39:         loader (callable): A function to load a sample given its path.
+   40:         extensions (tuple[string]): A list of allowed extensions.
+   41:             both extensions and is_valid_file should not be passed.
+   42:         transform (callable, optional): A function/transform that takes in
+   43:             a sample and returns a transformed version.
+   44:             E.g, ``transforms.RandomCrop`` for images.
+   45:         target_transform (callable, optional): A function/transform that takes
+   46:             in the target and transforms it.
+   47:         is_valid_file (callable, optional): A function that takes path of an Image file
+   48:             and check if the file is a valid_file (used to check of corrupt files)
+   49:             both extensions and is_valid_file should not be passed.
+   50:      Attributes:
+   51:         classes (list): List of the class names.
+   52:         class_to_idx (dict): Dict with items (class_name, class_index).
+   53:         samples (list): List of (sample path, class_index) tuples
+   54:         targets (list): The class_index value for each image in the dataset
+   55:     """
+   56: 
+   57:     def __init__(self,
+   58:                  root,
+   59:                  loader,
+   60:                  extensions=None,
+   61:                  transform=None,
+   62:                  target_transform=None,
+   63:                  is_valid_file=None):
+   64:         super(CustomDatasetFolder, self).__init__(root)
+   65:         self.transform = transform
+
+# Lines 161-174
+  161:         root/cat/asd932_.png
+  162:     Args:
+  163:         root (string): Root directory path.
+  164:         transform (callable, optional): A function/transform that  takes in an PIL image
+  165:             and returns a transformed version. E.g, ``transforms.RandomCrop``
+  166:         target_transform (callable
 
 ## Source: robustbench/data.py
 
@@ -388,7 +466,7 @@ Retrieved source snippets:
    53:     interpolation = model.default_cfg['interpolation']
    54:     crop_pct = model.default_cfg['crop_pct']
 
-# Lines 61-103
+# Lines 61-94
    61:         transforms.CenterCrop(img_size),
    62:         transforms.ToTensor()
    63:     ])
@@ -423,118 +501,19 @@ Retrieved source snippets:
    92:     threat_model = ThreatModel(threat_model.value.replace('_3d', ''))
    93:     prepr = all_models[dataset][threat_model][model_name]['preprocessing']
    94:     return PREPROCESSINGS[prepr]
-   95: 
-   96: 
-   97: def _load_dataset(
-   98:         dataset: Dataset,
-   99:         n_examples: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-  100:     batch_size = 100
-  101:     test_loader = data.DataLoader(dataset,
-  102:                                   batch_size=batch_size,
-  103:    
 
-## Source: robustbench/loaders.py
-
-# Lines 14-36
-   14: import os
-   15: import os.path
-   16: import sys
-   17: 
-   18: 
-   19: def make_custom_dataset(root, path_imgs, class_to_idx):
-   20:     with open(pkg_resources.resource_filename(__name__, path_imgs), 'r') as f:
-   21:         fnames = f.readlines()
-   22:     images = [(os.path.join(root,
-   23:                             c.split('\n')[0]), class_to_idx[c.split('/')[0]])
-   24:               for c in fnames]
-   25: 
-   26:     return images
-   27: 
-   28: 
-   29: class CustomDatasetFolder(VisionDataset):
-   30:     """A generic data loader where the samples are arranged in this way: ::
-   31:         root/class_x/xxx.ext
-   32:         root/class_x/xxy.ext
-   33:         root/class_x/xxz.ext
-   34:         root/class_y/123.ext
-   35:         root/class_y/nsdf3.ext
-   36:         root/class_y/asd932_.ext
-
-# Lines 49-60
-   49:             both extensions and is_valid_file should not be passed.
-   50:      Attributes:
-   51:         classes (list): List of the class names.
-   52:         class_to_idx (dict): Dict with items (class_name, class_index).
-   53:         samples (list): List of (sample path, class_index) tuples
-   54:         targets (list): The class_index value for each image in the dataset
-   55:     """
-   56: 
-   57:     def __init__(self,
-   58:                  root,
-   59:                  loader,
-   60:                  extensions=None,
-
-# Lines 102-113
-  102:             ]
-  103:         classes.sort()
-  104:         class_to_idx = {classes[i]: i for i in range(len(classes))}
-  105:         return classes, class_to_idx
-  106: 
-  107:     def __getitem__(self, index):
-  108:         """
-  109:         Args:
-  110:             index (int): Index
-  111:         Returns:
-  112:             tuple: (sample, target) where target is class_index of the target class.
-  113:         """
-
-# Lines 125-161
-  125: 
-  126: IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif',
-  127:                   '.tiff', '.webp')
-  128: 
-  129: 
-  130: def pil_loader(path):
-  131:     # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
-  132:     with open(path, 'rb') as f:
-  133:         img = Image.open(f)
-  134:         return img.convert('RGB')
-  135: 
-  136: 
-  137: def accimage_loader(path):
-  138:     import accimage
-  139:     try:
-  140:         return accimage.Image(path)
-  141:     except IOError:
-  142:         # Potentially a decoding problem, fall back to PIL.Image
-  143:         return pil_loader(path)
-  144: 
-  145: 
-  146: def default_loader(path):
-  147:     from torchvision import get_image_backend
-  148:     if get_image_backend() == 'accimage':
-  149:         return accimage_loader(path)
-  150:     else:
-  151:         return pil_loader(path)
-  152: 
-  153: 
-  154: class CustomImageFolder(CustomDatasetFolder):
-  155:     """A generic data loader where the images are arranged in this way: ::
-  156:         root/dog/xxx.png
-  157:         root/dog/xxy.png
-  158:         root/dog/xxz.png
-  159:         root/cat/123.png
-  160:         root/cat/nsdf3.png
-  161:         root/cat/asd932_.png
-
-# Lines 176-187
-  176: 
-  177:     def __init__(self,
- 
+# Lines 164-185
+  164:     return x_test, y_test
+  165: 
+  166: 
+  167: CleanDatasetLoader = Callable[[Optional[int], str, Callable],
+  168:                               Tuple[torch.Tensor, torch.Tensor]]
+  169: _clean_dataset_loaders: Dict[BenchmarkDataset, CleanDatasetLoader] = {
+  170:     BenchmarkDataset.ci
 
 ## Source: robustbench/eval.py
 
-# Lines 10-31
+# Lines 10-24
    10: from autoattack import AutoAttack
    11: from autoattack.state import EvaluationState
    12: from torch import nn
@@ -550,15 +529,22 @@ Retrieved source snippets:
    22: def benchmark(
    23:     model: Union[nn.Module, Sequence[nn.Module]],
    24:     n_examples: int = 10000,
-   25:     dataset: Union[str, BenchmarkDataset] = BenchmarkDataset.cifar_10,
-   26:     threat_model: Union[str, ThreatModel] = ThreatModel.Linf,
-   27:     to_disk: bool = False,
-   28:     model_name: Optional[str] = None,
-   29:     data_dir: str = "./data",
+
+# Lines 30-41
    30:     corruptions_data_dir: Optional[str] = None,
    31:     device: Optional[Union[torch.device, Sequence[torch.device]]] = None,
+   32:     batch_size: int = 32,
+   33:     eps: Optional[float] = None,
+   34:     log_path: Optional[str] = None,
+   35:     preprocessing: Optional[Union[str,
+   36:                                   Callable]] = None,
+   37:     aa_state_path: Optional[Path] = None) -> Tuple[float, float]:
+   38:     """Benchmarks the given model(s).
+   39: 
+   40:     It is possible to benchmark on 3 different threat models, and to save the results on disk. In
+   41:     the future benchmarking multiple models in parallel is going to be possible.
 
-# Lines 77-88
+# Lines 77-91
    77:     threat_model_: ThreatModel = ThreatModel(threat_model)
    78: 
    79:     device = device or torch.device("cpu")
@@ -571,6 +557,9 @@ Retrieved source snippets:
    86:                                                     data_dir, prepr)
    87: 
    88:     accuracy = clean_accuracy(model,
+   89:                               clean_x_test,
+   90:                               clean_y_test,
+   91:                               batch_size=batch_size,
 
 # Lines 121-132
   121:     
@@ -586,82 +575,78 @@ Retrieved source snippets:
   131:             batch_size, corruptions_data_dir, dataset_, threat_model_, 
   132:             device, model, n_examples, to_disk, prepr, model_name)
 
-# Lines 145-168
-  145:                     adv_accuracy, eps, extra_metrics)
-  146: 
-  147:     return accuracy, adv_accuracy
-  148: 
-  149: 
-  150: def corruptions_evaluation(batch_size: int, data_dir: str,
-  151:                            dataset: BenchmarkDataset, threat_model: ThreatModel, 
-  152:                            device: torch.device, model: nn.Module, n_examples: int, 
-  153:                            to_disk: bool, prepr: str, model_name: Optional[str]) -> float:
-  154:     if to_disk and model_name is None:
-  155:         raise ValueError(
-  156:             "If `to_disk` is True, `model_name` should be specified.")
+# Lines 157-168
   157: 
   158:     corruptions = CORRUPTIONS_DICT[dataset][threat_model]
-  159:     model_results_dict: Dict[Tup
+  159:     model_results_dict: Dict[Tuple[str, int], float] = {}
+  160:     for corruption in tqdm(corruptions):
+  161:         for severity in range(1, 6):
+  162:             x_corrupt, y_corrupt = CORRUPTION_DA
 
-## Source: robustbench/model_zoo/cifar10.py
+## Source: tests/test_clean_acc.py
 
-# Lines 2-32
-    2: 
-    3: import timm
-    4: import torch
-    5: from torch import nn
-    6: 
-    7: from robustbench.model_zoo.architectures.dm_wide_resnet import CIFAR10_MEAN, CIFAR10_STD, \
-    8:     DMWideResNet, Swish, DMPreActResNet
-    9: from robustbench.model_zoo.architectures.resnet import Bottleneck, BottleneckChen2020AdversarialNet, \
-   10:     PreActBlock, PreActBlockV2, PreActResNet, ResNet, ResNet18, BasicBlock
-   11: from robustbench.model_zoo.architectures.resnext import CifarResNeXt, \
-   12:     ResNeXtBottleneck
-   13: from robustbench.model_zoo.architectures.resnest import ResNest152
-   14: from robustbench.model_zoo.architectures.wide_resnet import WideResNet
-   15: from robustbench.model_zoo.architectures.robust_wide_resnet import RobustWideResNet
-   16: from robustbench.model_zoo.architectures.boosting_wide_resnet import BoostingWideResNet
-   17: from robustbench.model_zoo.enums import ThreatModel
-   18: from robustbench.model_zoo.architectures.CARD_resnet import LRR_ResNet, WidePreActResNet
-   19: from robustbench.model_zoo.architectures.paf_wide_resnet import pssilu_wrn_28_10
-   20: from robustbench.model_zoo.architectures.sodef_layers import rebuffi_sodef
-   21: from robustbench.model_zoo.architectures import xcit
-   22: from robustbench.model_zoo.architectures import robust_resnet
-   23: from robustbench.model_zoo.architectures.comp_model import get_composite_model, \
-   24:     get_nonlin_mixed_classifier
-   25: from robustbench.model_zoo.architectures.robustarch_wide_resnet import get_model as get_robustarch_model
-   26: from robustbench.model_zoo.architectures.sparsified_model import get_sparse_model
-   27: 
-   28: 
-   29: class Hendrycks2020AugMixResNeXtNet(CifarResNeXt):
-   30: 
-   31:     def __init__(self, depth=29, num_classes=10, cardinality=4, base_width=32):
-   32:         super().__init__(ResNeXtBottleneck,
-
-# Lines 877-899
-  877:             lambda: WideResNet(depth=34, widen_factor=10, sub_block1=False),
-  878:             'gdrive_id':
-  879:             '1-ArD-TugRXUbH3VtM9qnzvby6NvdXNUN'
-  880:         }),
-  881:         ('Bai2023Improving_edm', {
-  882:             'model': lambda: get_composite_model('edm', 'cifar10'),  # TODO: check device calls.
-  883:             'gdrive_id': [
-  884:             '1-5EwY_5tQZudo9idwXiUGr3P4OUUGaQN',
-  885:             '1-RF7ZSS-PAh6bfQcuqx4lh9bc9BUGnap',
-  886:             '1-7oV7QDgz8McvhbaCj6Owx3Rz3daiPrT']
-  887:         }),
-  888:         ('Peng2023Robust', {
-  889:             'model': lambda: get_robustarch_model('ra_wrn70_16'),  # TODO: check device calls.
-  890:             'gdrive_id': '1-6M8KHZdPmgqYkBSkdZQ2fLwp86ZQ9VU'
-  891:         }),
-  892:         ('Bai2024MixedNUTS', {
-  893:             'model': lambda: get_nonlin_mixed_classifier('cifar10'),  # TODO: check device calls.
-  894:             'gdrive_id': [
-  895:             '1-5EwY_5tQZudo9idwXiUGr3P4OUUGaQN',
-  896:             '1-6M8KHZdPmgqYkBSkdZQ2fLwp86ZQ9VU']
-  897:         }),
-  898:         ('Chen2024Data_WRN_34_10', {
-  899:             'model': lambda: WideResNet(depth=34, widen_factor=10),
-
-# Lines 903-914
-  903:             'model': lambda: WideResNet(depth=34, widen_factor=20),
+# Lines 3-79
+    3: from pathlib import Path
+    4: from typing import Callable, Sequence
+    5: 
+    6: import torch
+    7: 
+    8: from robustbench.data import load_clean_dataset
+    9: from robustbench.model_zoo.models import model_dicts
+   10: from robustbench.utils import clean_accuracy, load_model
+   11: from tests.config import get_test_config
+   12: from tests.utils_testing import slow
+   13: 
+   14: 
+   15: def _accuracy_computation(success_criterion: Callable[[str, float, str, str], bool], n_ex: int = 200) -> None:
+   16:     config = get_test_config()
+   17:     device = torch.device(config["device"])
+   18: 
+   19:     tot_models = 0
+   20:     n_tests_passed = 0
+   21:     for dataset, dataset_dict in model_dicts.items():
+   22:         if dataset.value not in config['datasets']:
+   23:             continue
+   24:         print(f"Test models trained on {dataset.value}")
+   25:         data_dir = config['data_dir'] if dataset.value != 'imagenet' else config['imagenet_data_dir']
+   26: 
+   27:         last_preprocessing = ''
+   28:         for threat_model, threat_model_dict in dataset_dict.items():
+   29:             if threat_model.value not in config['threat_models']:
+   30:                 continue
+   31:             print(f"Test models robust wrt {threat_model.value}")
+   32:             models = list(threat_model_dict.keys())
+   33:             tot_models += len(models)
+   34: 
+   35:             for model_name in models:
+   36:                 # reload dataset if preprocessing is different for the current model (needed for imagenet)
+   37:                 curr_preprocessing = threat_model_dict[model_name]['preprocessing'] \
+   38:                     if 'preprocessing' in threat_model_dict[model_name] else 'none'
+   39:                 if curr_preprocessing != last_preprocessing:
+   40:                     x_test, y_test = load_clean_dataset(dataset, n_ex, data_dir, curr_preprocessing)
+   41:                     last_preprocessing = curr_preprocessing
+   42: 
+   43:                 model = load_model(model_name, config["model_dir"], dataset, threat_model).to(device)
+   44:                 model.eval()
+   45: 
+   46:                 acc = clean_accuracy(model, x_test, y_test,
+   47:                                      batch_size=config["batch_size"], device=device)
+   48: 
+   49:                 success = success_criterion(model_name, acc, dataset.value, threat_model.value)
+   50:                 n_tests_passed += int(success)
+   51:                 print(f"{model_name}: clean accuracy {acc:.2%} (on {n_ex} examples),"
+   52:                       f" test passed: {success}")
+   53: 
+   54:     print(f"Test is passed for {n_tests_passed}/{tot_models} models.")
+   55: 
+   56: 
+   57: class CleanAccTester(unittest.TestCase):
+   58: 
+   59:     def test_clean_acc_jsons_fast(self):
+   60:         datasets_acc = {
+   61:             "cifar10": 70.0,
+   62:             "cifar100": 45.0,
+   63:             "imagenet": 40.0,
+   64:         }
+   65:         def fast_acc_success_criterion(model_name: str, acc: float, dataset: str, threat_model: str) -> bool:
+   66:             self.assertGreater(round(acc * 100., 2), datasets_acc[datase

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Evaluate Carmon2019Unlabeled robust accuracy on CIFAR-10 with AutoAttack."""
+"""Evaluate Carmon2019Unlabeled robust accuracy on CIFAR-10 under Linf threat model using AutoAttack."""
 
 import argparse
 import json
 import torch
 from robustbench.utils import load_model
-from robustbench.data import load_cifar10
+from robustbench.data import load_clean_dataset, get_preprocessing
 from robustbench.model_zoo.enums import BenchmarkDataset, ThreatModel
 from autoattack import AutoAttack
 
@@ -19,47 +19,55 @@ def main():
     parser.add_argument('--epsilon', type=float, default=0.031372549)
     args = parser.parse_args()
 
-    # Load model
+    # 1. Load model
     model = load_model(
         model_name=args.model_name,
         model_dir=args.model_dir,
         dataset='cifar10',
         threat_model=ThreatModel.Linf,
+        custom_checkpoint=f'{args.model_dir}/cifar10/Linf/{args.model_name}.pt'
     )
     model.eval()
 
-    # Load data (no external preprocessing needed; model handles normalization internally)
-    x_test, y_test = load_cifar10(
+    # 2. Get preprocessing and load CIFAR-10 test data (first n_examples)
+    prepr = get_preprocessing(
+        dataset=BenchmarkDataset.cifar_10,
+        threat_model=ThreatModel.Linf,
+        model_name=args.model_name,
+        preprocessing=None
+    )
+    x_test, y_test = load_clean_dataset(
+        dataset=BenchmarkDataset.cifar_10,
         n_examples=args.n_examples,
         data_dir=args.data_dir,
+        prepr=prepr
     )
 
-    # Setup AutoAttack
+    # 3. Setup AutoAttack (custom version with apgd-ce and apgd-dlr)
     adversary = AutoAttack(
         model,
         norm='Linf',
         eps=args.epsilon,
         version='custom',
+        attacks_to_run=['apgd-ce', 'apgd-dlr'],
         device='cpu',
+        log_path=None
     )
-    adversary.attacks_to_run = ['apgd-ce', 'apgd-dlr']
+    # Set n_restarts = 1 for APGD (both variants share the same APGDAttack instance)
     adversary.apgd.n_restarts = 1
 
-    # Run evaluation
+    # 4. Run attack and compute robust accuracy
     x_adv = adversary.run_standard_evaluation(x_test, y_test)
+    robust_acc = (x_adv.argmax(1) == y_test).float().mean().item()
 
-    # Compute robust accuracy in percentage points (0-100)
-    # x_adv is adversarial images (4D tensor), need to pass through model to get logits
-    with torch.no_grad():
-        logits = model(x_adv)
-    correct = (logits.argmax(1) == y_test).float().mean().item()
-    robust_acc_pct = correct * 100.0
+    # Convert fraction to percentage points (0–100)
+    robust_acc_pct = robust_acc * 100.0
 
-    # Print result
+    # 5. Print result in required format
     result = {
         "metric": "robust_accuracy",
         "actual": robust_acc_pct,
-        "num_examples": args.n_examples,
+        "num_examples": args.n_examples
     }
     print(f"REPRO_RESULT {json.dumps(result)}")
 

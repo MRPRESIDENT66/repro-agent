@@ -340,7 +340,7 @@ Retrieved source snippets:
 
 ## Query 2
 
-def load_cifar10 robustbench/data.py
+load_clean_dataset function signature robustbench/data.py
 
 ## Result 2
 
@@ -348,8 +348,8 @@ Most relevant files:
   robustbench/data.py  —  PREPROCESSINGS = {
   robustbench/loaders.py  —  This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
   robustbench/eval.py  —  CORRUPTION_DATASET_LOADERS
-  robustbench/__init__.py  —  
-  robustbench/utils.py  —  ACC_FIELDS = {
+  tests/test_clean_acc.py  —  def _accuracy_computation(success_criterion: Callable[[str, float, str, str], bool], n_ex: int = 200) -> None:
+  robustbench/model_zoo/imagenet.py  —  mu = (0.485, 0.456, 0.406)
 
 Error evidence used for ranking:
 Users/jinmingyi/PycharmProjects/repro-agent/workspaces/robustbench_multi_rag/robustbench/loaders.py
@@ -360,7 +360,9 @@ Retrieved source snippets:
 
 ## Source: robustbench/data.py
 
-# Lines 13-24
+# Lines 11-24
+   11: import torchvision.transforms as transforms
+   12: from torch.utils.data import Dataset
    13: from torch import nn
    14: 
    15: from robustbench.model_zoo import model_dicts as all_models
@@ -388,17 +390,7 @@ Retrieved source snippets:
    53:     interpolation = model.default_cfg['interpolation']
    54:     crop_pct = model.default_cfg['crop_pct']
 
-# Lines 61-103
-   61:         transforms.CenterCrop(img_size),
-   62:         transforms.ToTensor()
-   63:     ])
-   64: 
-   65: 
-   66: def get_preprocessing(
-   67:         dataset: BenchmarkDataset, threat_model: ThreatModel,
-   68:         model_name: Optional[str],
-   69:         preprocessing: Optional[Union[str, Callable]]) -> Callable:
-   70:     # If preprocessing is already as a function, then return it
+# Lines 71-82
    71:     if isinstance(preprocessing, Callable):
    72:         return preprocessing
    73:     # If preprocessing is already specified as a string, then fetch it and return it
@@ -411,11 +403,8 @@ Retrieved source snippets:
    80:     if model_name is None:
    81:         raise Exception(
    82:             "Preprocessing should be specified if the model is not already in the model zoo"
-   83:         )
-   84:     # See if the model is a timm model, if this is so, then use the custom function
-   85:     lower_model_name = model_name.lower().replace('-', '_')
-   86:     timm_model_name = f"{lower_model_name}_{dataset.value.lower()}_{threat_model.value.lower()}"
-   87:     if timm.is_model(timm_model_name):
+
+# Lines 88-99
    88:         return get_timm_model_preprocessing(timm_model_name)
    89:     # Or directly fetch the preprocessing for the model specified in the dictionary
    90:     
@@ -428,14 +417,44 @@ Retrieved source snippets:
    97: def _load_dataset(
    98:         dataset: Dataset,
    99:         n_examples: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-  100:     batch_size = 100
-  101:     test_loader = data.DataLoader(dataset,
-  102:                                   batch_size=batch_size,
-  103:    
+
+# Lines 162-185
+  162:     x_test, y_test, paths = next(iter(test_loader))
+  163: 
+  164:     return x_test, y_test
+  165: 
+  166: 
+  167: CleanDatasetLoader = Callable[[Optional[int], str, Callable],
+  168:                               Tuple[torch.Tensor, torch.Tensor]]
+  169: _clean_dataset_loaders: Dict[BenchmarkDataset, CleanDatasetLoader] = {
+  170:     BenchmarkDataset.cifar_10: load_cifar10,
+  171:     BenchmarkDataset.cifar_100: load_cifar100,
+  172:     BenchmarkDataset.imagenet: load_imagenet,
+  173: }
+  174: 
+  175: 
+  176: def load_clean_dataset(dataset: BenchmarkDataset, n_examples: Optional[int],
+  177:                        data_dir: str,
+  178:                        prepr: Callable) -> Tuple[torch.Tensor, torch.Tensor]:
+  179:     return _c
 
 ## Source: robustbench/loaders.py
 
-# Lines 14-36
+# Lines 1-12
+    1: """
+    2: This file is based on the code from https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py.
+    3: """
+    4: import pkg_resources
+    5: 
+    6: from torchvision.datasets.vision import VisionDataset
+    7: 
+    8: import torch
+    9: import torch.utils.data as data
+   10: import torchvision.transforms as transforms
+   11: 
+   12: from PIL import Image
+
+# Lines 14-74
    14: import os
    15: import os.path
    16: import sys
@@ -459,8 +478,18 @@ Retrieved source snippets:
    34:         root/class_y/123.ext
    35:         root/class_y/nsdf3.ext
    36:         root/class_y/asd932_.ext
-
-# Lines 49-60
+   37:     Args:
+   38:         root (string): Root directory path.
+   39:         loader (callable): A function to load a sample given its path.
+   40:         extensions (tuple[string]): A list of allowed extensions.
+   41:             both extensions and is_valid_file should not be passed.
+   42:         transform (callable, optional): A function/transform that takes in
+   43:             a sample and returns a transformed version.
+   44:             E.g, ``transforms.RandomCrop`` for images.
+   45:         target_transform (callable, optional): A function/transform that takes
+   46:             in the target and transforms it.
+   47:         is_valid_file (callable, optional): A function that takes path of an Image file
+   48:             and check if the file is a valid_file (used to check of corrupt files)
    49:             both extensions and is_valid_file should not be passed.
    50:      Attributes:
    51:         classes (list): List of the class names.
@@ -473,68 +502,22 @@ Retrieved source snippets:
    58:                  root,
    59:                  loader,
    60:                  extensions=None,
-
-# Lines 102-113
-  102:             ]
-  103:         classes.sort()
-  104:         class_to_idx = {classes[i]: i for i in range(len(classes))}
-  105:         return classes, class_to_idx
-  106: 
-  107:     def __getitem__(self, index):
-  108:         """
-  109:         Args:
-  110:             index (int): Index
-  111:         Returns:
-  112:             tuple: (sample, target) where target is class_index of the target class.
-  113:         """
-
-# Lines 125-161
-  125: 
-  126: IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif',
-  127:                   '.tiff', '.webp')
-  128: 
-  129: 
-  130: def pil_loader(path):
-  131:     # open path as file to avoid ResourceWarning (https://github.com/python-pillow/Pillow/issues/835)
-  132:     with open(path, 'rb') as f:
-  133:         img = Image.open(f)
-  134:         return img.convert('RGB')
-  135: 
-  136: 
-  137: def accimage_loader(path):
-  138:     import accimage
-  139:     try:
-  140:         return accimage.Image(path)
-  141:     except IOError:
-  142:         # Potentially a decoding problem, fall back to PIL.Image
-  143:         return pil_loader(path)
-  144: 
-  145: 
-  146: def default_loader(path):
-  147:     from torchvision import get_image_backend
-  148:     if get_image_backend() == 'accimage':
-  149:         return accimage_loader(path)
-  150:     else:
-  151:         return pil_loader(path)
-  152: 
-  153: 
-  154: class CustomImageFolder(CustomDatasetFolder):
-  155:     """A generic data loader where the images are arranged in this way: ::
-  156:         root/dog/xxx.png
-  157:         root/dog/xxy.png
-  158:         root/dog/xxz.png
-  159:         root/cat/123.png
-  160:         root/cat/nsdf3.png
-  161:         root/cat/asd932_.png
-
-# Lines 176-187
-  176: 
-  177:     def __init__(self,
- 
+   61:                  transform=None,
+   62:                  target_transform=None,
+   63:                  is_valid_file=None):
+   64:         super(CustomDatasetFolder, self).__init__(root)
+   65:         self.transform = transform
+   66:         self.target_transform = target_transform
+   67:         classes, class_to_idx = self._find_classes(self.root)
+   68:         samples = make_custom_dataset(
+   69:             self.root, 'helper_files/imagenet_test_image_ids.txt',
+   70:             class_to_idx)
+   71:         if len(samples) == 0:
+   72:             raise (Ru
 
 ## Source: robustbench/eval.py
 
-# Lines 10-31
+# Lines 10-24
    10: from autoattack import AutoAttack
    11: from autoattack.state import EvaluationState
    12: from torch import nn
@@ -550,15 +533,22 @@ Retrieved source snippets:
    22: def benchmark(
    23:     model: Union[nn.Module, Sequence[nn.Module]],
    24:     n_examples: int = 10000,
-   25:     dataset: Union[str, BenchmarkDataset] = BenchmarkDataset.cifar_10,
-   26:     threat_model: Union[str, ThreatModel] = ThreatModel.Linf,
-   27:     to_disk: bool = False,
-   28:     model_name: Optional[str] = None,
-   29:     data_dir: str = "./data",
-   30:     corruptions_data_dir: Optional[str] = None,
-   31:     device: Optional[Union[torch.device, Sequence[torch.device]]] = None,
 
-# Lines 77-88
+# Lines 46-57
+   46:     :param threat_model: The threat model to use to benchmark, must be one of {L2, Linf
+   47:     corruptions}
+   48:     :param to_disk: Whether the results must be saved on disk as .json.
+   49:     :param model_name: The name of the model to use to save the results. Must be specified if
+   50:     to_json is True.
+   51:     :param data_dir: The directory where the dataset is or where the dataset must be downloaded.
+   52:     :param device: The device to run the computations.
+   53:     :param batch_size: The batch size to run the computations. The larger, the faster the
+   54:     evaluation.
+   55:     :param eps: The epsilon to use for L2 and Linf threat models. Must not be specified for
+   56:     corruptions threat model.
+   57:     :param preprocessing: The preprocessing that should be used for ImageNet benchmarking. Should be
+
+# Lines 77-91
    77:     threat_model_: ThreatModel = ThreatModel(threat_model)
    78: 
    79:     device = device or torch.device("cpu")
@@ -571,6 +561,9 @@ Retrieved source snippets:
    86:                                                     data_dir, prepr)
    87: 
    88:     accuracy = clean_accuracy(model,
+   89:                               clean_x_test,
+   90:                               clean_y_test,
+   91:                               batch_size=batch_size,
 
 # Lines 121-132
   121:     
@@ -586,26 +579,75 @@ Retrieved source snippets:
   131:             batch_size, corruptions_data_dir, dataset_, threat_model_, 
   132:             device, model, n_examples, to_disk, prepr, model_name)
 
-# Lines 145-168
-  145:                     adv_accuracy, eps, extra_metrics)
-  146: 
-  147:     return accuracy, adv_accuracy
-  148: 
-  149: 
-  150: def corruptions_evaluation(batch_size: int, data_dir: str,
-  151:                            dataset: BenchmarkDataset, threat_model: ThreatModel, 
-  152:                            device: torch.device, model: nn.Module, n_examples: int, 
-  153:                            to_disk: bool, prepr: str, model_name: Optional[str]) -> float:
-  154:     if to_disk and model_name is None:
-  155:         raise ValueError(
-  156:             "If `to_disk` is True, `model_name` should be specified.")
+# Lines 157-168
   157: 
   158:     corruptions = CORRUPTIONS_DICT[dataset][threat_model]
-  159:     model_results_dict: Dict[Tup
+  159:     model_results_dict: D
 
-## Source: robustbench/__init__.py
+## Source: tests/test_clean_acc.py
 
-from .data import load_cifar10
-from .utils import load_model
-from .eval import benchmark
-
+# Lines 3-80
+    3: from pathlib import Path
+    4: from typing import Callable, Sequence
+    5: 
+    6: import torch
+    7: 
+    8: from robustbench.data import load_clean_dataset
+    9: from robustbench.model_zoo.models import model_dicts
+   10: from robustbench.utils import clean_accuracy, load_model
+   11: from tests.config import get_test_config
+   12: from tests.utils_testing import slow
+   13: 
+   14: 
+   15: def _accuracy_computation(success_criterion: Callable[[str, float, str, str], bool], n_ex: int = 200) -> None:
+   16:     config = get_test_config()
+   17:     device = torch.device(config["device"])
+   18: 
+   19:     tot_models = 0
+   20:     n_tests_passed = 0
+   21:     for dataset, dataset_dict in model_dicts.items():
+   22:         if dataset.value not in config['datasets']:
+   23:             continue
+   24:         print(f"Test models trained on {dataset.value}")
+   25:         data_dir = config['data_dir'] if dataset.value != 'imagenet' else config['imagenet_data_dir']
+   26: 
+   27:         last_preprocessing = ''
+   28:         for threat_model, threat_model_dict in dataset_dict.items():
+   29:             if threat_model.value not in config['threat_models']:
+   30:                 continue
+   31:             print(f"Test models robust wrt {threat_model.value}")
+   32:             models = list(threat_model_dict.keys())
+   33:             tot_models += len(models)
+   34: 
+   35:             for model_name in models:
+   36:                 # reload dataset if preprocessing is different for the current model (needed for imagenet)
+   37:                 curr_preprocessing = threat_model_dict[model_name]['preprocessing'] \
+   38:                     if 'preprocessing' in threat_model_dict[model_name] else 'none'
+   39:                 if curr_preprocessing != last_preprocessing:
+   40:                     x_test, y_test = load_clean_dataset(dataset, n_ex, data_dir, curr_preprocessing)
+   41:                     last_preprocessing = curr_preprocessing
+   42: 
+   43:                 model = load_model(model_name, config["model_dir"], dataset, threat_model).to(device)
+   44:                 model.eval()
+   45: 
+   46:                 acc = clean_accuracy(model, x_test, y_test,
+   47:                                      batch_size=config["batch_size"], device=device)
+   48: 
+   49:                 success = success_criterion(model_name, acc, dataset.value, threat_model.value)
+   50:                 n_tests_passed += int(success)
+   51:                 print(f"{model_name}: clean accuracy {acc:.2%} (on {n_ex} examples),"
+   52:                       f" test passed: {success}")
+   53: 
+   54:     print(f"Test is passed for {n_tests_passed}/{tot_models} models.")
+   55: 
+   56: 
+   57: class CleanAccTester(unittest.TestCase):
+   58: 
+   59:     def test_clean_acc_jsons_fast(self):
+   60:         datasets_acc = {
+   61:             "cifar10": 70.0,
+   62:             "cifar100": 45.0,
+   63:             "imagenet": 40.0,
+   64:         }
+   65:         def fast_acc_success_criterion(model_name: str, acc: float, dataset: str, threat_model: str) -> bool:
+   66:             self.assertGreater(round(acc * 100., 2), datasets_acc[datase

@@ -1,0 +1,180 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 205, in <module>
+    evaluate(args.root)
+  File "/workspace/eval_ebo.py", line 93, in evaluate
+    id_dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: 'results/cifar10_resnet18_32x32_base_e100_lr0.1_default/data/benchmark_imglist/cifar10/test_cifar10.txt'
+
+```
+
+## Command 3
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 4
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 179, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 151, in main
+    run_metrics[run_name] = evaluate_run(root, run_name)
+  File "/workspace/eval_ebo.py", line 92, in evaluate_run
+    state_dict = torch.load(checkpoint_path, map_location=device)
+  File "/usr/local/lib/python3.10/site-packages/torch/serialization.py", line 1530, in load
+    with _open_file_like(f, "rb") as opened_file:
+  File "/usr/local/lib/python3.10/site-packages/torch/serialization.py", line 795, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+  File "/usr/local/lib/python3.10/site-packages/torch/serialization.py", line 776, in __init__
+    super().__init__(open(name, mode))  # noqa: SIM115
+FileNotFoundError: [Errno 2] No such file or directory: 'results/cifar10_resnet18_32x32_base_e100_lr0.1_default/cifar10_resnet18_32x32_base_e100_lr0.1_default/s0/best.ckpt'
+
+```
+
+## Command 5
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 6
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 181, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 105, in main
+    id_dataset = load_dataset(ID_IMGLIST, os.path.join(DATA_DIR, "cifar10"))
+  File "/workspace/eval_ebo.py", line 60, in load_dataset
+    return ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: '--root/data/cifar10_test.txt'
+
+```
+
+## Command 7
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 8
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 211, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 103, in main
+    id_dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: 'results/cifar10_resnet18_32x32_base_e100_lr0.1_default/data/cifar10/test.txt'
+
+```
+
+## Command 9
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 10
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Loading CIFAR-10 test set...
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 243, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 143, in main
+    id_dataset = load_dataset(root, 'cifar10', 'test', transform)
+  File "/workspace/eval_ebo.py", line 83, in load_dataset
+    dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: 'results/cifar10_resnet18_32x32_base_e100_lr0.1_default/data/benchmark_imglist/cifar10/test_cifar10.txt'
+
+```

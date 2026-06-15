@@ -1,0 +1,169 @@
+## Command 1
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 2
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 192, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 83, in main
+    id_dataset = ImglistDataset(
+TypeError: ImglistDataset.__init__() missing 4 required positional arguments: 'name', 'num_classes', 'preprocessor', and 'data_aux_preprocessor'
+
+```
+
+## Command 3
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 4
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 178, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 124, in main
+    id_dataset = load_dataset(root, 'cifar10', 'test')
+  File "/workspace/eval_ebo.py", line 50, in load_dataset
+    dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: 'results/cifar10_resnet18_32x32_base_e100_lr0.1_default/data/benchmark_imglist/cifar10/test_cifar10.txt'
+
+```
+
+## Command 5
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 6
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 195, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 98, in main
+    id_dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: 'results/cifar10_resnet18_32x32_base_e100_lr0.1_default/data/benchmark_imglist/cifar10/test_cifar10.txt'
+
+```
+
+## Command 7
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 8
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 190, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 102, in main
+    id_dataset = build_dataset(root, 'cifar10/test_cifar10.txt')
+  File "/workspace/eval_ebo.py", line 43, in build_dataset
+    return ImglistDataset(
+TypeError: ImglistDataset.__init__() missing 4 required positional arguments: 'name', 'num_classes', 'preprocessor', and 'data_aux_preprocessor'
+
+```
+
+## Command 9
+
+```bash
+python -m py_compile eval_ebo.py
+```
+
+exit=0 timed_out=False
+
+```text
+
+
+```
+
+## Command 10
+
+```bash
+python eval_ebo.py --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+```
+
+exit=1 timed_out=False
+
+```text
+
+Traceback (most recent call last):
+  File "/workspace/eval_ebo.py", line 194, in <module>
+    main()
+  File "/workspace/eval_ebo.py", line 95, in main
+    id_dataset = ImglistDataset(
+  File "/workspace/openood/datasets/imglist_dataset.py", line 38, in __init__
+    with open(imglist_pth) as imgfile:
+FileNotFoundError: [Errno 2] No such file or directory: 'results/cifar10_resnet18_32x32_base_e100_lr0.1_default/benchmark_imglist/cifar10/test.txt'
+
+```

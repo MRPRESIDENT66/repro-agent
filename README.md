@@ -17,46 +17,53 @@ the agent actually earn their cost.**
 The agent is a pipeline — Navigator → Reproducer → Critic → *execute* → Reviewer
 → Repair. A natural question (and a fair interview question): is all that worth
 it, or would one agent do? So I made the pipeline depth a switch and ran a
-controlled ablation, N=5 each:
+**budget-matched** ablation — five conditions sharing one execution budget
+(≤5 evals, so "more attempts" is held constant), N=5 each:
 
-- **solo** — Reproducer only → execute (single-agent baseline)
-- **team** — Navigator + Reproducer + Critic → execute (pre-execution collaboration)
-- **full** — adds the Reviewer + Repair loop
+| condition (≤5 evals each) | easy (DistilBERT) | hard (OpenOOD) |
+|---|---|---|
+| solo — Reproducer only | 5/5 | 0/5 |
+| team — + Navigator + Critic (no repair) | 5/5 | 0/5 |
+| solo-retry — re-generate, no error feedback | 5/5 | **0/5** |
+| solo-repair — single agent + feedback repair | 5/5 | **0/5** |
+| **full** — Navigator + Critic + Reviewer + Repair | 5/5 | **3/5** |
 
-| | solo | team | full |
-|---|---|---|---|
-| **easy task** (DistilBERT SST-2) | 5/5 | 5/5 | 5/5 |
-| **hard task** (OpenOOD EBO) | **0/5** | **0/5** | **3/5** |
-| cost / run (hard) | ¥0.036 | ¥0.122 | ¥0.262 |
+**The finding:** on the easy task every condition passes — the machinery is
+unnecessary. On the hard task, **no reduced condition produces any success** at
+the shared budget: not more attempts (solo-retry 0/5), not single-agent
+feedback-repair (solo-repair 0/5), not pre-execution collaboration (team 0/5).
+**Only the full pipeline reaches 3/5.** So the multi-agent components are
+**complementary on hard tasks, not redundant** — success needs the pre-execution
+grounding *and* the reviewer-guided repair loop together.
 
-**The finding (counterintuitive):** on the easy task the extra agents buy
-**nothing** — solo already passes, at 1/6 the cost. On the hard task,
-pre-execution collaboration also buys **nothing** (team still 0/5); success
-appears **only** when the post-execution **repair loop** is switched on (0 → 3/5).
-
-So the value of the multi-agent design is concentrated in **one mechanism — the
-"run it, read the real error, fix, re-run" repair loop — and only on tasks that
-fail first.** Adding more agents to *discuss before running* doesn't move the
-needle. (Implication: the pipeline can be simplified to Reproducer + repair loop.)
+> This **overturned my own earlier (premature) claim.** A first cut compared only
+> solo/team/full, where solo ran *once* and full ran up to *five* times; that made
+> it look like "the repair loop is everything, drop the Critic." The
+> budget-matched controls show feedback-repair *alone* is 0/5 — the pipeline can't
+> be reduced to it. (Surfaced by an external review; see `evals/FINAL_REPORT.md`,
+> Appendix C.)
 
 ---
 
-## It works, and it generalizes (N=5, blind)
+## It runs across domains (N=5, blind)
 
 Same agent, no orchestration changes per task — a new task is ~200 lines of
-config + a 9-line runner.
+config + a 9-line runner. Tables are generated from the run artifacts by
+`python evals/report_tables.py`. `blind`: *strict* = target absent from the
+workspace; *soft* = in the public repo but never surfaced by task/verifier.
 
-| Reproduction task | type / domain | backend | target | passed |
-|---|---|---|---|---|
-| DistilBERT SST-2 | NLP sentiment | subprocess | 91.06 acc | **5/5** |
-| mmpretrain ResNet-18 | image cls — clone & navigate (mmcv) | Docker | 94.82 top-1 | **5/5** |
-| detectors ResNet-18 CIFAR-100 | image cls — timm registration | subprocess | 79.26 top-1 | **4/5** |
-| OpenOOD EBO | OOD detection (composite AUROC) | Docker | 87.58 AUROC | **3/5** |
-| RobustBench Carmon2019 | adversarial robustness (AutoAttack) | subprocess | 52.0 robust acc | **5/5** |
-| **total** | 4 task-types · 2 backends | | | **22/25** |
+| Reproduction task | type / domain | backend | target | blind | passed |
+|---|---|---|---|---|---|
+| DistilBERT SST-2 | NLP sentiment | subprocess | 91.06 acc | strict | **5/5** |
+| mmpretrain ResNet-18 | image cls — clone & navigate (mmcv) | Docker | 94.82 top-1 | soft | **5/5** |
+| detectors ResNet-18 CIFAR-100 | image cls — timm registration | subprocess | 79.26 top-1 | strict | **4/5** |
+| OpenOOD EBO | OOD detection (composite AUROC) | Docker | 87.58 AUROC | strict | **3/5** |
+| RobustBench Carmon2019 | adversarial robustness (AutoAttack) | subprocess | 52.0 robust acc | strict | **4/5** |
+| **total** | 4 task-types · 2 backends | | | | **21/25** |
 
 Difficulty tracks the repair rate: easy tasks pass first-try; the hard ones fail
-first and lean on the repair loop.
+first and need the full pipeline. (All five are **development** tasks — no
+held-out split; see caveats.)
 
 ---
 
@@ -134,7 +141,7 @@ evals/FINAL_REPORT.md  the consolidated report — start here
 exec/                  persistent subprocess + Docker session backends
 verify/                blind, deterministic metric extraction + the provenance gate
 retrieval/             the large-repo navigation retrieval ladder
-run_*_multi_rag.py     one runner per task (PIPELINE=solo|team|full for the ablation)
+run_*_multi_rag.py     one runner per task (PIPELINE=solo|team|solo-retry|solo-repair|full)
 app.py · serve_mcp.py  Gradio demo · MCP server (both use run_repro.py)
 legacy/                first-phase single-agent + M1–M5 ablation runners (archived)
 ```
@@ -153,11 +160,12 @@ pip install -r requirements.txt
 # reproduce one task, blind (full pipeline)
 python run_distilbert_multi_rag.py
 
-# the pipeline ablation: same task, fewer roles
-PIPELINE=solo python run_openood_multi_rag.py    # Reproducer only
-PIPELINE=team python run_openood_multi_rag.py    # + Navigator + Critic, no repair
+# the budget-matched pipeline ablation (PIPELINE ∈ solo|team|solo-retry|solo-repair|full)
+PIPELINE=solo-retry  python run_openood_multi_rag.py   # re-generate, no feedback
+PIPELINE=solo-repair python run_openood_multi_rag.py   # single agent + feedback repair
 
-pytest -q                                         # 98 tests
+python evals/report_tables.py                     # regenerate the E1/E2 tables from artifacts
+pytest -q                                          # 107 tests
 ```
 
 The Docker-backed tasks (mmpretrain, OpenOOD) run inside pre-provisioned images;
@@ -165,14 +173,21 @@ the irreducible env-hell (mmcv) is solved once in the image, not by the agent.
 
 ## Honest caveats
 
-- **Small N** (5). Pass rates are indicative, not significance-tested; tasks are
-  development tasks, **not held-out**.
+- **Small N** (5), and the hard-task E2 result rests on **one** hard task
+  (OpenOOD). Pass rates are indicative, not significance-tested. All five are
+  **development** tasks (prompts iterated against them) — **no held-out split**,
+  so "runs across domains" is scoped to this suite.
+- **Oracle specialization is real:** the per-task prompts hand the agent task
+  knowledge (APIs, field names, known gotchas). A `prompt_mode=generic` path that
+  strips this is under active development — until it lands, read "generalizes"
+  with that caveat.
+- **The provenance gate is a heuristic, not a security boundary.** It fail-closes
+  the known forgeries (decoy files, `python -c` prints, comment markers, fake
+  wrappers — `tests/test_verify.py`), but is not proven robust to an adaptive
+  attacker; the subprocess backend is not a sandbox.
+- **mmpretrain is soft-blind** (94.82 is in the repo's own model-zoo metafile);
+  the other four are strict-blind (RobustBench's README `52.00%` leak is scrubbed
+  at provisioning). Don't mix blind levels when summarizing — hence the column.
 - The two `detectors` tasks come from the same library and were added to exercise
-  the repair loop, not for paper breadth.
-- **mmpretrain blindness is soft** — its 94.82 is in the public repo's own
-  model-zoo metafile; "blind" means the task/verifier never reveal it, and the
-  agent must still run the real `tools/test.py`.
-- The subprocess backend is fast but **not** a security boundary; a strict
-  held-out run should use the Docker backend and expose only the public task.
-- `RepDistiller` is `artifact_blocked` (dead checkpoint host) — reported, not
-  counted as a failure.
+  the repair loop, not for paper breadth. `RepDistiller` is `artifact_blocked`
+  (dead checkpoint host) — reported, not counted as a failure.

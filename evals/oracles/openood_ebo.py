@@ -397,24 +397,15 @@ def _make_public_contract_diagnostics(workdir: Path):
 
 
 def _make_generic_safe_diagnostics(workdir: Path):
-    """Oracle-specific sanity check safe under generic prompt mode: the eval's
-    hardcoded normalization disagreeing with the repository's OWN normalization
-    source. Derivable from the agent's own code + the repo's own files, never the
-    hidden target — just "your constants don't match the repo you were told to
-    use". (The below-chance direction check is now framework-level, driven by
-    OracleConfig.chance_level, so it is not repeated here.)
+    """Removed: the generic path now carries no oracle-specific feedback.
+
+    Kept as a no-op stub only so any stale import does not break; OpenOOD's config
+    no longer wires it. The below-chance direction check is framework-level
+    (OracleConfig.chance_level); the std/normalization recovery is handled by the
+    task-agnostic anti-hallucination prompt, as the ablation confirmed.
     """
     def _generic_safe_diagnostics(session: DockerSession) -> list[str]:
-        issues: list[str] = []
-        generated = workdir / "eval_ebo.py"
-        if generated.is_file():
-            issues.extend(
-                _normalization_diagnostics_for_code(
-                    generated.read_text(errors="replace"),
-                    workdir / NORMALIZATION_SOURCE_REL,
-                )
-            )
-        return issues
+        return []
 
     return _generic_safe_diagnostics
 
@@ -684,7 +675,12 @@ def make_config(attempt: str) -> OracleConfig:
         validate_code=validate_code,
         public_contract_passes=public_contract_passes,
         public_contract_diagnostics=contract_diagnostics,
-        generic_safe_diagnostics=_make_generic_safe_diagnostics(workdir),
+        # No generic_safe_diagnostics: the generic path carries ZERO oracle-
+        # specific feedback. An ablation (re-running generic with this wiring
+        # removed) showed the agent recovers the std (anti-hallucination prompt)
+        # and the sign (framework below-chance) without it, so the hand-authored
+        # normalization hint was removed to keep generic mode fully task-agnostic.
+        # (The specialized path still uses _normalization_diagnostics_for_code.)
         chance_level=CHANCE_LEVEL,
         verify_kwargs={
             "expected_num_examples": None,

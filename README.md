@@ -1,181 +1,178 @@
-# Repro Agent
+# Repro-Agent
 
-> An agent that takes an unfamiliar ML artifact (a model + a dataset + the
-> published metric) and autonomously **sets up an environment, runs the public
-> evaluation, verifies the result deterministically, and emits replayable
-> evidence** — then **honestly measures how far it gets, and where it breaks.**
+> An agent that reproduces a published ML result **blind**: hand it a model + a
+> dataset + the claimed number, and it reads the repository, writes and runs the
+> evaluation, and a deterministic verifier checks the result against a target the
+> agent **never sees** — leaving a replayable audit trail.
 
-It does **not** claim to reproduce whole papers. It runs *public, lightweight
-eval results* (mostly "load the released checkpoint and run eval"), and the
-point is the **honest, staged measurement** — not a magic reproducer.
+Then it does the thing most "agent" projects skip: it **measures which parts of
+the agent actually earn their cost.**
+
+**→ Full write-up: [`evals/FINAL_REPORT.md`](evals/FINAL_REPORT.md)**
 
 ---
 
-## The question
+## The headline result: where does the multi-agent complexity pay off?
 
-> Can an agent, in a controlled environment, get a stranger's ML artifact to
-> produce its published number — and leave an auditable trail?
+The agent is a pipeline — Navigator → Reproducer → Critic → *execute* → Reviewer
+→ Repair. A natural question (and a fair interview question): is all that worth
+it, or would one agent do? So I made the pipeline depth a switch and ran a
+controlled ablation, N=5 each:
 
-Real artifacts are messy: dead dataset links, drifted APIs, non-obvious load
-mechanisms, environments that won't build. So the interesting output isn't
-pass/fail — it's **how far the agent gets** (7 stages) and **why it stops**.
+- **solo** — Reproducer only → execute (single-agent baseline)
+- **team** — Navigator + Reproducer + Critic → execute (pre-execution collaboration)
+- **full** — adds the Reviewer + Repair loop
 
-## Blind verification protocol V1
+| | solo | team | full |
+|---|---|---|---|
+| **easy task** (DistilBERT SST-2) | 5/5 | 5/5 | 5/5 |
+| **hard task** (OpenOOD EBO) | **0/5** | **0/5** | **3/5** |
+| cost / run (hard) | ¥0.036 | ¥0.122 | ¥0.262 |
 
-The Agent task/prompt contains only the public task (`model + dataset + metric`);
-the expected value and tolerance stay in the external verifier. A result counts
-only when a successful command prints structured evidence:
+**The finding (counterintuitive):** on the easy task the extra agents buy
+**nothing** — solo already passes, at 1/6 the cost. On the hard task,
+pre-execution collaboration also buys **nothing** (team still 0/5); success
+appears **only** when the post-execution **repair loop** is switched on (0 → 3/5).
+
+So the value of the multi-agent design is concentrated in **one mechanism — the
+"run it, read the real error, fix, re-run" repair loop — and only on tasks that
+fail first.** Adding more agents to *discuss before running* doesn't move the
+needle. (Implication: the pipeline can be simplified to Reproducer + repair loop.)
+
+---
+
+## It works, and it generalizes (N=5, blind)
+
+Same agent, no orchestration changes per task — a new task is ~200 lines of
+config + a 9-line runner.
+
+| Reproduction task | type / domain | backend | target | passed |
+|---|---|---|---|---|
+| DistilBERT SST-2 | NLP sentiment | subprocess | 91.06 acc | **5/5** |
+| mmpretrain ResNet-18 | image cls — clone & navigate (mmcv) | Docker | 94.82 top-1 | **5/5** |
+| detectors ResNet-18 CIFAR-100 | image cls — timm registration | subprocess | 79.26 top-1 | **4/5** |
+| OpenOOD EBO | OOD detection (composite AUROC) | Docker | 87.58 AUROC | **3/5** |
+| RobustBench Carmon2019 | adversarial robustness (AutoAttack) | subprocess | 52.0 robust acc | **5/5** |
+| **total** | 4 task-types · 2 backends | | | **22/25** |
+
+Difficulty tracks the repair rate: easy tasks pass first-try; the hard ones fail
+first and lean on the repair loop.
+
+---
+
+## Why a "pass" is trustworthy (blind + provenance gate)
+
+The agent's prompt contains only the public task (`model + dataset + metric`);
+the expected value and tolerance live in an external verifier. A run matches only
+when a *successful* command prints structured evidence —
 
 ```text
-REPRO_RESULT {"metric":"top1_accuracy","actual":92.6,"num_examples":10000}
+REPRO_RESULT {"metric":"top1_accuracy","actual":94.82,"num_examples":10000}
 ```
 
-The independent verifier checks that evidence against the private claim.
-Assistant `FINAL` text, unstructured numbers, and direct `echo/printf` result
-relays are ignored. A provenance gate also requires a generated eval script
-that loads data, predicts, and emits the evidence. Each run writes
-`result.json`, `commands.sh`, and `transcript.jsonl` for audit/replay.
+— **and** that evidence comes from a real evaluation: a script that loads a model
++ data and computes the metric, or one that delegates to the repo's own eval
+entry against the checkpoint. A bare `echo`/`printf` of the number is rejected.
+Each run writes `result.json`, `commands.sh`, and per-role transcripts for replay.
 
-## Results — blind verification, reliability (deepseek-chat)
+Tightening this gate repeatedly caught real problems — a `0.91` vs `91.0` unit
+ambiguity, an echo relay, and (during the final study) two false-negatives on
+wrapper-delegated and library-API evals, both fixed (see the report's appendix).
 
-Each oracle run **N=5**, every match gated by the blind protocol above
-(structured evidence from a real eval command; `num_examples` = full set;
-provenance). The agent never sees the target value (development tasks, **not
-held-out**).
+---
 
-| Oracle | Domain | Difficulty | Reproduced | avg steps |
-|---|---|---|---|---|
-| `cifar10_resnet20` (92.60) | vision | easy — torch.hub | **5/5 = 100%** | 4.8 |
-| `distilbert_sst2` (91.06) | NLP | medium — transformers | **5/5 = 100%** | 5.8 |
-| `resnet18_cifar100` (79.26) | vision | hard — registration helper + timm | **4/5 = 80%** | 9.6 |
-| `mmpretrain_resnet18_cifar10` (94.82) | vision | **clone-and-navigate** — 1858-file repo, Docker | **2/3 = 67%** (exact) | 10–11 |
+## Supporting ablation: retrieval for large-repo navigation
 
-All matched runs reproduced the published number **exactly**. The blind rates
-**match the earlier non-blind baseline** — the agent reproduces just as reliably
-*without seeing the target*, so it was never relying on knowing the answer.
-**Difficulty, not luck, is the variable:** the hard oracle once failed (1/5,
-rabbit-holing into manual architecture reconstruction); the rest land it via a
-*transferable* fix — read the model-card prose; "not registered" → install+import
-the helper.
-
-The fourth oracle is the **main act**: not a library load but a true
-**clone → navigate → run → verify** on mmpretrain (**2/3 blind → 94.82 exact**;
-the 1/3 failure rabbit-holes offline into `datasets.load_dataset`). The agent
-uses `search_repo` to find `tools/test.py` + the cifar10 config in a 1858-file
-repo, then runs the repo's **own** eval harness (the env-block — `mmcv` — is
-pre-provisioned in the `repro-mmpretrain` Docker image; see `evals/RESULTS.md`),
-all behind a two-phase network. It also surfaced two honest verification
-findings: a provenance-gate blind spot for *delegation* (fixed + re-verified
-offline), and a clean demonstration that the gate **rejects an `echo` of the
-right number** and forces a real eval.
-
-### Retrieval ladder for large-repo navigation
-
-Can retrieval locate the eval entry + config in a **1858-file** repo
-(`mmpretrain`)? recall@5, 5 hint-light queries:
+Can retrieval find the eval entry + config in a **1858-file** repo (`mmpretrain`)?
+recall@5, hint-light queries:
 
 | keyword | BM25 | dense (embeddings) | hybrid | **+ LLM rerank** |
 |---|---|---|---|---|
 | 60% | 60% | 50% | 60% | **80%** |
 
-**Honest finding:** the retrieval algorithm barely matters here (model/dataset
-names are literal in file paths; dense embeddings do **not** beat BM25). The
-+20pp win is the **LLM reranker** disambiguating the true entry script
-(`tools/test.py`) from look-alikes (`slurm_test.sh`, …). Retrieval recalls
-candidates; reasoning picks the entry.
+**Finding:** the retrieval *algorithm* barely matters (names are literal in
+paths; dense does **not** beat BM25). The +20pp win is the **LLM reranker**
+disambiguating the true entry (`tools/test.py`) from look-alikes.
+
+---
 
 ## How it works
 
 ```
-manifest (model + dataset + claim)
-      │
-      ▼
-  persistent session  ──►  ReAct loop over shell/file actions
-  (workdir + venv,           ├─ read the model card / navigate the repo
-   secret-scrubbed,          ├─ set up env, write + run the eval
-   recorded)                 └─ tiered self-repair on error (env hell)
-      │
-      ▼
-  parse metric  ──►  deterministic verify (code, not LLM)  ──►  replayable evidence
-                     vs. published value within tolerance
+reproduction task (model + dataset + claimed metric)
+        │
+        ▼
+  Navigator → Reproducer → Critic → [ execute eval ] → Reviewer → Repair ─┐
+  (each role = an isolated LLM context, generating its own search_repo      │
+   queries at runtime; a fixed loop + a deterministic contract decide       │
+   when to repair and when to stop)                                         │
+        │                              └──────── repair loop, ≤4 rounds ◄────┘
+        ▼
+  deterministic verify (plain code, not an LLM): structured evidence +
+  provenance, compared to the private target within tolerance
 ```
 
-- **Execution** is a persistent subprocess session (state persists across
-  steps; secrets scrubbed). LLM = DeepSeek; embeddings = DashScope.
-- **Transport** is native function calling (`bash` / `search_repo` / `finish`
-  tool schemas). The original text protocol (regex-parsed ```bash blocks) is
-  kept behind `--no-fc` as the ablation twin — "tool calls vs text parsing" is
-  a measurable comparison, not a fashion choice.
-- **Cost accounting** is built in: each run's `result.json` reports tokens
-  (prompt / cached / completion), peak context in real tokens, and yuan cost
-  (prices configurable via `.env`).
-- **Verification** is blind and deterministic: only structured stdout from a
-  successful evaluation with provenance is accepted; the private comparison is
-  plain code.
-- **Evaluation** reports staged pass rates (`repo_inspected → … → claim_matched`)
-  + a failure taxonomy; `eligibility` vs `outcome` are separated so a task can't
-  be moved out of the denominator after the agent fails.
+- **Execution:** a persistent subprocess session (fast, local venv) or a sandboxed
+  `linux/amd64` Docker container when the env can't be built on the host
+  (mmpretrain's mmcv) or strong isolation / a true offline cut is needed (OpenOOD).
+- **The repair loop is a fixed control-flow skeleton wrapped around an
+  LLM-driven diagnose-and-fix agent:** the *when* (a deterministic contract
+  check; ≤4 rounds) is hard-coded; the *what* (what broke, how to fix it) is the
+  model's call, fed the real execution error each round.
+- **Cost accounting** is built in (tokens, peak context, ¥ per run).
+
+---
 
 ## Repo layout
 
 ```
-agent/       LLM (function calling + cost accounting) + ReAct loop + self-repair
-agents/      multi-agent Lead/Reproducer/Verifier (isolation + concurrency ablations)
-exec/        persistent session (shell/file actions, replay log)
-verify/      deterministic metric extraction + comparison
-retrieval/   navigation ladder: corpus · keyword/BM25/dense/hybrid/rerank
-evals/       benchmark manifests · significance (clustered bootstrap) · RESULTS.md
-serve_mcp.py  MCP server: verify_evidence_line · navigate_repo · reproduce_artifact
-run_repro.py · run_reliability.py · run_multiagent.py
+agent/multi_rag.py     the multi-agent + RAG + repair orchestrator (generic skeleton)
+agent/loop.py          single-agent ReAct loop, function calling, cost accounting
+evals/oracles/         per-task config: prompts · contract · provisioning (5 tasks)
+evals/runs/            per-run artifacts (result.json, transcripts) — the audit trail
+evals/FINAL_REPORT.md  the consolidated report — start here
+exec/                  persistent subprocess + Docker session backends
+verify/                blind, deterministic metric extraction + the provenance gate
+retrieval/             the large-repo navigation retrieval ladder
+run_*_multi_rag.py     one runner per task (PIPELINE=solo|team|full for the ablation)
+app.py · serve_mcp.py  Gradio demo · MCP server (both use run_repro.py)
+legacy/                first-phase single-agent + M1–M5 ablation runners (archived)
 ```
 
 ## Setup & run
 
-Python 3.12, an OpenAI-compatible chat key (DeepSeek) + DashScope key for
+Python 3.12; an OpenAI-compatible chat key (DeepSeek) + a DashScope key for
 embeddings, in a gitignored `.env`.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 # .env:  LLM_API_KEY=…  LLM_BASE_URL=https://api.deepseek.com/v1  LLM_MODEL=deepseek-chat
-#        DASHSCOPE_API_KEY=…  DASHSCOPE_BASE_URL=…  EMBEDDING_MODEL=text-embedding-v4
+#        DASHSCOPE_API_KEY=…  EMBEDDING_MODEL=text-embedding-v4
 
-python run_repro.py evals/benchmark/cifar10_resnet20.yaml   # reproduce one oracle (function calling)
-python run_repro.py evals/benchmark/cifar10_resnet20.yaml --no-fc   # text-protocol ablation twin
-python run_reliability.py evals/benchmark/resnet18_cifar100.yaml 5 --workers 3  # N trials, concurrent
-python run_multiagent.py                                    # isolation + parallel-vs-serial ablation
-python -m retrieval.eval_nav --dense                        # the navigation ladder
-python serve_mcp.py                                         # MCP server (stdio) for any MCP client
-pytest -q
+# reproduce one task, blind (full pipeline)
+python run_distilbert_multi_rag.py
+
+# the pipeline ablation: same task, fewer roles
+PIPELINE=solo python run_openood_multi_rag.py    # Reproducer only
+PIPELINE=team python run_openood_multi_rag.py    # + Navigator + Critic, no repair
+
+pytest -q                                         # 98 tests
 ```
 
-**The clone-and-navigate oracle (mmpretrain)** runs inside a *pre-provisioned*
-Docker image — the agent navigates + runs the eval; the `mmcv` env-block is
-solved once in the image (it is **not** the agent's job; see `docs/DESIGN.md`).
-Build it once, then run:
+The Docker-backed tasks (mmpretrain, OpenOOD) run inside pre-provisioned images;
+the irreducible env-hell (mmcv) is solved once in the image, not by the agent.
 
-```bash
-docker build --platform linux/amd64 -f docker/mmpretrain.Dockerfile -t repro-mmpretrain:latest .
-python run_repro.py evals/benchmark/mmpretrain_resnet18_cifar10.yaml   # blind clone→navigate→run→verify
-```
+## Honest caveats
 
-## Honest status & caveats
-
-- **Reproducibility crisis, as data:** `RepDistiller` = `artifact_blocked` (dead
-  checkpoint host) — reported, not counted as agent failure. `mmpretrain` was
-  `env_blocked` (mmcv won't build on Py3.12) until the Docker amd64 +
-  prebuilt-wheel recipe **unblocked it** — now a real clone-and-navigate oracle.
-- Three oracles are **library-load**; the fourth (`mmpretrain`) is a true
-  **clone-and-navigate-and-run** (Docker backend, two-phase network). The
-  retrieval ladder is still measured on the cloned source for the algorithm
-  comparison.
-- Small n (5–8 runs/oracle), single model — effect sizes + staged rates, not
-  significance claims.
-- The default execution is a subprocess session (fast, MPS); for **untrusted**
-  repos a pluggable `exec/docker_session.py` backend adds container isolation,
-  resource caps, and a **two-phase network** (provision online → `go_offline()` →
-  execution offline). The benchmark above ran on the subprocess backend (reviewed
-  repos). Don't point the subprocess backend at code you don't trust.
-- Blind V1 removes the expected value from the Agent prompt and clears stale
-  run artifacts, but subprocess execution is not a filesystem security boundary.
-  A strict held-out run should use Docker and expose only the public task.
+- **Small N** (5). Pass rates are indicative, not significance-tested; tasks are
+  development tasks, **not held-out**.
+- The two `detectors` tasks come from the same library and were added to exercise
+  the repair loop, not for paper breadth.
+- **mmpretrain blindness is soft** — its 94.82 is in the public repo's own
+  model-zoo metafile; "blind" means the task/verifier never reveal it, and the
+  agent must still run the real `tools/test.py`.
+- The subprocess backend is fast but **not** a security boundary; a strict
+  held-out run should use the Docker backend and expose only the public task.
+- `RepDistiller` is `artifact_blocked` (dead checkpoint host) — reported, not
+  counted as a failure.

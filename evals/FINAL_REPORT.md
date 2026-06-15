@@ -164,12 +164,19 @@ E1/E2 use *specialized* per-task prompts that hand the agent substantial task
 knowledge (APIs, field names, known gotchas). The fair question is what survives
 when that is removed. `prompt_mode=generic` swaps every role prompt for a single
 **task-agnostic** set (no task identity, API, or gotcha) — only the public result
-contract and the repo itself remain. Two hard tasks now pass under it:
+contract and the repo itself remain. On two hard tasks the agent reaches the
+target under generic prompts (with one caveat, noted in the table):
 
 | Task | backend | target | generic, full pipeline |
 |---|---|---|---|
-| RobustBench Carmon2019 | subprocess | 52.0 robust acc | **pass** (verifier-recomputed 52.0) |
-| OpenOOD EBO | Docker | 87.58 Near-OOD AUROC | **pass** (verifier-recomputed 87.58) |
+| RobustBench Carmon2019 | subprocess | 52.0 robust acc | verifier matched (recomputed 52.0); run then hit a 402 balance error in a later step |
+| OpenOOD EBO | Docker | 87.58 Near-OOD AUROC | **pass** (verifier-recomputed 87.58, no workflow error) |
+
+The RobustBench row is reported honestly: the deterministic verifier recomputed
+52.0 from the agent's adversarial predictions (the reproduction target was met),
+but the run later raised a `402 Insufficient Balance` API error in a downstream
+step — so it is "verifier matched, workflow interrupted", not a clean end-to-end
+pass. OpenOOD completed with no workflow error.
 
 Getting there was itself a debugging study, and the failures were *orchestrator*
 defects, not agent-capability limits:
@@ -212,23 +219,53 @@ hidden target, no task identity):
      legitimate attack outcome, not an error). The value comes from the verifier's
      own recomputation — never the hidden target — so the check generalizes to any
      task that declares a floor.
-   - *Oracle-specific (the honest limit):* the "hardcoded normalization disagrees
-     with the repo's own source" check still names OpenOOD's source file and dict
-     key. It references only the agent's own code and the repo's own files (no
-     target), but it is **not** yet framework-general — a new task needs its own
-     equivalent. So "the generic path self-corrects hard tasks" is, today, partly
-     a framework capability and partly a per-task diagnostic I had to author after
-     predicting the failure mode.
+   - *Was oracle-specific, now removed:* an earlier version also carried a
+     "hardcoded normalization disagrees with the repo's own source" check that
+     named OpenOOD's source file and dict key. An ablation (below) showed it was
+     **not load-bearing**, so it was **removed** — the generic path now carries
+     **zero** oracle-specific feedback. (The *specialized* path still uses that
+     check; it lives in `_normalization_diagnostics_for_code`, wired only into the
+     specialized contract diagnostics.)
 
-With these, the agent reaches 87.58 **on its own** (4 executions, ¥0.58, no human
-edit to its code). Independently re-verified: the official CPU reference script's
-held-out result is 87.5823 (s0/s1/s2 = 86.93/87.91/87.91), and that script is
-scrubbed from the agent's workspace, so blindness holds. **Caveats:** these are
-single N=1 generic passes per task, not an N=5 rate; the development above was
-iterated against these same tasks (read as feasibility, not a generalization
-rate); and as noted, one of the two enabling diagnostics is still oracle-specific,
-so the result shows "given the right *form* of feedback the agent self-corrects",
-not yet "the system produces that feedback for an unseen task unaided."
+With these, on the run that reached the target the agent hit 87.58 **on its own**
+(4 executions, ¥0.58, no human edit to its code) — at that point the generic path
+still included the normalization feedback. Independently re-verified: the official
+CPU reference script's held-out result is 87.5823 (s0/s1/s2 = 86.93/87.91/87.91),
+and that script is scrubbed from the agent's workspace, so blindness holds.
+
+### Ablation: is the hand-authored normalization check load-bearing?
+
+To test whether that one oracle-specific diagnostic was actually *needed*, I
+removed its wiring from the generic path (the config no longer passes
+`generic_safe_diagnostics`) and re-ran OpenOOD generic — leaving only
+task-agnostic machinery (anti-hallucination prompt + framework-level below-chance
++ inline-fallback). The result is more informative than a pass/fail:
+
+- The agent **corrected the `std` on its own** to the repo's exact
+  `[0.2470, 0.2435, 0.2616]` (the anti-hallucination rule drove it to read
+  `transform.py` instead of inventing a value) **and** negated the energy so OOD
+  scores rank higher (the framework below-chance signal). So the hand-authored
+  normalization feedback is **not load-bearing** — the generic machinery recovers
+  both the value and the direction without it.
+- It nonetheless **missed at 92.46** (target 87.58): it omitted the official
+  `Resize(32)+CenterCrop(32)` step, a third, subtler preprocessing detail that has
+  **no diagnostic at all** — not the (removed) normalization check, and no
+  framework signal, since 92.46 is above chance. This is the honest frontier of
+  the purely-generic path: it self-corrects failures that leave a *signal* (a
+  below-chance metric) or a *checkable constant* (std vs the repo), but a missing
+  transform that merely shifts an already-plausible score still goes uncaught.
+
+On the strength of this ablation the normalization wiring was **removed for good**,
+so the generic path is now fully task-agnostic. The honest trade-off: the one
+recorded 87.58 generic pass was obtained *with* that feedback present; without it
+the agent recovers std + sign unaided but, on this iterated task, lands at 92.46
+short of full convergence (the uncovered `Resize/CenterCrop`). "Given feedback
+with the right *form* the agent self-corrects" holds; "the unaided generic system
+nails every preprocessing detail" does not yet.
+
+**Caveats:** these are single N=1 generic passes per task, not an N=5 rate, and
+the development above was iterated against these same tasks — read as feasibility,
+not a generalization rate.
 
 ---
 

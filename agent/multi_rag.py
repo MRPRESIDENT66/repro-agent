@@ -7,6 +7,7 @@ import inspect
 import json
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -53,6 +54,34 @@ from verify.check import verify_run
 
 class _PipelineDone(Exception):
     """Clean early-stop for the solo ablation condition."""
+
+
+@dataclass(frozen=True)
+class PipelinePolicy:
+    """The three ablation conditions, expressed as data instead of scattered flags.
+
+    ``run_oracle`` used to derive ``run_critic`` / ``use_reviewer`` / ``post_mode``
+    / artifact-suffix inline in four separate places. Collapsing them into one
+    object makes the conditions a single source of truth and trivially testable.
+    """
+
+    name: str
+    run_critic: bool       # Navigator + Critic roles present
+    use_reviewer: bool     # independent Reviewer between executions
+    post_mode: str         # "none" (solo, one-shot) or "repair"
+    artifact_suffix: str   # "" for full; the pipeline name otherwise
+
+    @classmethod
+    def from_name(cls, pipeline: str) -> "PipelinePolicy":
+        table = {
+            "solo": dict(run_critic=False, use_reviewer=False, post_mode="none"),
+            "solo-repair": dict(run_critic=False, use_reviewer=False, post_mode="repair"),
+            "full": dict(run_critic=True, use_reviewer=True, post_mode="repair"),
+        }
+        if pipeline not in table:
+            raise ValueError(f"unknown pipeline {pipeline!r}; valid: {tuple(table)}")
+        suffix = "" if pipeline == "full" else pipeline
+        return cls(name=pipeline, artifact_suffix=suffix, **table[pipeline])
 
 
 def _dynamic_rag_role(**kwargs: Any) -> tuple[dict, dict]:
@@ -227,9 +256,120 @@ def _call_workspace_hook(hook: Callable[..., None], workdir: Path) -> None:
         hook()
 
 
+def build_run_record(
+    *,
+    config: OracleConfig,
+    pipeline: str,
+    n_exec: int,
+    roles: dict,
+    rag: dict,
+    workflow_error: str | None,
+    rag_requirement: bool,
+    handoff_requirement: bool,
+    collaboration_pass: bool,
+    public_evidence_found: bool,
+    public_contract_diagnostics: list,
+    verdict: Any,
+    total_commands: int,
+    probe_transcript: list,
+    failure_classes: list,
+) -> dict:
+    """Assemble the serializable run summary (``result.json`` payload).
+
+    Pure function of the run's observations — no I/O — so the report shape can be
+    unit-tested without driving a full reproduction.
+    """
+    total_cost = round(
+        sum(r["usage"].get("cost_yuan", 0.0) for r in roles.values())
+        + sum(s["usage"].get("cost_yuan", 0.0) for s in rag.values()),
+        4,
+    )
+    return {
+        "task": config.task,
+        "pipeline": pipeline,
+        "max_executions": MAX_REPAIR_ROUNDS + 1,
+        "eval_executions": n_exec,
+        "blind_workspace_checked": config.assert_blind_workspace is not None,
+        "agents": len(roles),
+        "attempt": config.attempt,
+        "roles": roles,
+        "rag": rag,
+        "dynamic_rag": True,
+        "retrieval_ranker": config.retrieval_ranker,
+        "repair_mode": "patch_first_full_file_fallback",
+        "workflow_error": workflow_error,
+        "total_rag_calls": sum(stage["calls"] for stage in rag.values()),
+        "rag_requirement_met": rag_requirement,
+        "handoff_requirement_met": handoff_requirement,
+        "public_evidence_found": public_evidence_found,
+        "public_contract_diagnostics": public_contract_diagnostics,
+        "verdict": verdict.as_dict(),
+        "collaboration_pass": collaboration_pass,
+        "total_cost_yuan": total_cost,
+        "total_commands": total_commands,
+        "runtime_probe_enabled": True,
+        "runtime_probe_budget": MAX_RUNTIME_PROBES,
+        "total_runtime_probes": len(probe_transcript),
+        "failure_classes": failure_classes,
+    }
+
+
+def emit_artifacts(
+    workdir: Path,
+    artifact_dir: Path,
+    result_json: str,
+    session: Any,
+    probe_transcript: list,
+    *,
+    handoff_files: tuple[str, ...],
+    eval_script: str,
+) -> None:
+    """Serialize replay/probe scripts and mirror all run outputs to both dirs."""
+    replay_fn = getattr(session, "replay_script", None)
+    replay_script = (replay_fn() + "\n") if replay_fn is not None else None
+    probe_replay_fn = getattr(session, "probe_replay_script", None)
+    probe_replay_script = (
+        (probe_replay_fn() + "\n") if probe_replay_fn is not None and probe_transcript else None
+    )
+    probe_json = json.dumps(
+        [
+            {
+                "command": run.command,
+                "stdout": run.stdout,
+                "stderr": run.stderr,
+                "exit_code": run.exit_code,
+                "timed_out": run.timed_out,
+                "duration_s": run.duration_s,
+            }
+            for run in probe_transcript
+        ],
+        indent=2,
+    ) + "\n"
+
+    for output_dir in (workdir, artifact_dir):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "result.json").write_text(result_json)
+        if replay_script is not None:
+            (output_dir / "commands.sh").write_text(replay_script)
+        if probe_replay_script is not None:
+            (output_dir / "runtime_probes.sh").write_text(probe_replay_script)
+            (output_dir / "runtime_probes.json").write_text(probe_json)
+        for handoff in handoff_files:
+            src = workdir / handoff
+            if src.exists() and output_dir != workdir:
+                shutil.copy2(src, output_dir / handoff)
+        src_eval = workdir / eval_script
+        if src_eval.exists() and output_dir != workdir:
+            shutil.copy2(src_eval, output_dir / eval_script)
+        if output_dir != workdir:
+            for trace in workdir.glob("*_rag_trace.md"):
+                shutil.copy2(trace, output_dir / trace.name)
+            for trace in workdir.glob("*_probe_trace.md"):
+                shutil.copy2(trace, output_dir / trace.name)
+
+
 def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
-    if pipeline not in ("solo", "solo-repair", "full"):
-        raise ValueError(f"unknown pipeline {pipeline!r}; valid: ('solo', 'solo-repair', 'full')")
+    policy = PipelinePolicy.from_name(pipeline)
     prompts = _role_prompts()
     task_context = _generic_task_context(config)
     code_validator = _make_generic_code_validator(config)
@@ -260,17 +400,14 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
         "The program must produce the public result artifact when executed. "
         "Do not return the contents of predictions or result files."
     )
-    run_critic = pipeline == "full"
-    post_mode = {"solo": "none", "solo-repair": "repair", "full": "repair"}[pipeline]
-    use_reviewer = pipeline == "full"
+    run_critic = policy.run_critic
+    post_mode = policy.post_mode
+    use_reviewer = policy.use_reviewer
 
-    artifact_suffixes = []
-    if pipeline != "full":
-        artifact_suffixes.append(pipeline)
     workdir = config.workdir
     artifact_dir = config.artifact_dir
-    if artifact_suffixes:
-        artifact_dir = artifact_dir.parent / f"{artifact_dir.name}__{'__'.join(artifact_suffixes)}"
+    if policy.artifact_suffix:
+        artifact_dir = artifact_dir.parent / f"{artifact_dir.name}__{policy.artifact_suffix}"
 
     _call_workspace_hook(config.copy_clean_source, workdir)
     if config.assert_blind_workspace is not None:
@@ -523,83 +660,36 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
     if use_reviewer:
         handoff_requirement = handoff_requirement and (workdir / "review_report.md").exists()
     collaboration_pass = verdict.match and rag_requirement and handoff_requirement
-    total_cost = round(
-        sum(r["usage"].get("cost_yuan", 0.0) for r in roles.values())
-        + sum(s["usage"].get("cost_yuan", 0.0) for s in rag.values()),
-        4,
-    )
     probe_transcript = list(getattr(session, "probe_transcript", []))
-    output = {
-        "task": config.task,
-        "pipeline": pipeline,
-        "max_executions": MAX_REPAIR_ROUNDS + 1,
-        "eval_executions": n_exec,
-        "blind_workspace_checked": config.assert_blind_workspace is not None,
-        "agents": len(roles),
-        "attempt": config.attempt,
-        "roles": roles,
-        "rag": rag,
-        "dynamic_rag": True,
-        "retrieval_ranker": config.retrieval_ranker,
-        "repair_mode": "patch_first_full_file_fallback",
-        "workflow_error": workflow_error,
-        "total_rag_calls": sum(stage["calls"] for stage in rag.values()),
-        "rag_requirement_met": rag_requirement,
-        "handoff_requirement_met": handoff_requirement,
-        "public_evidence_found": generic_pass_gate(session),
-        "public_contract_diagnostics": contract_diagnostics(session),
-        "verdict": verdict.as_dict(),
-        "collaboration_pass": collaboration_pass,
-        "total_cost_yuan": total_cost,
-        "total_commands": len(session.transcript),
-        "runtime_probe_enabled": True,
-        "runtime_probe_budget": MAX_RUNTIME_PROBES,
-        "total_runtime_probes": len(probe_transcript),
-        "failure_classes": failure_classes,
-    }
-    result_json = json.dumps(output, indent=2) + "\n"
 
-    replay_fn = getattr(session, "replay_script", None)
-    replay_script = (replay_fn() + "\n") if replay_fn is not None else None
-    probe_replay_fn = getattr(session, "probe_replay_script", None)
-    probe_replay_script = (
-        (probe_replay_fn() + "\n") if probe_replay_fn is not None and probe_transcript else None
+    record = build_run_record(
+        config=config,
+        pipeline=pipeline,
+        n_exec=n_exec,
+        roles=roles,
+        rag=rag,
+        workflow_error=workflow_error,
+        rag_requirement=rag_requirement,
+        handoff_requirement=handoff_requirement,
+        collaboration_pass=collaboration_pass,
+        public_evidence_found=generic_pass_gate(session),
+        public_contract_diagnostics=contract_diagnostics(session),
+        verdict=verdict,
+        total_commands=len(session.transcript),
+        probe_transcript=probe_transcript,
+        failure_classes=failure_classes,
     )
-    probe_json = json.dumps(
-        [
-            {
-                "command": run.command,
-                "stdout": run.stdout,
-                "stderr": run.stderr,
-                "exit_code": run.exit_code,
-                "timed_out": run.timed_out,
-                "duration_s": run.duration_s,
-            }
-            for run in probe_transcript
-        ],
-        indent=2,
-    ) + "\n"
+    result_json = json.dumps(record, indent=2) + "\n"
 
-    for output_dir in (workdir, artifact_dir):
-        output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "result.json").write_text(result_json)
-        if replay_script is not None:
-            (output_dir / "commands.sh").write_text(replay_script)
-        if probe_replay_script is not None:
-            (output_dir / "runtime_probes.sh").write_text(probe_replay_script)
-            (output_dir / "runtime_probes.json").write_text(probe_json)
-        for handoff in config.handoff_files:
-            src = workdir / handoff
-            if src.exists() and output_dir != workdir:
-                shutil.copy2(src, output_dir / handoff)
-        src_eval = workdir / config.eval_script
-        if src_eval.exists() and output_dir != workdir:
-            shutil.copy2(src_eval, output_dir / config.eval_script)
-        if output_dir != workdir:
-            for trace in workdir.glob("*_rag_trace.md"):
-                shutil.copy2(trace, output_dir / trace.name)
-            for trace in workdir.glob("*_probe_trace.md"):
-                shutil.copy2(trace, output_dir / trace.name)
+    emit_artifacts(
+        workdir,
+        artifact_dir,
+        result_json,
+        session,
+        probe_transcript,
+        handoff_files=config.handoff_files,
+        eval_script=config.eval_script,
+    )
 
     print(result_json)
 
@@ -610,7 +700,10 @@ __all__ = [
     "MAX_RUNTIME_PROBES",
     "MAX_RUNTIME_PROBES_PER_ROLE",
     "OracleConfig",
+    "PipelinePolicy",
     "RUNTIME_PROBE_TOOL",
+    "build_run_record",
+    "emit_artifacts",
     "relevant_snippet",
     "run_oracle",
     "search_repo",

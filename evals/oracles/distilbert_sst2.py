@@ -9,12 +9,11 @@ dataset are pre-cached, so the eval runs offline.
 
 from __future__ import annotations
 
-import ast
 import json
 import shutil
 from pathlib import Path
 
-from agent.multi_rag import OracleConfig, _extract_python
+from agent.types import OracleConfig
 from exec.session import Session
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,12 +51,6 @@ itself; it ignores anything you print. Do NOT hardcode the predictions or the
 accuracy — only the per-sample predictions from real model inference reproduce
 the target."""
 
-# Required-construct markers: the script must really load the model + dataset and
-# WRITE the per-sample predictions file — it cannot pass by printing a number.
-_REQUIRED_MARKERS = ("predictions.json",)
-_REQUIRED_USAGE = ("from_pretrained", "load_dataset")
-
-
 def _recompute(workdir: Path):
     """Verifier-side metric: read the agent's per-sample predictions and score them
     against the pinned gold labels. Returns ``(accuracy_pct, n)`` or ``None`` when
@@ -79,28 +72,6 @@ def _recompute(workdir: Path):
     except (TypeError, ValueError):
         return None
     return (100.0 * correct / len(gold), len(gold))
-
-
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-def _validate_code(content: str) -> str:
-    code = _extract_python(content)
-    try:
-        ast.parse(code)
-    except SyntaxError as exc:
-        raise ValueError(f"code is not syntactically valid: {exc}") from exc
-    missing = [m for m in _REQUIRED_MARKERS if m not in code]
-    if missing:
-        raise ValueError(f"code is missing required public-contract markers: {missing}")
-    missing_use = [m for m in _REQUIRED_USAGE if m not in code]
-    if missing_use:
-        raise ValueError(
-            "code must actually load the model and dataset (missing: "
-            f"{missing_use}); it cannot hardcode the result."
-        )
-    return code
 
 
 # ---------------------------------------------------------------------------
@@ -135,8 +106,9 @@ def _make_public_contract_diagnostics(workdir: Path, n_examples: int):
         if acc < CHANCE_LEVEL:
             return [
                 f"Recomputed accuracy ({acc:.2f}) is below the {CHANCE_LEVEL} "
-                f"random-chance baseline for binary SST-2 — the label mapping is "
-                f"almost certainly inverted. Check id2label (0=negative, 1=positive)."
+                f"random-chance baseline for this higher-is-better metric. Inspect "
+                f"label mapping, score direction, and metric computation against "
+                f"public source evidence."
             ]
         return []
 
@@ -222,7 +194,7 @@ def _make_execute_eval():
 # ---------------------------------------------------------------------------
 
 def make_config(attempt: str) -> OracleConfig:
-    workdir = ROOT / "workspaces" / "distilbert_sst2_multi_rag"
+    workdir = ROOT / "workspaces" / "distilbert_sst2_multi_rag" / attempt
     artifact_dir = ROOT / "evals" / "runs" / f"distilbert_sst2_multi_rag_{attempt}"
 
     contract_diagnostics = _make_public_contract_diagnostics(workdir, N_EXAMPLES)

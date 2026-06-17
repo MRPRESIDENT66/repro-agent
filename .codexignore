@@ -1,0 +1,29 @@
+# Generated experiment artifacts. Keep summaries in evals/RESULTS.md instead.
+evals/runs/
+logs/
+
+# Per-task scratch workspaces and cloned/source dependency snapshots.
+workspaces/
+repos/
+
+# Local data, checkpoints, model weights, and downloaded assets.
+data/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.bin
+
+# Python environments and caches.
+.venv/
+.venv-*/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local/editor noise and secrets.
+.env
+.DS_Store
+.idea/
+

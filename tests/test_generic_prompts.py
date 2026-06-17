@@ -94,3 +94,14 @@ def test_all_v2_oracles_publish_a_generic_artifact_contract() -> None:
         assert config.public_execution_command in context
         assert "REPRO_RESULT" not in context
         assert "recompute_fn" in config.verify_kwargs
+
+
+def test_oracle_workspaces_are_attempt_scoped() -> None:
+    from evals.oracles.distilbert_sst2 import make_config
+
+    first = make_config("attempt_a")
+    second = make_config("attempt_b")
+
+    assert first.workdir != second.workdir
+    assert first.workdir.name == "attempt_a"
+    assert second.workdir.name == "attempt_b"

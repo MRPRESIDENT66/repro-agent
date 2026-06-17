@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import shutil
 from pathlib import Path
 
-from agent.multi_rag import OracleConfig, _extract_python
+from agent.types import OracleConfig
 from exec.session import Session
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,25 +45,6 @@ external verifier computes robust accuracy = fraction of adversarial predictions
 that equal the true label (which the verifier loads itself). It ignores anything
 you print. Do NOT hardcode predictions or the accuracy — only the model's real
 predictions on the attacked inputs reproduce the target."""
-
-_REQUIRED_MARKERS = ("predictions.json", "AutoAttack")
-
-
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-def _validate_code(content: str) -> str:
-    code = _extract_python(content)
-    try:
-        ast.parse(code)
-    except SyntaxError as exc:
-        raise ValueError(f"SyntaxError: {exc}") from exc
-    for marker in _REQUIRED_MARKERS:
-        if marker not in code:
-            raise ValueError(f"Missing required marker: {marker!r}")
-    return code
-
 
 def _make_recompute(n_examples: int):
     """Verifier-side robust accuracy: the eval dumps the model's predictions on the
@@ -198,7 +178,7 @@ def _make_execute_eval(n_examples: int, epsilon: float):
 # ---------------------------------------------------------------------------
 
 def make_config(attempt: str) -> OracleConfig:
-    workdir = ROOT / "workspaces" / "robustbench_multi_rag"
+    workdir = ROOT / "workspaces" / "robustbench_multi_rag" / attempt
     artifact_dir = ROOT / "evals" / "runs" / f"robustbench_carmon_{attempt}"
 
     recompute = _make_recompute(N_EXAMPLES)

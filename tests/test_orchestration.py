@@ -14,20 +14,23 @@ from pathlib import Path
 import pytest
 
 from agent import multi_rag
+from agent.diagnostics import make_generic_contract_diagnostics as _make_generic_contract_diagnostics
 from agent.generic_prompts import GENERIC_PROMPTS
-from agent.llm import Reply, ToolCall, Usage
+from agent.llm import Reply, ScriptedLLM, ToolCall, Usage
 from agent.multi_rag import (
     OracleConfig,
-    _atomic_write_text,
-    _failed_import_packages,
     _generic_task_context,
     _make_generic_code_validator,
-    _make_generic_contract_diagnostics,
-    _make_generic_repair_validator,
     _role_prompts,
     run_oracle,
 )
+from agent.repair import (
+    failed_import_packages as _failed_import_packages,
+    make_generic_repair_validator as _make_generic_repair_validator,
+)
+from agent.roles import _atomic_write_text
 from exec.session import RunResult, Session
+from agent.loop import run_agent
 
 
 class _AutoLLM:
@@ -47,6 +50,15 @@ class _AutoLLM:
         if submit:
             if "review" in submit:
                 content = "REVIEW_STATUS: PASS\n"
+            elif submit == "submit_patch":
+                self._submissions += 1
+                return Reply("", [ToolCall("s", submit, {"edits": [
+                    {
+                        "old": "print('REPRO_RESULT')\n",
+                        "new": "print('REPRO_RESULT')\n"
+                               f"repair_marker = {self._submissions}\n",
+                    }
+                ], "rationale": "mark that repair used the existing file"})])
             else:
                 self._submissions += 1
                 system = str(messages[0].get("content", "")).lower()
@@ -119,6 +131,22 @@ def _result(cfg: OracleConfig) -> dict:
     return json.loads((cfg.workdir / "result.json").read_text())
 
 
+def test_role_system_prompt_replaces_default_reproduction_prompt(tmp_path: Path) -> None:
+    llm = ScriptedLLM([
+        Reply("", [ToolCall("c1", "finish", {"summary": "done"})])
+    ])
+    result = run_agent(
+        "private task",
+        Session(tmp_path / "ws"),
+        llm,
+        system_prompt="You are the Navigator. Write a handoff.",
+    )
+
+    assert result.gave_final
+    assert llm.calls[0][0]["content"] == "You are the Navigator. Write a handoff."
+    assert "private task" not in llm.calls[0][0]["content"]
+
+
 # ---------------------------------------------------------------------------
 
 def test_atomic_write_text_replaces_complete_file_without_temp_artifacts(tmp_path):
@@ -131,27 +159,23 @@ def test_atomic_write_text_replaces_complete_file_without_temp_artifacts(tmp_pat
     assert list(tmp_path.glob(".eval.py.*.tmp")) == []
 
 
-def test_solo_and_team_are_one_shot(tmp_path, monkeypatch):
+def test_solo_is_one_shot(tmp_path, monkeypatch):
     _patch(monkeypatch)
-    for pipeline in ("solo", "team"):
-        cfg = _make_config(tmp_path, outcomes=[False, False, False])
-        run_oracle(cfg, pipeline=pipeline)
-        res = _result(cfg)
-        assert res["eval_executions"] == 1, f"{pipeline} must execute exactly once"
-        assert not any(
-            k.startswith(("repair_", "retry_", "reviewer_")) for k in res["roles"]
-        ), f"{pipeline} must run no follow-up roles"
-    # team adds the pre-execution roles, solo does not
-    cfg_team = _make_config(tmp_path, outcomes=[True])
-    run_oracle(cfg_team, pipeline="team")
-    assert "navigator" in _result(cfg_team)["roles"]
-    assert "critic" in _result(cfg_team)["roles"]
+    cfg = _make_config(tmp_path, outcomes=[False, False, False])
+    run_oracle(cfg, pipeline="solo")
+    res = _result(cfg)
+    assert res["eval_executions"] == 1
+    assert not any(
+        k.startswith(("repair_", "reviewer_")) for k in res["roles"]
+    )
+    assert "navigator" not in res["roles"]
+    assert "critic" not in res["roles"]
 
 
 def test_budget_is_shared_and_capped_at_five(tmp_path, monkeypatch):
     _patch(monkeypatch)
     # A task that never passes: every looped condition must stop at the budget.
-    for pipeline in ("solo-retry", "solo-repair", "full"):
+    for pipeline in ("solo-repair", "full"):
         cfg = _make_config(tmp_path, outcomes=[False] * 10)
         run_oracle(cfg, pipeline=pipeline)
         res = _result(cfg)
@@ -162,7 +186,7 @@ def test_budget_is_shared_and_capped_at_five(tmp_path, monkeypatch):
 def test_loop_stops_on_contract_pass(tmp_path, monkeypatch):
     _patch(monkeypatch)
     # Fail, fail, then pass → exactly 3 executions, not the full budget.
-    for pipeline in ("solo-retry", "solo-repair", "full"):
+    for pipeline in ("solo-repair", "full"):
         cfg = _make_config(tmp_path, outcomes=[False, False, True, True])
         run_oracle(cfg, pipeline=pipeline)
         res = _result(cfg)
@@ -173,24 +197,16 @@ def test_loop_stops_on_contract_pass(tmp_path, monkeypatch):
         assert res["public_evidence_found"] is True
 
 
-def test_retry_vs_repair_vs_full_route_distinct_roles(tmp_path, monkeypatch):
+def test_repair_vs_full_route_distinct_roles(tmp_path, monkeypatch):
     _patch(monkeypatch)
     outcomes = [False, False, True]
-
-    cfg_retry = _make_config(tmp_path, outcomes=list(outcomes))
-    run_oracle(cfg_retry, pipeline="solo-retry")
-    roles = _result(cfg_retry)["roles"]
-    assert any(k.startswith("retry_") for k in roles)        # re-generation, no feedback
-    assert not any(k.startswith("repair_") for k in roles)
-    assert not any(k.startswith("reviewer_") for k in roles)
-    assert "critic" not in roles and "navigator" not in roles
 
     cfg_repair = _make_config(tmp_path, outcomes=list(outcomes))
     run_oracle(cfg_repair, pipeline="solo-repair")
     roles = _result(cfg_repair)["roles"]
     assert any(k.startswith("repair_") for k in roles)       # feedback repair
-    assert not any(k.startswith("retry_") for k in roles)
     assert not any(k.startswith("reviewer_") for k in roles)  # no reviewer in solo-repair
+    assert "critic" not in roles and "navigator" not in roles
 
     cfg_full = _make_config(tmp_path, outcomes=list(outcomes))
     run_oracle(cfg_full, pipeline="full")
@@ -244,6 +260,17 @@ def test_generic_task_context_uses_v2_artifact_contract_when_provided(tmp_path):
     assert "REPRO_RESULT" not in context
     assert str(cfg.expected) not in context
     assert str(cfg.tolerance) not in context
+
+
+def test_missing_artifact_diagnostic_includes_workspace_snapshot(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[False])
+    cfg.public_result_protocol = "Write `predictions.json`: a JSON list."
+    (cfg.workdir / "scores.csv").write_text("score\n1.0\n")
+    diagnostics = _make_generic_contract_diagnostics(cfg)(Session(cfg.workdir))
+
+    assert "predictions.json" in diagnostics[0]
+    assert "scores.csv" in diagnostics[0]
+    assert "Latest execution observation" in diagnostics[0]
 
 
 def test_generic_code_validator_checks_public_interface_only(tmp_path):
@@ -340,8 +367,9 @@ def test_generic_repair_uses_shared_full_file_path(tmp_path, monkeypatch):
 
     result = _result(cfg)
     assert result["workflow_error"] is None
-    assert result["repair_mode"] == "full_file_replacement"
+    assert result["repair_mode"] == "patch_first_full_file_fallback"
     assert "repair_1" in result["roles"]
+    assert result["roles"]["repair_1"]["tool_counts"].get("submit_patch") == 1
 
 
 def test_generic_context_and_runtime_probe_are_always_enabled(tmp_path, monkeypatch):

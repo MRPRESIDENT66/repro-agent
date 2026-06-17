@@ -12,6 +12,14 @@ data/
 checkpoints/
 workspaces/
 repos/
+evals/runs/
+logs/
+.artifact_location
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.bin
 
 # os / ide
 .DS_Store

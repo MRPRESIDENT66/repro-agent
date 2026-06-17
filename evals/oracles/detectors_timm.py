@@ -18,12 +18,11 @@ Model weights + dataset are pre-cached, so the eval runs CPU-only and offline.
 
 from __future__ import annotations
 
-import ast
 import json
 import shutil
 from pathlib import Path
 
-from agent.multi_rag import OracleConfig, _extract_python
+from agent.types import OracleConfig
 from exec.session import Session
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,36 +31,6 @@ CARDS_DIR = Path(__file__).resolve().parent / "detectors_cards"
 GOLD_DIR = Path(__file__).resolve().parent / "gold"
 
 METRIC = "top1_accuracy"
-
-# The script must really load the model + data + predict and WRITE the per-sample
-# predictions file — but must NOT be required to contain `import detectors`, since
-# discovering that line is the whole point of the task.
-_REQUIRED_MARKERS = ("predictions.json",)
-_REQUIRED_USAGE = ("timm", "load_dataset")
-_PREDICTION_MARKERS = ("argmax", "logits", ".max(", "topk")
-
-
-def _validate_code(content: str) -> str:
-    code = _extract_python(content)
-    try:
-        ast.parse(code)
-    except SyntaxError as exc:
-        raise ValueError(f"code is not syntactically valid: {exc}") from exc
-    missing = [m for m in _REQUIRED_MARKERS if m not in code]
-    if missing:
-        raise ValueError(f"code is missing required public-contract markers: {missing}")
-    missing_use = [m for m in _REQUIRED_USAGE if m not in code]
-    if missing_use:
-        raise ValueError(
-            "code must load the model via timm and the dataset via load_dataset "
-            f"(missing: {missing_use}); it cannot hardcode the result."
-        )
-    if not any(m in code for m in _PREDICTION_MARKERS):
-        raise ValueError(
-            "code must actually predict (argmax/logits/topk over the model output)."
-        )
-    return code
-
 
 def _make_recompute(gold_path: Path):
     """Verifier-side metric: score the agent's per-sample predictions against the
@@ -113,9 +82,9 @@ def _make_public_contract_diagnostics(workdir: Path, recompute, num_examples: in
         if acc <= chance * 1.5:
             return [
                 f"Recomputed accuracy ({acc:.2f}) is at/near the {chance:.2f}% "
-                f"random-chance baseline for this {num_classes}-class task — a "
-                f"broken eval (wrong label field, wrong preprocessing, or the model "
-                f"loaded without its trained weights). Check the model card + label field."
+                f"random-chance baseline for this {num_classes}-class task. Inspect "
+                f"model loading, label mapping, preprocessing, and metric computation "
+                f"against public source evidence."
             ]
         return []
 
@@ -203,7 +172,7 @@ def make_config(
     gold_labels: str,
     tolerance: float = 0.10,
 ) -> OracleConfig:
-    workdir = ROOT / "workspaces" / f"{workspace_slug}_multi_rag"
+    workdir = ROOT / "workspaces" / f"{workspace_slug}_multi_rag" / attempt
     artifact_dir = ROOT / "evals" / "runs" / f"{workspace_slug}_multi_rag_{attempt}"
     recompute = _make_recompute(GOLD_DIR / gold_labels)
 

@@ -11,12 +11,11 @@ provisioned on disk and the container is taken offline before execution.
 
 from __future__ import annotations
 
-import ast
 import json
 import shutil
 from pathlib import Path
 
-from agent.multi_rag import OracleConfig, _extract_python
+from agent.types import OracleConfig
 from exec.docker_session import DockerSession
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,31 +60,6 @@ a JSON list of exactly {N_EXAMPLES} integers, containing the model's predicted
 class id for each CIFAR-10 test image in test order. The external verifier
 recomputes top-1 accuracy from this file and ignores printed aggregate metrics.
 Generate the list from real model inference; do not hardcode predictions."""
-
-# The wrapper must run the repository's test entry AND write the per-sample
-# predictions file — it cannot print a literal it never sees (blind).
-_REQUIRED_MARKERS = ("predictions.json", "test.py")
-
-
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
-def _validate_code(content: str) -> str:
-    code = _extract_python(content)
-    try:
-        ast.parse(code)
-    except SyntaxError as exc:
-        raise ValueError(f"code is not syntactically valid: {exc}") from exc
-    missing = [m for m in _REQUIRED_MARKERS if m not in code]
-    if missing:
-        raise ValueError(
-            "code is missing required public-contract markers "
-            f"{missing}: it must run the repository's test entry (tools/test.py) "
-            "with per-sample prediction dumping and write predictions.json."
-        )
-    return code
-
 
 def _recompute(workdir: Path):
     """Verifier-side top-1 from the agent's per-sample predictions vs pinned gold."""
@@ -205,7 +179,7 @@ def _make_execute_eval():
 # ---------------------------------------------------------------------------
 
 def make_config(attempt: str) -> OracleConfig:
-    workdir = ROOT / "workspaces" / "mmpretrain_resnet18_multi_rag"
+    workdir = ROOT / "workspaces" / "mmpretrain_resnet18_multi_rag" / attempt
     artifact_dir = ROOT / "evals" / "runs" / f"mmpretrain_resnet18_multi_rag_{attempt}"
 
     contract_diagnostics = _make_public_contract_diagnostics(workdir, N_EXAMPLES)

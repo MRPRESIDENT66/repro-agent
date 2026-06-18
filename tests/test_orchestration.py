@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from agent import multi_rag
+from agent import multi_rag, pipeline
 from agent.diagnostics import make_generic_contract_diagnostics as _make_generic_contract_diagnostics
 from agent.generic_prompts import GENERIC_PROMPTS
 from agent.llm import Reply, ScriptedLLM, ToolCall, Usage
@@ -80,8 +80,10 @@ class _AutoLLM:
 
 
 def _patch(monkeypatch) -> None:
-    monkeypatch.setattr(multi_rag, "ChatLLM", lambda *a, **k: _AutoLLM())
-    monkeypatch.setattr(multi_rag, "search_repo", lambda *a, **k: "Most relevant files:\n")
+    # run_oracle / ReproductionPipeline now live in agent.pipeline and resolve
+    # ChatLLM / search_repo from that module's namespace.
+    monkeypatch.setattr(pipeline, "ChatLLM", lambda *a, **k: _AutoLLM())
+    monkeypatch.setattr(pipeline, "search_repo", lambda *a, **k: "Most relevant files:\n")
 
 
 def _make_config(tmp_path: Path, outcomes: list[bool]) -> OracleConfig:

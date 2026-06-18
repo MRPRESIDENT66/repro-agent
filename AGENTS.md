@@ -6,7 +6,8 @@ This repo is a blind multi-agent runtime for ML result reproduction. Agents insp
 
 - `README.md` — short project overview, pipeline, verifier, run commands.
 - `evals/RESULTS.md` — summarized experiments, ablations, failure analysis.
-- `agent/multi_rag.py` — orchestration, role handoffs, execution/repair loop.
+- `agent/pipeline.py` — orchestration state machine, role handoffs, execution/repair loop.
+- `agent/contracts.py` — public task context and generic code/report/review validators.
 - `agent/failure.py` — failure classification and runtime-probe suggestions.
 - `agent/generic_prompts.py` — task-agnostic role prompts.
 - `retrieval/` — repo-navigation search and snippet extraction.

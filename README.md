@@ -1,5 +1,7 @@
 # Repro-Agent
 
+[English](README.md) | [中文](README.zh-CN.md)
+
 A blind multi-agent runtime for reproducing ML repository results: agents inspect a repo, write and execute an evaluation program, repair from real failures, and pass only when an independent verifier recomputes the metric from per-sample outputs.
 
 ![Architecture: blind inputs feed a generic role pipeline that emits per-sample predictions, which an independent verifier recomputes against pinned gold labels.](docs/architecture.svg)
@@ -91,7 +93,8 @@ pytest -q tests --ignore=workspaces --ignore=repos
 
 Useful paths:
 
-- `agent/multi_rag.py` — top-level orchestration and execution/repair loop.
+- `agent/pipeline.py` — top-level orchestration state machine and execution/repair loop.
+- `agent/contracts.py` — public task context and generic code/report/review validators.
 - `agent/types.py` — shared task/runtime configuration types.
 - `agent/repair.py` — patch-first repair and repair validation.
 - `agent/diagnostics.py` — generic public-contract diagnostics.

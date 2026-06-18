@@ -1,5 +1,7 @@
 # Repro-Agent
 
+[English](README.md) | [中文](README.zh-CN.md)
+
 Repro-Agent 是一个面向代码仓库任务的**可验证多智能体执行系统**。它用于在盲测条件下复现已发布的 ML 结果：Agent 只能看到公开任务、公开运行命令和输出文件协议，不能看到目标指标；最终由独立 verifier 根据 Agent 产出的逐样本 artifact 重新计算指标。
 
 简单说，它不是让 LLM 打印一个“看起来对”的分数，而是让 Agent 自己读 repo、写评测脚本、运行、根据错误日志修复，并交出可验证的结果文件。Verifier 不信任 Agent 打印的数字，只信它产出的 artifact。
@@ -109,7 +111,8 @@ Dense embedding 不是默认路径必须项。
 
 ## 目录结构
 
-- `agent/multi_rag.py`：顶层编排和执行/修复循环。
+- `agent/pipeline.py`：顶层编排状态机和执行/修复循环。
+- `agent/contracts.py`：公共任务上下文和通用 code/report/review 校验。
 - `agent/types.py`：task/runtime 共享配置类型。
 - `agent/repair.py`：patch-first 修复和修复校验。
 - `agent/diagnostics.py`：通用 public-contract diagnostics。

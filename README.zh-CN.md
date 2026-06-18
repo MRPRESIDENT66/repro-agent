@@ -2,11 +2,27 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-Repro-Agent 是一个面向代码仓库任务的**可验证多智能体执行系统**。它用于在盲测条件下复现已发布的 ML 结果：Agent 只能看到公开任务、公开运行命令和输出文件协议，不能看到目标指标；最终由独立 verifier 根据 Agent 产出的逐样本 artifact 重新计算指标。
+Repro-Agent 是一个面向代码仓库任务的**盲测多智能体运行时(blind multi-agent runtime)**。一队角色分工的 LLM 智能体在盲测条件下复现已发布的 ML 结果：用 **native tool calling** 自主读 repo、写评测脚本、执行、**从真实执行失败中自我修复(self-correction)**，最终由一个**独立、fail-closed 的评测器(evaluation harness)**从逐样本 artifact 重算指标——智能体全程看不到目标数字。
 
-简单说，它不是让 LLM 打印一个“看起来对”的分数，而是让 Agent 自己读 repo、写评测脚本、运行、根据错误日志修复，并交出可验证的结果文件。Verifier 不信任 Agent 打印的数字，只信它产出的 artifact。
+**从零手写**(agent loop、检索、修复循环、评测器都是在 provider-agnostic 的 OpenAI 兼容 API 上自实现的,**未依赖 LangChain/LangGraph**),目的是把一个 agentic 系统的内部机制讲清楚,而不是藏在框架背后。
 
 ![Architecture: blind inputs feed a generic role pipeline that emits per-sample predictions, which an independent verifier recomputes against pinned gold labels.](docs/architecture.svg)
+
+## 本项目展示的能力(技术点对照)
+
+| 能力 | 在本项目里是什么 | 位置 |
+|---|---|---|
+| **Multi-agent orchestration(多智能体编排)** | 角色分工的状态机(Navigator→Reproducer→Critic→执行→Reviewer→Repair),per-role 上下文隔离 | [`agent/pipeline.py`](agent/pipeline.py) |
+| **Tool use / function calling(工具调用)** | 原生 OpenAI function-calling 的 agent loop、顺序工具派发、上下文压缩 | [`agent/loop.py`](agent/loop.py) |
+| **Self-correction(Reflexion 式自我修复)** | 失败分类驱动、execution-grounded 的修复闭环,patch-first 优先于盲目重写 | [`agent/repair.py`](agent/repair.py)、[`agent/failure.py`](agent/failure.py) |
+| **RAG / retrieval(检索增强)** | 面向代码仓库的检索:BM25 + 路径/符号信号 + LLM rerank + 动态 query rewriting | [`retrieval/`](retrieval/) |
+| **LLM evaluation & guardrails(评测与护栏)** | 盲测、fail-closed 验证器,从逐样本 artifact 重算指标,拒绝不可复算/泄漏结果 | [`verify/`](verify/) |
+| **Sandboxed execution(沙箱执行)** | subprocess + Docker 执行会话,两阶段网络隔离 | [`exec/`](exec/) |
+| **Observability(可观测)** | per-call token + 成本核算、全链路 transcript、可复算 `commands.sh` | [`agent/llm.py`](agent/llm.py) |
+| **Evaluation methodology(评测方法)** | budget-fair 消融、`pass@k`、平均成本、失败模式拆解 | [`evals/`](evals/) |
+| **Deterministic agent testing(确定性测试)** | `ScriptedLLM` 零 API/token 驱动整条控制流,快速可复现 | [`tests/`](tests/) |
+
+技术栈:Python、OpenAI 兼容 function calling(provider-agnostic,可跑 DeepSeek/任意 OpenAI 风格端点)、BM25 检索、Docker、`pytest`。
 
 ## 为什么不是普通 Agent Demo
 
@@ -78,7 +94,7 @@ Dense embedding 不是默认路径必须项。
 
 `runtime_probe` 是软建议，不是强制门槛。Failure classifier 可以建议 probe，但当源码证据足够时，Repair 可以直接提交。
 
-### Failure classifier + patch-first repair
+### Self-correction:Failure classifier + patch-first repair
 
 执行失败后，系统会先根据执行日志和 verifier diagnostics 分类：
 
@@ -92,6 +108,10 @@ Dense embedding 不是默认路径必须项。
 - `workflow_error`
 
 分类结果会进入 Repair 上下文，指导下一步是 search、probe、patch 还是 full-file fallback。Repair 默认先提交精确 old/new patch，避免每轮全文件重写破坏已正确的代码；patch 不可用时再 fallback 到完整文件重写。
+
+## Observability(可观测)
+
+每次 LLM 调用都累计 token 用量和成本(含 cache-hit 计价),一次 run 的成本就是两次快照之差。每次 run 还会产出完整的逐角色 transcript、RAG/probe trace,以及可复算的 `commands.sh`,使任何判定结果事后都可审计、可复现。
 
 ## 实验结果
 

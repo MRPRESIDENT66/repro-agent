@@ -8,12 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from agent.llm import Reply, ScriptedLLM, ToolCall
-from agent.multi_rag import (
-    _dynamic_rag_role,
-    _extract_python,
-    _review_requires_repair,
-    _validate_review,
+from agent.contracts import (
+    extract_python as _extract_python,
+    review_requires_repair as _review_requires_repair,
+    validate_review as _validate_review,
 )
+from agent.pipeline import _dynamic_rag_role
 from agent.repair import apply_code_patch as _apply_code_patch
 from agent.roles import _missing_path_hints
 from agent.runtime_probe import runtime_probe_command as _runtime_probe_command
@@ -110,7 +110,7 @@ def test_dynamic_rag_query_is_generated_from_error_context(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    import agent.multi_rag as module
+    import agent.pipeline as module
 
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -163,7 +163,7 @@ def test_restricted_runtime_probe_is_audited_and_not_an_eval_command(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    import agent.multi_rag as module
+    import agent.pipeline as module
 
     workspace = tmp_path / "ws"
     workspace.mkdir()

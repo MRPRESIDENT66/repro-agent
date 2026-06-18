@@ -1,7 +1,7 @@
 """The generic condition must not encode known task-specific solutions."""
 
 from agent.generic_prompts import GENERIC_PROMPTS
-from agent.multi_rag import _generic_task_context
+from agent.contracts import generic_task_context as _generic_task_context
 
 
 def test_generic_prompts_are_repository_agnostic() -> None:

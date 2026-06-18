@@ -13,17 +13,17 @@ from pathlib import Path
 
 import pytest
 
-from agent import multi_rag, pipeline
+from agent import pipeline
+from agent.contracts import (
+    generic_task_context as _generic_task_context,
+    make_generic_code_validator as _make_generic_code_validator,
+    role_prompts as _role_prompts,
+)
 from agent.diagnostics import make_generic_contract_diagnostics as _make_generic_contract_diagnostics
 from agent.generic_prompts import GENERIC_PROMPTS
 from agent.llm import Reply, ScriptedLLM, ToolCall, Usage
-from agent.multi_rag import (
-    OracleConfig,
-    _generic_task_context,
-    _make_generic_code_validator,
-    _role_prompts,
-    run_oracle,
-)
+from agent.pipeline import run_oracle
+from agent.types import OracleConfig
 from agent.repair import (
     failed_import_packages as _failed_import_packages,
     make_generic_repair_validator as _make_generic_repair_validator,
@@ -385,7 +385,7 @@ def test_generic_context_and_runtime_probe_are_always_enabled(tmp_path, monkeypa
 
     result = _result(cfg)
     assert result["runtime_probe_enabled"] is True
-    assert result["runtime_probe_budget"] == multi_rag.MAX_RUNTIME_PROBES
+    assert result["runtime_probe_budget"] == pipeline.MAX_RUNTIME_PROBES
     assert result["total_runtime_probes"] == 0
 
     navigator_messages = [

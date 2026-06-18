@@ -153,7 +153,7 @@ def _make_public_contract_diagnostics(workdir: Path):
                 (run for run in reversed(session.transcript) if not run.ok), None
             )
             if latest is not None:
-                from agent.multi_rag import _search_evidence, _missing_path_hints
+                from agent.roles import _search_evidence, _missing_path_hints
                 failure = _search_evidence(f"{latest.stdout}\n{latest.stderr}")
                 hints = _missing_path_hints(f"{latest.stdout}\n{latest.stderr}", workdir)
                 if failure:

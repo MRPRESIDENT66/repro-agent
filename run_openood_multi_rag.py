@@ -2,7 +2,7 @@
 
 import os
 
-from agent.multi_rag import run_oracle
+from agent.pipeline import run_oracle
 from evals.oracles.openood_ebo import make_config
 
 if __name__ == "__main__":

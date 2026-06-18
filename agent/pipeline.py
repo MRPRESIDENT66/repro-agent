@@ -573,6 +573,23 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
     print(result_json)
 
 
+def _dynamic_rag_role(**kwargs: Any) -> tuple[dict, dict]:
+    """Run a single dynamic RAG role outside a full pipeline.
+
+    Defaults its dependencies from this module's ``ChatLLM`` / ``search_repo`` /
+    ``relevant_snippet`` so targeted tests can monkeypatch them here.
+    """
+    deps = kwargs.pop(
+        "deps",
+        RoleDeps(
+            llm_factory=ChatLLM,
+            search_fn=search_repo,
+            snippet_fn=relevant_snippet,
+        ),
+    )
+    return _roles_dynamic_rag_role(**kwargs, deps=deps)
+
+
 __all__ = [
     "PipelinePolicy",
     "ReproductionPipeline",

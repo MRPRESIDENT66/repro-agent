@@ -368,15 +368,82 @@ def emit_artifacts(
                 shutil.copy2(trace, output_dir / trace.name)
 
 
-def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
-    policy = PipelinePolicy.from_name(pipeline)
-    prompts = _role_prompts()
-    task_context = _generic_task_context(config)
-    code_validator = _make_generic_code_validator(config)
-    validate_report = config.validate_report or _validate_report
-    validate_review = config.validate_review or _validate_review
+def provision_workspace(config: OracleConfig, workdir: Path, artifact_dir: Path) -> Any:
+    """Set up the blind sandbox and return a fresh execution session.
 
-    def _generic_pass_gate(session: Any) -> bool:
+    Copies clean source in, optionally asserts the workspace hides the target,
+    clears generated leftovers, resets the artifact dir, and opens an (optionally
+    network-isolated) execution session.
+    """
+    _call_workspace_hook(config.copy_clean_source, workdir)
+    if config.assert_blind_workspace is not None:
+        _call_workspace_hook(config.assert_blind_workspace, workdir)
+    for pattern in ("*_probe_trace.md", "runtime_probes.json", "runtime_probes.sh"):
+        for generated_path in workdir.glob(pattern):
+            generated_path.unlink(missing_ok=True)
+    shutil.rmtree(artifact_dir, ignore_errors=True)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    session = config.make_session()
+    if config.session_go_offline:
+        session.go_offline()
+    return session
+
+
+class ReproductionPipeline:
+    """The role state machine for one blind reproduction attempt.
+
+    Construction provisions the blind sandbox; :meth:`run` drives the stages per
+    the :class:`PipelinePolicy`:
+
+        navigate -> reproduce -> critique -> execute -> (review -> repair)*
+
+    looping until the verifier-recomputable contract passes or the repair budget
+    is spent. All run state lives on the instance so the orchestration reads as a
+    short, linear ``run`` instead of a deep nest of closures.
+    """
+
+    def __init__(self, config: OracleConfig, policy: PipelinePolicy) -> None:
+        self.config = config
+        self.policy = policy
+        self.prompts = _role_prompts()
+        self.task_context = _generic_task_context(config)
+        self.code_validator = _make_generic_code_validator(config)
+        self.validate_report = config.validate_report or _validate_report
+        self.validate_review = config.validate_review or _validate_review
+        self.contract_diagnostics = _make_generic_contract_diagnostics(config, pass_gate=self.passed)
+        self.synthesis_instruction = (
+            f"Return only the complete executable source code for {config.eval_script}. "
+            "The program must produce the public result artifact when executed. "
+            "Do not return the contents of predictions or result files."
+        )
+
+        self.workdir = config.workdir
+        self.artifact_dir = config.artifact_dir
+        if policy.artifact_suffix:
+            self.artifact_dir = self.artifact_dir.parent / f"{self.artifact_dir.name}__{policy.artifact_suffix}"
+
+        self.session = provision_workspace(config, self.workdir, self.artifact_dir)
+        self.role_deps = RoleDeps(
+            llm_factory=ChatLLM,
+            search_fn=search_repo,
+            snippet_fn=relevant_snippet,
+        )
+
+        self.roles: dict[str, dict] = {}
+        self.rag: dict[str, dict] = {}
+        self.workflow_error: str | None = None
+        self.execution_start = 0
+        self.latest_execution_start = 0
+        self.n_exec = 0
+        self.failure_classes: list[dict[str, str | None]] = []
+
+    # --- shared helpers ---------------------------------------------------
+
+    def passed(self, session: Any) -> bool:
+        """Public pass gate: verifier-recomputable evidence exists and clears the
+        random-chance floor. Never reads the hidden target."""
+        config = self.config
         recompute_fn = config.verify_kwargs.get("recompute_fn")
         if not callable(recompute_fn):
             return config.public_contract_passes(session)
@@ -393,297 +460,280 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
             return False
         return True
 
-    generic_pass_gate = _generic_pass_gate
-    contract_diagnostics = _make_generic_contract_diagnostics(config, pass_gate=generic_pass_gate)
-    generic_code_synthesis_instruction = (
-        f"Return only the complete executable source code for {config.eval_script}. "
-        "The program must produce the public result artifact when executed. "
-        "Do not return the contents of predictions or result files."
-    )
-    run_critic = policy.run_critic
-    post_mode = policy.post_mode
-    use_reviewer = policy.use_reviewer
-
-    workdir = config.workdir
-    artifact_dir = config.artifact_dir
-    if policy.artifact_suffix:
-        artifact_dir = artifact_dir.parent / f"{artifact_dir.name}__{policy.artifact_suffix}"
-
-    _call_workspace_hook(config.copy_clean_source, workdir)
-    if config.assert_blind_workspace is not None:
-        _call_workspace_hook(config.assert_blind_workspace, workdir)
-    for pattern in ("*_probe_trace.md", "runtime_probes.json", "runtime_probes.sh"):
-        for generated_path in workdir.glob(pattern):
-            generated_path.unlink(missing_ok=True)
-    shutil.rmtree(artifact_dir, ignore_errors=True)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-
-    session = config.make_session()
-    if config.session_go_offline:
-        session.go_offline()
-
-    role_deps = RoleDeps(
-        llm_factory=ChatLLM,
-        search_fn=search_repo,
-        snippet_fn=relevant_snippet,
-    )
-
-    def rag_role(**kwargs: Any) -> tuple[dict, dict]:
+    def rag_role(self, **kwargs: Any) -> tuple[dict, dict]:
         return _roles_dynamic_rag_role(
-            task=config.task,
-            workdir=workdir,
-            artifact_dir=artifact_dir,
-            session=session,
-            search_extra_exclude=config.search_extra_exclude,
+            task=self.config.task,
+            workdir=self.workdir,
+            artifact_dir=self.artifact_dir,
+            session=self.session,
+            search_extra_exclude=self.config.search_extra_exclude,
             allow_runtime_probe=True,
-            deps=role_deps,
+            deps=self.role_deps,
             **kwargs,
         )
 
-    roles: dict[str, dict] = {}
-    rag: dict[str, dict] = {}
-    workflow_error: str | None = None
-    execution_start = 0
-    n_exec = 0
-    failure_classes: list[dict[str, str | None]] = []
-
-    def sync_eval_file() -> None:
-        sync_file = getattr(session, "sync_file", None)
-        if sync_file is not None and not sync_file(config.eval_script):
+    def _sync_eval_file(self) -> None:
+        sync_file = getattr(self.session, "sync_file", None)
+        if sync_file is not None and not sync_file(self.config.eval_script):
             raise RuntimeError(
-                f"generated evaluation file is not visible to the execution session: {config.eval_script}"
+                f"generated evaluation file is not visible to the execution session: {self.config.eval_script}"
             )
 
-    try:
-        if run_critic:
-            roles["navigator"], rag["navigator"] = rag_role(
-                name="navigator",
-                instruction=prompts.navigator,
-                context=task_context,
-                output_path=workdir / "navigator_report.md",
-                submit_name="submit_handoff",
-                submit_description="Submit the source-grounded Navigator handoff.",
-                validator=validate_report,
-                trigger="initial_task",
-                max_steps=7,
-            )
+    # --- stages -----------------------------------------------------------
+
+    def _navigate(self) -> None:
+        self.roles["navigator"], self.rag["navigator"] = self.rag_role(
+            name="navigator",
+            instruction=self.prompts.navigator,
+            context=self.task_context,
+            output_path=self.workdir / "navigator_report.md",
+            submit_name="submit_handoff",
+            submit_description="Submit the source-grounded Navigator handoff.",
+            validator=self.validate_report,
+            trigger="initial_task",
+            max_steps=7,
+        )
+
+    def _reproduce(self) -> None:
+        if self.policy.run_critic:
             builder_context = (
                 "# Public task and result protocol\n\n"
-                + task_context
+                + self.task_context
                 + "\n\n# Navigator handoff\n\n"
-                + _require_handoff(workdir / "navigator_report.md", "navigator")
+                + _require_handoff(self.workdir / "navigator_report.md", "navigator")
             )
         else:
-            builder_context = task_context
+            builder_context = self.task_context
 
-        roles["reproducer"], rag["reproducer"] = rag_role(
+        self.roles["reproducer"], self.rag["reproducer"] = self.rag_role(
             name="reproducer",
-            instruction=prompts.reproducer,
+            instruction=self.prompts.reproducer,
             context=builder_context,
-            output_path=workdir / config.eval_script,
+            output_path=self.workdir / self.config.eval_script,
             submit_name="submit_code",
-            submit_description=f"Submit the complete generated {config.eval_script}.",
-            validator=code_validator,
-            trigger="navigator_handoff" if run_critic else "initial_task",
+            submit_description=f"Submit the complete generated {self.config.eval_script}.",
+            validator=self.code_validator,
+            trigger="navigator_handoff" if self.policy.run_critic else "initial_task",
             max_steps=7,
-            synthesis_instruction=generic_code_synthesis_instruction,
+            synthesis_instruction=self.synthesis_instruction,
             synthesis_attempts=5,
         )
 
-        if run_critic:
-            critic_context = (
-                "# Public task and result protocol\n\n"
-                + task_context
-                + "\n\n# Generated evaluation script\n\n"
-                + (workdir / config.eval_script).read_text(errors="replace")
-                + "\n\n# Navigator handoff\n\n"
-                + _require_handoff(workdir / "navigator_report.md", "navigator")
-            )
-            roles["critic"], rag["critic"] = rag_role(
-                name="critic",
-                instruction=prompts.critic,
-                context=critic_context,
-                output_path=workdir / config.eval_script,
-                submit_name="submit_code",
-                submit_description=f"Submit the complete audited {config.eval_script}.",
-                validator=code_validator,
-                trigger="generated_code_audit",
-                max_steps=7,
-                synthesis_instruction=generic_code_synthesis_instruction,
-                synthesis_attempts=5,
-            )
+    def _critique(self) -> None:
+        critic_context = (
+            "# Public task and result protocol\n\n"
+            + self.task_context
+            + "\n\n# Generated evaluation script\n\n"
+            + (self.workdir / self.config.eval_script).read_text(errors="replace")
+            + "\n\n# Navigator handoff\n\n"
+            + _require_handoff(self.workdir / "navigator_report.md", "navigator")
+        )
+        self.roles["critic"], self.rag["critic"] = self.rag_role(
+            name="critic",
+            instruction=self.prompts.critic,
+            context=critic_context,
+            output_path=self.workdir / self.config.eval_script,
+            submit_name="submit_code",
+            submit_description=f"Submit the complete audited {self.config.eval_script}.",
+            validator=self.code_validator,
+            trigger="generated_code_audit",
+            max_steps=7,
+            synthesis_instruction=self.synthesis_instruction,
+            synthesis_attempts=5,
+        )
 
-        sync_eval_file()
-        execution_start = len(session.transcript)
-        eval_run = config.execute_eval(session)
-        roles["reproducer"]["errors"] = 0 if eval_run.ok else 1
-        roles["reproducer"]["command_indexes"] = [execution_start + 1, len(session.transcript)]
-        session.write_file("reproducer_public_log.txt", _public_log(session, execution_start))
-        latest_execution_start = execution_start
+    def _execute_reproducer(self) -> None:
+        self._sync_eval_file()
+        self.execution_start = len(self.session.transcript)
+        eval_run = self.config.execute_eval(self.session)
+        self.roles["reproducer"]["errors"] = 0 if eval_run.ok else 1
+        self.roles["reproducer"]["command_indexes"] = [self.execution_start + 1, len(self.session.transcript)]
+        self.session.write_file("reproducer_public_log.txt", _public_log(self.session, self.execution_start))
+        self.latest_execution_start = self.execution_start
 
-        def review_current(round_index: int) -> None:
-            diagnostics = contract_diagnostics(session)
-            review_log_start = latest_execution_start
-            review_context = (
-                "# Public task and result protocol\n\n"
-                + task_context
-                + "\n\n# Navigator handoff\n\n"
-                + _require_handoff(workdir / "navigator_report.md", "navigator")
-                + "\n\n# Evaluation implementation\n\n"
-                + _clip((workdir / config.eval_script).read_text(errors="replace"), 12000)
-                + "\n\n# Latest public execution log\n\n"
-                + _clip(_public_log(session, review_log_start), 12000)
-                + "\n\n# Deterministic public-contract audit\n\n"
-                + "\n".join(f"- {issue}" for issue in diagnostics)
-            )
-            key = f"reviewer_{round_index}"
-            roles[key], rag[key] = rag_role(
-                name=key,
-                instruction=prompts.reviewer,
-                context=review_context,
-                output_path=workdir / "review_report.md",
-                submit_name="submit_review",
-                submit_description="Submit the source-grounded execution audit.",
-                validator=validate_review,
-                trigger="execution_result" if round_index == 0 else "repair_execution_result",
-                max_steps=6,
-                max_queries=2,
-            )
+    def _review(self, round_index: int) -> None:
+        diagnostics = self.contract_diagnostics(self.session)
+        review_context = (
+            "# Public task and result protocol\n\n"
+            + self.task_context
+            + "\n\n# Navigator handoff\n\n"
+            + _require_handoff(self.workdir / "navigator_report.md", "navigator")
+            + "\n\n# Evaluation implementation\n\n"
+            + _clip((self.workdir / self.config.eval_script).read_text(errors="replace"), 12000)
+            + "\n\n# Latest public execution log\n\n"
+            + _clip(_public_log(self.session, self.latest_execution_start), 12000)
+            + "\n\n# Deterministic public-contract audit\n\n"
+            + "\n".join(f"- {issue}" for issue in diagnostics)
+        )
+        key = f"reviewer_{round_index}"
+        self.roles[key], self.rag[key] = self.rag_role(
+            name=key,
+            instruction=self.prompts.reviewer,
+            context=review_context,
+            output_path=self.workdir / "review_report.md",
+            submit_name="submit_review",
+            submit_description="Submit the source-grounded execution audit.",
+            validator=self.validate_review,
+            trigger="execution_result" if round_index == 0 else "repair_execution_result",
+            max_steps=6,
+            max_queries=2,
+        )
 
-        n_exec = 1
-        if post_mode == "none":
-            raise _PipelineDone()
-
-        if use_reviewer:
-            review_current(0)
-
-        for round_index in range(1, MAX_REPAIR_ROUNDS + 1):
-            if generic_pass_gate(session):
-                break
-            diagnostics = contract_diagnostics(session)
-            failure = classify_failure(session=session, diagnostics=diagnostics)
-            failure_classes.append(
-                {
-                    "round": str(round_index),
-                    "kind": failure.kind,
-                    "next_action": failure.next_action,
-                    "probe_hint": failure.probe_hint,
-                }
-            )
-            parts = [
-                "# Public task and result protocol\n\n" + task_context,
-                "# Failure classification\n\n"
-                f"- kind: {failure.kind}\n"
-                f"- rationale: {failure.rationale}\n"
-                f"- next_action: {failure.next_action}\n"
-                + (f"- suggested_probe: {failure.probe_hint}\n" if failure.probe_hint else ""),
+    def _repair_round(self, round_index: int) -> None:
+        config = self.config
+        diagnostics = self.contract_diagnostics(self.session)
+        failure = classify_failure(session=self.session, diagnostics=diagnostics)
+        self.failure_classes.append(
+            {
+                "round": str(round_index),
+                "kind": failure.kind,
+                "next_action": failure.next_action,
+                "probe_hint": failure.probe_hint,
+            }
+        )
+        parts = [
+            "# Public task and result protocol\n\n" + self.task_context,
+            "# Failure classification\n\n"
+            f"- kind: {failure.kind}\n"
+            f"- rationale: {failure.rationale}\n"
+            f"- next_action: {failure.next_action}\n"
+            + (f"- suggested_probe: {failure.probe_hint}\n" if failure.probe_hint else ""),
+        ]
+        parts.extend(
+            [
+                "# Current evaluation script\n\n" + (self.workdir / config.eval_script).read_text(errors="replace"),
+                "# Latest public execution log\n\n" + _public_log(self.session, self.latest_execution_start),
             ]
-            parts.extend(
-                [
-                    "# Current evaluation script\n\n" + (workdir / config.eval_script).read_text(errors="replace"),
-                    "# Latest public execution log\n\n" + _public_log(session, latest_execution_start),
-                ]
-            )
-            if latest_execution_start != execution_start:
-                parts.append("# Prior execution history (clipped)\n\n" + _clip(_public_log(session, execution_start), 6000))
-            if use_reviewer:
-                parts.append("# Independent reviewer audit\n\n" + _require_handoff(workdir / "review_report.md", "reviewer"))
-            if run_critic:
-                parts.append("# Navigator handoff\n\n" + _require_handoff(workdir / "navigator_report.md", "navigator"))
-            parts.append("# Deterministic public-contract audit\n\n" + "\n".join(f"- {issue}" for issue in diagnostics))
-            repair_context = "\n\n".join(parts)
-            repair_validator = _make_generic_repair_validator(
-                code_validator,
-                session,
-                workdir,
-                execution_start,
-                current_code=(workdir / config.eval_script).read_text(errors="replace"),
-            )
-            patch_validator = lambda payload, rv=repair_validator: _apply_code_patch(workdir / config.eval_script, payload, validate_code=rv)
-            key = f"repair_{round_index}"
-            roles[key], rag[key] = rag_role(
-                name=key,
-                instruction=prompts.repair.replace("{round_index}", str(round_index)),
-                context=repair_context,
-                output_path=workdir / config.eval_script,
-                submit_name="submit_patch",
-                submit_description=(
-                    "Submit a small exact-replacement patch to the current eval script. "
-                    "Use complete full-file replacement only if patch synthesis fails."
-                ),
-                validator=patch_validator,
-                trigger="execution_error_and_reviewer_finding",
-                max_steps=7,
-                max_queries=3,
-                submit_schema=_patch_tool("submit_patch", "Patch the current eval script with exact old/new replacements."),
-                submission_adapter=_patch_submission_adapter,
-                synthesis_instruction=generic_code_synthesis_instruction
-                + " The interactive patch phase did not submit a valid patch, so now return a complete repaired source file.",
-                synthesis_validator=repair_validator,
-                synthesis_attempts=4,
-            )
+        )
+        if self.latest_execution_start != self.execution_start:
+            parts.append("# Prior execution history (clipped)\n\n" + _clip(_public_log(self.session, self.execution_start), 6000))
+        if self.policy.use_reviewer:
+            parts.append("# Independent reviewer audit\n\n" + _require_handoff(self.workdir / "review_report.md", "reviewer"))
+        if self.policy.run_critic:
+            parts.append("# Navigator handoff\n\n" + _require_handoff(self.workdir / "navigator_report.md", "navigator"))
+        parts.append("# Deterministic public-contract audit\n\n" + "\n".join(f"- {issue}" for issue in diagnostics))
+        repair_context = "\n\n".join(parts)
+        repair_validator = _make_generic_repair_validator(
+            self.code_validator,
+            self.session,
+            self.workdir,
+            self.execution_start,
+            current_code=(self.workdir / config.eval_script).read_text(errors="replace"),
+        )
+        patch_validator = lambda payload, rv=repair_validator: _apply_code_patch(self.workdir / config.eval_script, payload, validate_code=rv)
+        key = f"repair_{round_index}"
+        self.roles[key], self.rag[key] = self.rag_role(
+            name=key,
+            instruction=self.prompts.repair.replace("{round_index}", str(round_index)),
+            context=repair_context,
+            output_path=self.workdir / config.eval_script,
+            submit_name="submit_patch",
+            submit_description=(
+                "Submit a small exact-replacement patch to the current eval script. "
+                "Use complete full-file replacement only if patch synthesis fails."
+            ),
+            validator=patch_validator,
+            trigger="execution_error_and_reviewer_finding",
+            max_steps=7,
+            max_queries=3,
+            submit_schema=_patch_tool("submit_patch", "Patch the current eval script with exact old/new replacements."),
+            submission_adapter=_patch_submission_adapter,
+            synthesis_instruction=self.synthesis_instruction
+            + " The interactive patch phase did not submit a valid patch, so now return a complete repaired source file.",
+            synthesis_validator=repair_validator,
+            synthesis_attempts=4,
+        )
 
-            sync_eval_file()
-            start = len(session.transcript)
-            stepped_run = config.execute_eval(session)
-            n_exec += 1
-            latest_execution_start = start
-            roles[key]["errors"] = 0 if stepped_run.ok else 1
-            roles[key]["command_indexes"] = [start + 1, len(session.transcript)]
-            session.write_file("reproducer_public_log.txt", _public_log(session, execution_start))
+        self._sync_eval_file()
+        start = len(self.session.transcript)
+        stepped_run = config.execute_eval(self.session)
+        self.n_exec += 1
+        self.latest_execution_start = start
+        self.roles[key]["errors"] = 0 if stepped_run.ok else 1
+        self.roles[key]["command_indexes"] = [start + 1, len(self.session.transcript)]
+        self.session.write_file("reproducer_public_log.txt", _public_log(self.session, self.execution_start))
 
-            if use_reviewer:
-                review_current(round_index)
+        if self.policy.use_reviewer:
+            self._review(round_index)
 
-    except _PipelineDone:
-        pass
-    except Exception as exc:
-        workflow_error = f"{type(exc).__name__}: {exc}"
-    finally:
-        close = getattr(session, "close", None)
-        if close is not None:
-            close()
+    # --- driver -----------------------------------------------------------
+
+    def run(self) -> "ReproductionPipeline":
+        try:
+            if self.policy.run_critic:
+                self._navigate()
+            self._reproduce()
+            if self.policy.run_critic:
+                self._critique()
+
+            self._execute_reproducer()
+            self.n_exec = 1
+            if self.policy.post_mode == "none":
+                raise _PipelineDone()
+
+            if self.policy.use_reviewer:
+                self._review(0)
+
+            for round_index in range(1, MAX_REPAIR_ROUNDS + 1):
+                if self.passed(self.session):
+                    break
+                self._repair_round(round_index)
+        except _PipelineDone:
+            pass
+        except Exception as exc:
+            self.workflow_error = f"{type(exc).__name__}: {exc}"
+        finally:
+            close = getattr(self.session, "close", None)
+            if close is not None:
+                close()
+        return self
+
+
+def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
+    policy = PipelinePolicy.from_name(pipeline)
+    pipe = ReproductionPipeline(config, policy).run()
+    session = pipe.session
 
     verdict = verify_run(
         session.transcript,
-        workdir,
+        pipe.workdir,
         expected=config.expected,
         tolerance=config.tolerance,
         metric=config.metric,
         **config.verify_kwargs,
     )
 
-    rag_requirement = bool(rag) and all(stage["dynamic"] and stage["calls"] >= 1 for stage in rag.values())
+    rag_requirement = bool(pipe.rag) and all(stage["dynamic"] and stage["calls"] >= 1 for stage in pipe.rag.values())
     handoff_requirement = True
-    if run_critic:
-        handoff_requirement = (workdir / "navigator_report.md").exists()
-    if use_reviewer:
-        handoff_requirement = handoff_requirement and (workdir / "review_report.md").exists()
+    if policy.run_critic:
+        handoff_requirement = (pipe.workdir / "navigator_report.md").exists()
+    if policy.use_reviewer:
+        handoff_requirement = handoff_requirement and (pipe.workdir / "review_report.md").exists()
     collaboration_pass = verdict.match and rag_requirement and handoff_requirement
     probe_transcript = list(getattr(session, "probe_transcript", []))
 
     record = build_run_record(
         config=config,
         pipeline=pipeline,
-        n_exec=n_exec,
-        roles=roles,
-        rag=rag,
-        workflow_error=workflow_error,
+        n_exec=pipe.n_exec,
+        roles=pipe.roles,
+        rag=pipe.rag,
+        workflow_error=pipe.workflow_error,
         rag_requirement=rag_requirement,
         handoff_requirement=handoff_requirement,
         collaboration_pass=collaboration_pass,
-        public_evidence_found=generic_pass_gate(session),
-        public_contract_diagnostics=contract_diagnostics(session),
+        public_evidence_found=pipe.passed(session),
+        public_contract_diagnostics=pipe.contract_diagnostics(session),
         verdict=verdict,
         total_commands=len(session.transcript),
         probe_transcript=probe_transcript,
-        failure_classes=failure_classes,
+        failure_classes=pipe.failure_classes,
     )
     result_json = json.dumps(record, indent=2) + "\n"
 
     emit_artifacts(
-        workdir,
-        artifact_dir,
+        pipe.workdir,
+        pipe.artifact_dir,
         result_json,
         session,
         probe_transcript,
@@ -702,6 +752,7 @@ __all__ = [
     "OracleConfig",
     "PipelinePolicy",
     "RUNTIME_PROBE_TOOL",
+    "ReproductionPipeline",
     "build_run_record",
     "emit_artifacts",
     "relevant_snippet",

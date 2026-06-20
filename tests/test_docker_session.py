@@ -1,14 +1,32 @@
-"""DockerSession security properties (skipped when no Docker daemon)."""
+"""DockerSession security properties (skipped when no Docker daemon).
+
+Marked ``integration``: needs a live Docker daemon. The availability probe is
+bounded by a short timeout so a slow/unresponsive daemon cannot hang pytest
+collection (the historical cause of `pytest tests` appearing to stall).
+"""
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-_docker_up = subprocess.run(["docker", "ps"], capture_output=True).returncode == 0
-pytestmark = pytest.mark.skipif(not _docker_up, reason="Docker daemon not reachable")
+
+def _docker_available() -> bool:
+    if shutil.which("docker") is None:
+        return False
+    try:
+        return subprocess.run(["docker", "ps"], capture_output=True, timeout=5).returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(not _docker_available(), reason="Docker daemon not reachable"),
+]
 
 from exec.docker_session import DockerSession  # noqa: E402
 

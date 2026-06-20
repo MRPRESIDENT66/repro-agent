@@ -2,16 +2,21 @@
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-A **blind multi-agent runtime** for reproducing ML repository results. A team of
-role-specialized LLM agents inspects a repo, writes and executes an evaluation
-program with **native tool calling**, **self-corrects from real execution
-failures**, and is graded by an **independent, fail-closed evaluation harness**
-that recomputes the metric from per-sample outputs — the agent never sees the
-target number.
+A **research prototype** of a blind, multi-agent **reproduction benchmark +
+runtime** for ML results. A team of role-specialized LLM agents inspects a repo,
+writes and executes an evaluation program with **native tool calling**,
+**self-corrects from real execution failures**, and is graded by an
+**independent, fail-closed evaluation harness** that recomputes the metric from
+per-sample outputs — the agent never sees the target number.
 
-Built from scratch (the agent loop, retrieval, repair loop, and evaluator are
-hand-implemented on a provider-agnostic OpenAI-compatible API) to make the
-internals of an agentic system explicit rather than hidden behind a framework.
+Scope is honest: this is prototype-scale evidence (a handful of tasks, small
+sample counts), not a battle-tested universal runtime. The hardest task is not
+yet stable. See [Scope / Limitations](#scope--limitations).
+
+Orchestrated with **LangGraph** (a `StateGraph` of role nodes with a conditional
+repair loop); the retrieval, failure-classified repair, sandboxed execution, and
+blind verifier are implemented directly on a provider-agnostic OpenAI-compatible
+API. The same toolbelt is also exposed over **MCP** for any MCP client.
 
 ![Architecture: blind inputs feed a generic role pipeline that emits per-sample predictions, which an independent verifier recomputes against pinned gold labels.](docs/architecture.svg)
 
@@ -19,8 +24,9 @@ internals of an agentic system explicit rather than hidden behind a framework.
 
 | Capability | What it is here | Where |
 |---|---|---|
-| **Multi-agent orchestration** | A role-specialized state machine (Navigator → Reproducer → Critic → execute → Reviewer → Repair) with per-role context isolation | [`agent/pipeline.py`](agent/pipeline.py) |
+| **Multi-agent orchestration (LangGraph)** | A LangGraph `StateGraph` of role nodes (Navigator → Reproducer → Critic → execute → Reviewer → Repair) with a conditional repair loop and per-role context isolation | [`agent/pipeline.py`](agent/pipeline.py) |
 | **Tool use / function calling** | Native OpenAI function-calling agent loop, sequential tool dispatch, context compression | [`agent/loop.py`](agent/loop.py) |
+| **Tool interoperability (MCP)** | The toolbelt (repo search, runtime probe, sandboxed execution) exposed over the Model Context Protocol for any MCP client | [`mcp_server.py`](mcp_server.py) |
 | **Self-correction (Reflexion-style)** | A failure-classified, execution-grounded repair loop; patch-first edits over blind regeneration | [`agent/repair.py`](agent/repair.py), [`agent/failure.py`](agent/failure.py) |
 | **RAG / retrieval** | Repo-navigation retrieval: BM25 lexical search + path/symbol signals + LLM reranking + dynamic query rewriting | [`retrieval/`](retrieval/) |
 | **LLM evaluation & guardrails** | Blind, fail-closed verifier that recomputes the metric from per-sample artifacts and rejects unverifiable / leaked outputs | [`verify/`](verify/) |
@@ -29,8 +35,9 @@ internals of an agentic system explicit rather than hidden behind a framework.
 | **Evaluation methodology** | Budget-fair ablation across orchestration depths, `pass@k`, mean cost, failure-mode breakdown | [`evals/`](evals/) |
 | **Deterministic agent testing** | `ScriptedLLM` drives the whole control flow with no API/tokens for fast, reproducible tests | [`tests/`](tests/) |
 
-Stack: Python, OpenAI-compatible function calling (provider-agnostic; runs on
-DeepSeek/any OpenAI-style endpoint), BM25 retrieval, Docker, `pytest`.
+Stack: Python, **LangGraph**, **MCP** (Model Context Protocol), OpenAI-compatible
+function calling (provider-agnostic; runs on DeepSeek/any OpenAI-style endpoint),
+BM25 retrieval, Docker, `pytest`.
 
 ## Pipeline
 
@@ -79,12 +86,30 @@ The agent never sees the hidden target metric. It must write a public artifact w
 
 Fail-closed cases include missing artifact, malformed JSONL/CSV, wrong sample count, aggregate-only output, non-recomputable predictions, and values outside tolerance. Public diagnostics can be fed back to Reviewer/Repair, but hidden expected values are not exposed to the agent workspace.
 
+**All current tasks use the recompute path** (`recompute_fn`): the verdict is a fresh metric computed from per-sample outputs against pinned gold. An older provenance heuristic (which only checked that the code *looked* like an eval, and was forgeable with a dead-code block) remains as a fallback for unmigrated tasks but is **not used by any task in this benchmark**.
+
 ## Observability
 
 Every LLM call accumulates token usage and cost (with cache-hit accounting), so a
 run's cost is a delta of two snapshots. Each run emits the full per-role
 transcript, RAG/probe traces, and a replayable `commands.sh`, making any verdict
 auditable and reproducible after the fact.
+
+## MCP Server
+
+The agent's toolbelt — repo search, restricted runtime probing, and command
+execution — is also exposed over the **Model Context Protocol** in
+[`mcp_server.py`](mcp_server.py), so any MCP client (Claude Desktop, Claude Code,
+Cursor) can drive the same tools the in-process agent uses.
+
+```bash
+python mcp_server.py   # stdio transport
+```
+
+> "Sandboxed" here means **working-directory isolation** (each command runs in its
+> own temp dir) with an optional Docker session and two-phase network cutoff — not
+> a hardened adversarial sandbox. Treat it as isolation for *cooperative* eval
+> commands, not a security boundary against malicious code.
 
 ## Experiment Results
 
@@ -121,7 +146,13 @@ export LLM_MODEL=...
 python run_distilbert_multi_rag.py
 PIPELINE=solo-repair python run_openood_multi_rag.py
 PIPELINE=full python run_robustbench_multi_rag.py
-pytest -q tests --ignore=workspaces --ignore=repos
+```
+
+Tests — the unit suite needs no LLM/Docker/network and runs in ~1s:
+
+```bash
+pytest                 # fast unit suite (integration tests deselected by default)
+pytest -m integration  # Docker-dependent tests (needs a live daemon)
 ```
 
 Useful paths:
@@ -141,8 +172,25 @@ Useful paths:
 
 ## Scope / Limitations
 
-This is not a claim of zero-configuration reproduction for arbitrary repositories. Each task still needs a public task spec, execution command, sample contract, and hidden verifier assets.
+Stated plainly, so the claims don't outrun the evidence:
 
-This is an experiment-integrity runtime for cooperative agents, not a complete security sandbox against malicious code. The verifier rejects unverifiable outputs and target leakage in the artifact path, but it does not prove the workspace is adversary-proof.
+- **Prototype-scale evaluation.** The main ablation covers two tasks at N=5 and
+  OpenOOD at N=3 (where the full pipeline currently passes ~1/3). There are no
+  confidence intervals, and the hardest task is not yet stable. Treat the numbers
+  as prototype evidence, not a benchmark verdict.
+- **Generality is in the agent layer, not end-to-end.** One task-agnostic agent
+  handles 5 different ML frameworks, but each new task needs a hand-written
+  adapter (task spec + execution command + sample contract + hidden gold +
+  workspace provisioning). This is not zero-config reproduction of arbitrary repos.
+- **The failure classifier is rule-based.** It is an execution-grounded *regex/rule*
+  classifier over stdout/stderr/diagnostics that builds repair context for the LLM
+  — not an "intelligent" auto-diagnoser. The reasoning lives in the repair agent.
+- **Retrieval is not optimized for scale.** Each search re-scans the repo
+  (`load_corpus` walks the tree); there is no caching or incremental indexing, so
+  very large repos would need work before this is production-grade.
+- **Isolation, not a security sandbox.** This is an experiment-integrity runtime
+  for cooperative agents. The verifier rejects unverifiable outputs and target
+  leakage, and execution runs in an isolated workdir (optionally Docker with
+  network cutoff), but the workspace is not proven adversary-proof.
 
 Run artifacts under `evals/runs/`, `logs/`, `workspaces/`, and `repos/` are generated outputs. They are intentionally kept out of the main project narrative; only summarized, auditable results should be committed or documented in `evals/RESULTS.md`.

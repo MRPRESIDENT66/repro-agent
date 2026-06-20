@@ -20,7 +20,9 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
+
+from langgraph.graph import END, StateGraph
 
 from agent.contracts import (
     call_workspace_hook,
@@ -53,8 +55,11 @@ from retrieval.search import relevant_snippet, search_repo
 from verify.check import verify_run
 
 
-class _PipelineDone(Exception):
-    """Clean early-stop for the solo ablation condition."""
+class _RunState(TypedDict):
+    """LangGraph state passed between nodes. ``round`` counts repair rounds; all
+    other run state (roles, session, counters) lives on the pipeline instance."""
+
+    round: int
 
 
 @dataclass(frozen=True)
@@ -485,30 +490,76 @@ class ReproductionPipeline:
         if self.policy.use_reviewer:
             self._review(round_index)
 
+    # --- LangGraph nodes --------------------------------------------------
+    #
+    # Each node wraps an existing stage method and returns the (possibly
+    # updated) graph state. The stages mutate the pipeline instance; the graph
+    # only carries the repair-round counter.
+
+    def _node_navigate(self, state: _RunState) -> _RunState:
+        self._navigate()
+        return state
+
+    def _node_reproduce(self, state: _RunState) -> _RunState:
+        self._reproduce()
+        return state
+
+    def _node_critique(self, state: _RunState) -> _RunState:
+        self._critique()
+        return state
+
+    def _node_execute(self, state: _RunState) -> _RunState:
+        self._execute_reproducer()
+        self.n_exec = 1
+        if self.policy.use_reviewer:
+            self._review(0)
+        return state
+
+    def _node_repair(self, state: _RunState) -> _RunState:
+        round_index = state["round"] + 1
+        self._repair_round(round_index)
+        return {"round": round_index}
+
+    def _decide(self, state: _RunState) -> str:
+        """Conditional edge: stop on a verifier pass, on the solo condition, or
+        when the repair budget is spent; otherwise run another repair round."""
+        if self.policy.post_mode == "none":
+            return "end"
+        if self.passed(self.session):
+            return "end"
+        if state["round"] >= MAX_REPAIR_ROUNDS:
+            return "end"
+        return "repair"
+
     # --- driver -----------------------------------------------------------
+
+    def _build_graph(self):
+        graph = StateGraph(_RunState)
+        graph.add_node("reproduce", self._node_reproduce)
+        graph.add_node("execute", self._node_execute)
+        graph.add_node("repair", self._node_repair)
+
+        if self.policy.run_critic:
+            graph.add_node("navigate", self._node_navigate)
+            graph.add_node("critique", self._node_critique)
+            graph.set_entry_point("navigate")
+            graph.add_edge("navigate", "reproduce")
+            graph.add_edge("reproduce", "critique")
+            graph.add_edge("critique", "execute")
+        else:
+            graph.set_entry_point("reproduce")
+            graph.add_edge("reproduce", "execute")
+
+        # navigate -> reproduce -> critique -> execute -> (repair)* -> END
+        # _node_repair already runs its own execution, so after a repair we go
+        # straight back to the decision rather than re-running execute.
+        graph.add_conditional_edges("execute", self._decide, {"repair": "repair", "end": END})
+        graph.add_conditional_edges("repair", self._decide, {"repair": "repair", "end": END})
+        return graph.compile()
 
     def run(self) -> "ReproductionPipeline":
         try:
-            if self.policy.run_critic:
-                self._navigate()
-            self._reproduce()
-            if self.policy.run_critic:
-                self._critique()
-
-            self._execute_reproducer()
-            self.n_exec = 1
-            if self.policy.post_mode == "none":
-                raise _PipelineDone()
-
-            if self.policy.use_reviewer:
-                self._review(0)
-
-            for round_index in range(1, MAX_REPAIR_ROUNDS + 1):
-                if self.passed(self.session):
-                    break
-                self._repair_round(round_index)
-        except _PipelineDone:
-            pass
+            self._build_graph().invoke({"round": 0})
         except Exception as exc:
             self.workflow_error = f"{type(exc).__name__}: {exc}"
         finally:

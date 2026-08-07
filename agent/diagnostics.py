@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
+from agent.contracts import public_artifact_names
 from agent.types import OracleConfig
 
 
@@ -55,28 +55,9 @@ def latest_execution_observation(session: Any, limit: int = 1600) -> str:
     return _clip(text, limit)
 
 
-def below_chance_diagnostic(
-    actual: float, chance_level: float, metric: str = "metric"
-) -> str | None:
-    """Framework-level sanity check for higher-is-better metrics."""
-    if actual >= chance_level:
-        return None
-    return (
-        f"The recomputed {metric} ({actual}) is below the {chance_level} "
-        f"random-chance baseline for this higher-is-better metric. A real method "
-        f"scoring below chance indicates an inverted score or label/decision "
-        f"direction — correct the scoring/decision polarity so the metric exceeds "
-        f"chance; do not simply negate the reported number."
-    )
-
-
-def make_generic_contract_diagnostics(
-    config: OracleConfig, pass_gate: Callable[[Any], bool]
-) -> Callable[[Any], list[str]]:
-    """Expose pass/fail contract feedback without oracle-specific repair hints."""
-    artifact_markers = sorted(
-        set(re.findall(r"`([^`\n]+\.(?:json|jsonl|csv))`", config.public_result_protocol))
-    )
+def make_generic_contract_diagnostics(config: OracleConfig):
+    """Describe public artifact failures without running the private verifier."""
+    artifact_markers = public_artifact_names(config.public_result_protocol)
 
     def json_shape(value: Any, depth: int = 0) -> str:
         if isinstance(value, list):
@@ -93,7 +74,7 @@ def make_generic_contract_diagnostics(
         return type(value).__name__
 
     def diagnostics(session: Any) -> list[str]:
-        if pass_gate(session):
+        if config.public_check_fn(config.workdir):
             return []
         missing = [
             marker for marker in artifact_markers if not (config.workdir / marker).is_file()
@@ -114,40 +95,16 @@ def make_generic_contract_diagnostics(
                     observations.append(f"{marker}: {json_shape(json.loads(path.read_text()))}")
                 except (OSError, ValueError):
                     observations.append(f"{marker}: invalid JSON")
-        measured = None
-        try:
-            measured = config.recompute_fn(config.workdir)
-        except Exception:
-            measured = None
-        if (
-            isinstance(measured, tuple)
-            and len(measured) >= 2
-            and isinstance(measured[0], (int, float))
-        ):
-            observations.append(
-                f"public verifier recomputed {config.metric}={measured[0]} "
-                f"over n={measured[1]} from this artifact"
-            )
         observed = (
             " Observed public artifact evidence: " + "; ".join(observations) + "."
             if observations
             else ""
         )
-        base = [
+        return [
             "The public result artifact exists but the deterministic verifier "
-            "rejected it as malformed, incomplete, or semantically invalid. "
+            "rejected it as malformed or incomplete. "
             "Inspect the public result protocol, repository source, and execution log."
             + observed
         ]
-        if (
-            config.chance_level is not None
-            and isinstance(measured, tuple)
-            and len(measured) >= 1
-            and isinstance(measured[0], (int, float))
-        ):
-            below = below_chance_diagnostic(measured[0], config.chance_level, config.metric)
-            if below:
-                base.append(below)
-        return base
 
     return diagnostics

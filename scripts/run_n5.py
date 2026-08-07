@@ -46,7 +46,8 @@ E2_TASKS = [
     ("mmpretrain", "run_mmpretrain_multi_rag.py", "MMPRETRAIN_ATTEMPT"),
     ("openood", "run_openood_multi_rag.py", "OPENOOD_MULTI_RAG_ATTEMPT"),
 ]
-PIPELINES = ["solo", "solo-repair", "full"]
+PIPELINES = ["solo", "solo-repair", "full", "adaptive"]
+DEFAULT_PIPELINES = ["solo", "solo-repair", "full"]
 
 
 def write_run_manifest(specs: list[RunSpec]) -> Path:
@@ -92,8 +93,13 @@ def write_run_manifest(specs: list[RunSpec]) -> Path:
     return path
 
 
-def build_specs(repeats: int, include_robustbench: bool) -> list[RunSpec]:
+def build_specs(
+    repeats: int,
+    include_robustbench: bool,
+    pipelines: list[str] | None = None,
+) -> list[RunSpec]:
     specs: list[RunSpec] = []
+    selected_pipelines = DEFAULT_PIPELINES if pipelines is None else pipelines
     e1_tasks = E1_TASKS if include_robustbench else [t for t in E1_TASKS if t[0] != "robustbench"]
     for repeat in range(1, repeats + 1):
         for task, script, env_name in e1_tasks:
@@ -108,7 +114,7 @@ def build_specs(repeats: int, include_robustbench: bool) -> list[RunSpec]:
                 )
             )
         for task, script, env_name in E2_TASKS:
-            for pipeline in PIPELINES:
+            for pipeline in selected_pipelines:
                 specs.append(
                     RunSpec(
                         group="e2_n5",
@@ -195,15 +201,12 @@ def main() -> int:
     args = parser.parse_args()
 
     with run_lock():
-        specs = build_specs(args.repeats, args.include_robustbench)
+        specs = build_specs(args.repeats, args.include_robustbench, args.pipeline)
         if args.group != "all":
             specs = [spec for spec in specs if spec.group == args.group]
         if args.task:
             selected = set(args.task)
             specs = [spec for spec in specs if spec.task in selected]
-        if args.pipeline:
-            selected = set(args.pipeline)
-            specs = [spec for spec in specs if spec.pipeline in selected]
         manifest = write_run_manifest(specs)
         print(f"manifest: {manifest.relative_to(ROOT)}", flush=True)
         print(f"total specs: {len(specs)}", flush=True)

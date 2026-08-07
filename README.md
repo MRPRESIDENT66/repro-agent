@@ -31,7 +31,7 @@ API. Selected tool capabilities are also exposed over **MCP** for external clien
 
 | Capability | What it is here | Where |
 |---|---|---|
-| **Multi-agent orchestration (LangGraph)** | A `StateGraph` routes navigation, generation, critique, execution, and repair; in `full` mode each execution is independently reviewed before repair | [`agent/pipeline.py`](agent/pipeline.py) |
+| **Multi-agent orchestration (LangGraph)** | A `StateGraph` supports fixed ablations plus an `adaptive` mode that invokes navigation and auditing only for risky tasks or failures | [`agent/pipeline.py`](agent/pipeline.py), [`agent/router.py`](agent/router.py) |
 | **Tool use / function calling** | Native OpenAI function-calling agent loop with sequential tool dispatch | [`agent/loop.py`](agent/loop.py) |
 | **Tool interoperability (MCP)** | Repo search and restricted diagnostic/command interfaces exposed separately over the Model Context Protocol | [`mcp_server.py`](mcp_server.py) |
 | **Self-correction (Reflexion-style)** | A failure-classified, execution-grounded repair loop; patch-first edits over blind regeneration | [`agent/repair.py`](agent/repair.py), [`agent/failure.py`](agent/failure.py) |
@@ -60,6 +60,12 @@ in [Declarative Oracle Manifests](docs/task-manifests.md).
 
 ## Pipeline
 
+The original fixed modes remain available. The new `adaptive` mode uses a cheap,
+deterministic Router: explicit tasks go straight to Reproducer, while large or
+semantically risky tasks add Navigator; Auditor is invoked only for semantic
+risk, unknown/repeated failures, or a final high-risk source audit. Hidden gold
+is never consulted by routing or repair.
+
 ```text
 public task + repo + output contract
         │
@@ -71,7 +77,7 @@ Navigator ──handoff──▶ Reproducer ──program──▶ Critic
                                       ▼
                               execute program
                                       │
-                    stdout/stderr + public verifier diagnostics
+                    stdout/stderr + public contract diagnostics
                                       │
                                       ▼
                               Reviewer / Repair loop
@@ -88,14 +94,14 @@ Navigator ──handoff──▶ Reproducer ──program──▶ Critic
 | Navigator | public task, repo snippets, retrieved evidence | Find entry points, assets, metric semantics, and unresolved risks. |
 | Reproducer | public task, navigator handoff, retrieved source | Write the complete evaluation script and output per-sample predictions. |
 | Critic | generated code, source evidence | Audit code before execution without seeing verifier gold or target values. |
-| Reviewer | code, execution log, public verifier diagnostics | Independently audit the implementation and execution evidence for Repair. |
+| Reviewer / Auditor | code, execution log, public contract diagnostics | Independently audit the implementation and execution evidence for Repair. |
 | Repair | previous code, failure summary, selected evidence | Patch the existing script, avoiding blind regeneration and duplicate retries. |
 
 **Context engineering:** each role starts from a fresh LLM context instead of inheriting the full chat history, which keeps prompts focused and bounds token growth. **Retrieval (RAG)** is repo-navigation oriented: BM25 lexical search, path/symbol signals, source snippets, optional LLM rerank, and dynamic query rewriting generated from the current uncertainty, code, and failure logs.
 
 ## Self-Correction: Failure-Grounded Repair Loop
 
-The repair loop is a Reflexion-style self-correction mechanism. A deterministic rule-based classifier over stdout/stderr and verifier diagnostics produces a compact failure summary and may suggest restricted runtime probes; the Repair LLM performs the source-grounded diagnosis and edit.
+The repair loop is a Reflexion-style self-correction mechanism. A deterministic rule-based classifier over stdout/stderr and public contract diagnostics produces a compact failure summary and may suggest restricted runtime probes; the Repair LLM performs the source-grounded diagnosis and edit.
 
 Runtime probes are soft hints, not mandatory gates: repairs may skip probing when source evidence is sufficient. The default repair policy is patch-first, with full-file replacement only as a fallback.
 
@@ -103,7 +109,7 @@ Runtime probes are soft hints, not mandatory gates: repairs may skip probing whe
 
 The agent context and provisioned workspace omit the hidden target metric. It must write a public artifact with per-sample predictions; the verifier loads pinned gold labels and recomputes the metric independently. Aggregate-only guessing or echoing the published number cannot pass this contract.
 
-Fail-closed cases include missing artifact, malformed JSONL/CSV, wrong sample count, aggregate-only output, non-recomputable predictions, and values outside tolerance. Public diagnostics can be fed back to Reviewer/Repair, but hidden expected values are not exposed to the agent workspace.
+Fail-closed cases include missing artifact, malformed JSONL/CSV, wrong sample count, aggregate-only output, non-recomputable predictions, and values outside tolerance. Public schema diagnostics can be fed back to Reviewer/Repair. The private `recompute_fn` is called only once after the Agent workflow ends, and hidden expected values are not exposed to the agent workspace.
 
 `recompute_fn` is the only grading path: every verdict is a fresh metric computed from per-sample outputs against pinned gold. There is no aggregate-score or code-shape fallback.
 
@@ -147,6 +153,7 @@ All conditions use the same generic prompts, verifier, and execution budget; the
 | `solo` | Reproducer | no repair | Baseline one-shot code generation. |
 | `solo-repair` | Reproducer + Repair | real logs + diagnostics | Isolate execution-grounded repair. |
 | `full` | Navigator + Reproducer + Critic + Reviewer + Repair | real logs + diagnostics | Configurable collaboration mode, not assumed to be always best. |
+| `adaptive` | Router + Reproducer; Navigator/Auditor/Repair on demand | real logs + public diagnostics | Test whether selective collaboration approaches `full` with lower cost. |
 
 Across four tasks, verified success rises from `solo` 7/20 to `solo-repair`
 14/20 and `full` 17/20. Full collaboration is still not universally strongest:
@@ -173,6 +180,7 @@ export LLM_THINKING=disabled
 python run_distilbert_multi_rag.py
 PIPELINE=solo-repair python run_openood_multi_rag.py
 PIPELINE=full python run_robustbench_multi_rag.py
+PIPELINE=adaptive python run_distilbert_multi_rag.py
 ```
 
 Prepare and run the held-out Sentence-Transformers task:

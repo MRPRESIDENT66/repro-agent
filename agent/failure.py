@@ -125,6 +125,6 @@ def classify_failure(
     return Failure(
         "unknown_failure",
         "The failure does not match a known class.",
-        "Use the latest execution log and verifier diagnostics to identify the "
+        "Use the latest execution log and public contract diagnostics to identify the "
         "smallest repository-grounded repair.",
     )

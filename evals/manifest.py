@@ -77,7 +77,7 @@ class TaskManifest:
             fields.append(f"`{name}` ({'; '.join(details)})")
         exact = "exactly " if not self.allow_extra_fields else "at least "
         return (
-            f"The eval must WRITE {self.output_file} as a JSON list of exactly "
+            f"The eval must WRITE `{self.output_file}` as a JSON list of exactly "
             f"{self.expected_samples} objects in input order. Every object must have "
             f"{exact}these fields: {', '.join(fields)}. Values must come from real "
             "evaluation. The verifier ignores printed aggregate metrics and "
@@ -516,6 +516,10 @@ class ManifestRuntime:
             timeout=manifest.execution_timeout,
         )
 
+    def public_check(self, workdir: Path) -> bool:
+        """Validate only the declared output schema; never load hidden gold."""
+        return _prediction_values(self.manifest, workdir) is not None
+
     def recompute(self, workdir: Path) -> tuple[float, int] | None:
         if self.hooks.verifier is not None:
             return self.hooks.verifier(self.manifest, workdir)
@@ -565,6 +569,7 @@ def make_oracle_config(
         attempt=attempt,
         expected_num_examples=manifest.expected_samples,
         recompute_fn=runtime.recompute,
+        public_check_fn=runtime.public_check,
         public_result_protocol=manifest.public_result_protocol,
         public_execution_command=manifest.execution_command,
         workdir=runtime.workdir,

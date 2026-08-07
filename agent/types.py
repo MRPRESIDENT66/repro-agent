@@ -18,6 +18,7 @@ class OracleConfig:
     attempt: str
     expected_num_examples: int | None
     recompute_fn: Callable[[Path], tuple[float, int] | None]
+    public_check_fn: Callable[[Path], bool]
     public_result_protocol: str
     public_execution_command: str
 

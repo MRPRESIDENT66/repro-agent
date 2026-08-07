@@ -36,6 +36,7 @@ def build_run_record(
     total_commands: int,
     probe_transcript: list,
     failure_classes: list,
+    routing: dict | None = None,
 ) -> dict:
     """Build the data written to ``result.json``."""
     total_cost = round(
@@ -71,6 +72,7 @@ def build_run_record(
         "runtime_probe_budget": MAX_RUNTIME_PROBES,
         "total_runtime_probes": len(probe_transcript),
         "failure_classes": failure_classes,
+        "routing": routing,
     }
 
 

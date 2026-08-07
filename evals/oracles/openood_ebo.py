@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 from pathlib import Path
@@ -123,6 +124,32 @@ def _recompute(workdir: Path):
         run_aucs.append(sum(ds_aucs) / len(ds_aucs))
     return (sum(run_aucs) / len(run_aucs), total)
 
+
+def _public_check(workdir: Path) -> bool:
+    """Check score shape and types without computing the private target metric."""
+    try:
+        data = json.loads((workdir / "predictions.json").read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or set(data) != set(_RUNS):
+        return False
+    expected_counts = {"id": _ID_COUNT, **_OOD}
+    for run in _RUNS:
+        block = data.get(run)
+        if not isinstance(block, dict) or set(block) != set(expected_counts):
+            return False
+        for name, count in expected_counts.items():
+            values = block.get(name)
+            if not isinstance(values, list) or len(values) != count:
+                return False
+            try:
+                numbers = [float(value) for value in values]
+            except (TypeError, ValueError):
+                return False
+            if not all(math.isfinite(value) for value in numbers):
+                return False
+    return True
+
 # ---------------------------------------------------------------------------
 # Workspace helpers
 # ---------------------------------------------------------------------------
@@ -222,6 +249,7 @@ def make_config(attempt: str) -> OracleConfig:
         attempt=attempt,
         expected_num_examples=None,
         recompute_fn=_recompute,
+        public_check_fn=_public_check,
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_ebo.py",

@@ -30,6 +30,16 @@ This is the central result: repair feedback clearly helps; role specialization
 raises the verified ceiling on the hardest tasks, but extra coordination also
 introduces a measurable reliability and cost tax.
 
+### Adaptive Mode Implementation Smoke (N=1)
+
+The new `adaptive` condition is not included in the aggregate claims above until
+it has the same N=5 coverage. A DistilBERT smoke run verified **91.055% over all
+872 examples** with no workflow error. Router skipped Navigator and Critic; two
+repeated `missing_artifact` failures triggered Auditor only after the repetition,
+and the third evaluation passed. The run used 3 evaluations and cost ¥0.0666.
+This validates conditional routing and final private verification, but is not
+enough evidence to claim lower average cost or higher accuracy than `full`.
+
 <!-- GENERATED_N5_START -->
 ## E1: Six-Task Coverage N=5
 

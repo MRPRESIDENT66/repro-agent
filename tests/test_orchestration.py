@@ -1,4 +1,4 @@
-"""Orchestration tests for the three pipeline conditions.
+"""Orchestration tests for the four pipeline conditions.
 
 Verifies deterministically, without real LLM calls, that the conditions share
 one execution budget, stop on a contract pass, and route the
@@ -17,6 +17,7 @@ from agent import pipeline
 from agent.contracts import (
     generic_task_context as _generic_task_context,
     make_generic_code_validator as _make_generic_code_validator,
+    public_artifact_names,
 )
 from agent.diagnostics import make_generic_contract_diagnostics as _make_generic_contract_diagnostics
 from agent.generic_prompts import GENERIC_PROMPTS
@@ -144,6 +145,7 @@ def _make_config(tmp_path: Path, outcomes: list[bool]) -> OracleConfig:
         attempt="t",
         expected_num_examples=10,
         recompute_fn=recompute,
+        public_check_fn=lambda path: recompute(path) is not None,
         public_result_protocol=(
             "Write `predictions.json`: a JSON list of exactly 10 measured predictions."
         ),
@@ -173,6 +175,12 @@ def test_atomic_write_text_replaces_complete_file_without_temp_artifacts(tmp_pat
     assert list(tmp_path.glob(".eval.py.*.tmp")) == []
 
 
+def test_public_artifact_names_accepts_quoted_and_plain_filenames():
+    protocol = "Write `predictions.json` and metrics.csv; ignore notes.md."
+
+    assert public_artifact_names(protocol) == ["metrics.csv", "predictions.json"]
+
+
 def test_solo_is_one_shot(tmp_path, monkeypatch):
     _patch(monkeypatch)
     cfg = _make_config(tmp_path, outcomes=[False, False, False])
@@ -189,7 +197,7 @@ def test_solo_is_one_shot(tmp_path, monkeypatch):
 def test_budget_is_shared_and_capped_at_five(tmp_path, monkeypatch):
     _patch(monkeypatch)
     # A task that never passes: every looped condition must stop at the budget.
-    for pipeline in ("solo-repair", "full"):
+    for pipeline in ("solo-repair", "full", "adaptive"):
         cfg = _make_config(tmp_path, outcomes=[False] * 10)
         run_oracle(cfg, pipeline=pipeline)
         res = _result(cfg)
@@ -200,7 +208,7 @@ def test_budget_is_shared_and_capped_at_five(tmp_path, monkeypatch):
 def test_loop_stops_on_contract_pass(tmp_path, monkeypatch):
     _patch(monkeypatch)
     # Fail, fail, then pass → exactly 3 executions, not the full budget.
-    for pipeline in ("solo-repair", "full"):
+    for pipeline in ("solo-repair", "full", "adaptive"):
         cfg = _make_config(tmp_path, outcomes=[False, False, True, True])
         run_oracle(cfg, pipeline=pipeline)
         res = _result(cfg)
@@ -271,9 +279,7 @@ def test_missing_artifact_diagnostic_includes_workspace_snapshot(tmp_path):
     cfg = _make_config(tmp_path, outcomes=[False])
     cfg.public_result_protocol = "Write `predictions.json`: a JSON list."
     (cfg.workdir / "scores.csv").write_text("score\n1.0\n")
-    diagnostics = _make_generic_contract_diagnostics(
-        cfg, pass_gate=lambda _session: False
-    )(Session(cfg.workdir))
+    diagnostics = _make_generic_contract_diagnostics(cfg)(Session(cfg.workdir))
 
     assert "predictions.json" in diagnostics[0]
     assert "scores.csv" in diagnostics[0]
@@ -299,9 +305,7 @@ def test_generic_contract_diagnostics_report_shape_not_solution_hints(tmp_path):
     cfg.public_result_protocol = (
         "Write `predictions.json`: a JSON list of measured predictions."
     )
-    diagnostics = _make_generic_contract_diagnostics(
-        cfg, pass_gate=lambda _session: False
-    )
+    diagnostics = _make_generic_contract_diagnostics(cfg)
 
     issues = diagnostics(Session(cfg.workdir))
 
@@ -310,26 +314,77 @@ def test_generic_contract_diagnostics_report_shape_not_solution_hints(tmp_path):
     assert "fine_label" not in issues[0]
 
 
-def test_generic_contract_diagnostics_expose_own_artifact_shape_and_metric(tmp_path):
+def test_generic_contract_diagnostics_expose_shape_without_private_metric(tmp_path):
     cfg = _make_config(tmp_path, outcomes=[False])
     cfg.public_result_protocol = (
         "Write `predictions.json`: a JSON object of measured predictions."
     )
-    cfg.recompute_fn = lambda _workdir: (12.5, 3)
+    cfg.public_check_fn = lambda _workdir: False
     (cfg.workdir / "predictions.json").write_text(
         json.dumps({"run": {"id": [1, 2], "ood": [3]}})
     )
-    diagnostics = _make_generic_contract_diagnostics(
-        cfg, pass_gate=lambda _session: False
-    )
+    diagnostics = _make_generic_contract_diagnostics(cfg)
 
     issue = diagnostics(Session(cfg.workdir))[0]
 
     assert "id: list[2]" in issue
     assert "ood: list[1]" in issue
-    assert "acc=12.5 over n=3" in issue
+    assert "acc=" not in issue
     assert str(cfg.expected) not in issue
     assert str(cfg.tolerance) not in issue
+
+
+def test_adaptive_simple_task_skips_optional_agents(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[True])
+
+    run_oracle(cfg, pipeline="adaptive")
+
+    result = _result(cfg)
+    assert set(result["roles"]) == {"reproducer"}
+    assert result["routing"]["use_navigator"] is False
+    assert result["routing"]["require_semantic_audit"] is False
+
+
+def test_adaptive_semantic_task_uses_navigator_and_auditor(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[True])
+    cfg.task = "Reproduce out-of-distribution AUROC with the documented score direction."
+
+    run_oracle(cfg, pipeline="adaptive")
+
+    roles = _result(cfg)["roles"]
+    assert "navigator" in roles
+    assert "auditor_0" in roles
+    assert "critic" not in roles
+    assert not any(name.startswith("repair_") for name in roles)
+
+
+def test_adaptive_clear_failure_repairs_before_auditing(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[False, True])
+
+    run_oracle(cfg, pipeline="adaptive")
+
+    roles = _result(cfg)["roles"]
+    assert "repair_1" in roles
+    assert not any(name.startswith("auditor_") for name in roles)
+
+
+def test_repair_loop_never_calls_private_recompute(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[False, True])
+    private_calls = {"count": 0}
+    original = cfg.recompute_fn
+
+    def counted_recompute(path):
+        private_calls["count"] += 1
+        return original(path)
+
+    cfg.recompute_fn = counted_recompute
+    run_oracle(cfg, pipeline="adaptive")
+
+    assert private_calls["count"] == 1
 
 
 def test_generic_repair_rejects_reentering_failed_package_initializer(tmp_path):
@@ -398,6 +453,28 @@ def test_execution_count_survives_reviewer_exception(tmp_path, monkeypatch):
     assert result["eval_executions"] == 1
     assert result["workflow_error"] == "RuntimeError: review synthesis failed"
     assert result["collaboration_pass"] is False
+
+
+def test_full_reviewer_can_request_repair_without_private_verifier(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[True, True])
+    calls = {"count": 0}
+
+    def request_one_repair(self, *_args, **_kwargs):
+        calls["count"] += 1
+        status = "REPAIR_REQUIRED" if calls["count"] == 1 else "PASS"
+        (self.workdir / "review_report.md").write_text(
+            ("source-grounded audit " * 20) + f"\nREVIEW_STATUS: {status}\n"
+        )
+        return status == "REPAIR_REQUIRED"
+
+    monkeypatch.setattr(ReproductionPipeline, "_review", request_one_repair)
+
+    run_oracle(cfg, pipeline="full")
+
+    result = _result(cfg)
+    assert result["eval_executions"] == 2
+    assert "repair_1" in result["roles"]
 
 
 def test_generic_context_and_runtime_probe_are_always_enabled(tmp_path, monkeypatch):

@@ -21,7 +21,7 @@ Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任�
 
 | 能力 | 在本项目里是什么 | 位置 |
 |---|---|---|
-| **Multi-agent orchestration(LangGraph 编排)** | `StateGraph` 负责导航、生成、审查、执行和修复的路由；`full` 模式下每次执行后由 Reviewer 独立复核 | [`agent/pipeline.py`](agent/pipeline.py) |
+| **Multi-agent orchestration(LangGraph 编排)** | `StateGraph` 同时支持固定消融模式和 `adaptive` 按需协作模式，仅对高风险任务调用 Navigator/Auditor | [`agent/pipeline.py`](agent/pipeline.py)、[`agent/router.py`](agent/router.py) |
 | **Tool use / function calling(工具调用)** | 原生 OpenAI function-calling 的 agent loop、顺序工具派发 | [`agent/loop.py`](agent/loop.py) |
 | **Tool interoperability(MCP)** | 仓库检索和受限诊断/命令接口通过 Model Context Protocol 独立暴露 | [`mcp_server.py`](mcp_server.py) |
 | **Self-correction(Reflexion 式自我修复)** | 失败分类驱动、execution-grounded 的修复闭环,patch-first 优先于盲目重写 | [`agent/repair.py`](agent/repair.py)、[`agent/failure.py`](agent/failure.py) |
@@ -70,7 +70,7 @@ Agent 从不看到目标值。它必须生成公开协议要求的结果文件�
 - 只硬编码 aggregate 数字或提交不可重算结果；
 - 指标可重算但超过容差。
 
-`recompute_fn` 是唯一判卷路径：所有结果都由逐样本输出和隐藏 gold 现场重算，不存在 aggregate 分数或“代码看起来像评测”的 fallback。
+`recompute_fn` 是唯一判卷路径：所有结果都由逐样本输出和隐藏 gold 现场重算，不存在 aggregate 分数或“代码看起来像评测”的 fallback。修复循环只运行公开格式检查，流程结束后才调用一次私有 `recompute_fn`，因此隐藏指标不会反向指导 Repair。
 
 ### 2. 通用角色提示词 + 公共任务规格
 
@@ -94,7 +94,7 @@ Agent 的角色 prompt、RAG、执行、修复逻辑是通用的。每个任务�
 | **Reproducer** | 根据公开任务、Navigator handoff 和检索到的源码，生成完整评测程序。 |
 | **Critic** | 执行前审查代码是否符合仓库证据和 artifact contract。 |
 | **execute** | 在真实 subprocess / Docker 环境中运行生成的评测脚本。 |
-| **Reviewer** | 根据执行日志和 verifier 的公开诊断做 post-execution 审查。 |
+| **Reviewer / Auditor** | 根据代码、执行日志和公开 contract diagnostics 做 post-execution 审查。 |
 | **Repair ×N** | 根据真实错误日志、失败分类和 public diagnostics 做 patch-first 修复并重跑。 |
 
 ### RAG repo navigation
@@ -115,13 +115,14 @@ Dense embedding 不是默认路径必须项。
 - `search_repo`：在 workspace 源码中检索相关文件和片段；
 - `runtime_probe`：受限运行时探针，用于 import smoke、函数签名、路径列表、CLI help；
 - shell / Docker session：执行生成的评测脚本；
-- verifier：从 artifact 中重算指标。
+- public contract checker：在修复期间检查 artifact 的路径、格式、类型和数量。
+- verifier：流程结束后从 artifact 和隐藏 gold 中重算一次指标。
 
 `runtime_probe` 是软建议，不是强制门槛。Failure classifier 可以建议 probe，但当源码证据足够时，Repair 可以直接提交。
 
 ### Self-correction:Failure classifier + patch-first repair
 
-执行失败后，系统会先根据执行日志和 verifier diagnostics 分类：
+执行失败后，系统会先根据执行日志和 public contract diagnostics 分类：
 
 - `import_error`
 - `api_mismatch`
@@ -162,8 +163,9 @@ Sentence-Transformers held-out full-pipeline N=5。另有一批5次的holdout pi
 - `solo`：只有 Reproducer，一次执行。
 - `solo-repair`：Reproducer + Repair，根据真实执行错误修复，最多 5 次执行。
 - `full`：Navigator + Reproducer + Critic + Reviewer + Repair，最多 5 次执行。
+- `adaptive`：确定性 Router 先判断任务风险；简单任务直接交给 Reproducer，复杂任务才增加 Navigator，语义风险或重复失败时才增加 Auditor，Repair 仍按需执行。
 
-这个版本更适合作为项目展示：对比“一次生成”“执行反馈修复”“完整多角色协作”，避免过多消融条件让代码和讲解变复杂。
+前三种模式保留已有消融结果；`adaptive` 是新增实验条件，用来检验按需协作能否接近 `full` 的成功率，同时降低 token 成本和流程失败面。
 
 4 任务汇总结果为：`solo` 7/20、`solo-repair` 14/20、`full` 17/20
 通过独立 verifier。在各自通过 verifier 的样本中，无流程异常的比例分别为
@@ -179,7 +181,7 @@ Sentence-Transformers held-out full-pipeline N=5。另有一批5次的holdout pi
 - `agent/diagnostics.py`：通用 public-contract diagnostics。
 - `agent/runtime_probe.py`：受限 import/signature/path/CLI probe。
 - `agent/generic_prompts.py`：任务无关的角色提示词。
-- `agent/failure.py`：基于执行日志和 verifier diagnostics 的失败分类器。
+- `agent/failure.py`：基于执行日志和 public contract diagnostics 的失败分类器。
 - `retrieval/`：代码仓库检索和 snippet 提取。
 - `exec/`：subprocess / Docker 执行会话。
 - `verify/`：确定性验收和指标重算。
@@ -210,6 +212,7 @@ LLM_THINKING=disabled
 python run_distilbert_multi_rag.py
 PIPELINE=solo-repair python run_openood_multi_rag.py
 PIPELINE=full python run_robustbench_multi_rag.py
+PIPELINE=adaptive python run_distilbert_multi_rag.py
 ```
 
 准备并运行冻结后的 held-out Sentence-Transformers 任务：

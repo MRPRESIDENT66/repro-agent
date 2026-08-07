@@ -2,7 +2,7 @@
 
 Read this file top to bottom to see the whole system:
 
-- ``PipelinePolicy``       — the three ablation conditions as data.
+- ``PipelinePolicy``       — the four ablation conditions as data.
 - ``provision_workspace``  — set up the blind sandbox + execution session.
 - ``ReproductionPipeline`` — the role state machine (navigate -> reproduce ->
                              critique -> execute -> (review -> repair)*).
@@ -40,6 +40,7 @@ from agent.repair import (
     patch_submission_adapter,
     patch_tool,
 )
+from agent.router import RouteDecision, route_task
 from agent.roles import (
     MAX_REPAIR_ROUNDS,
     RoleDeps,
@@ -71,17 +72,25 @@ class _RunState(TypedDict):
     failure_kind: str | None
     failure_next_action: str | None
     failure_probe_hint: str | None
+    public_contract_ok: bool | None
+    audit_complete: bool
+    audit_requires_repair: bool
+    repeated_failure: bool
 
 
 @dataclass(frozen=True)
 class PipelinePolicy:
-    """One of the three supported ablation modes."""
+    """One of the four supported ablation modes."""
 
     name: str
 
     @property
     def full_team(self) -> bool:
         return self.name == "full"
+
+    @property
+    def adaptive(self) -> bool:
+        return self.name == "adaptive"
 
     @property
     def allow_repair(self) -> bool:
@@ -93,7 +102,7 @@ class PipelinePolicy:
 
     @classmethod
     def from_name(cls, pipeline: str) -> "PipelinePolicy":
-        valid = ("solo", "solo-repair", "full")
+        valid = ("solo", "solo-repair", "full", "adaptive")
         if pipeline not in valid:
             raise ValueError(f"unknown pipeline {pipeline!r}; valid: {valid}")
         return cls(name=pipeline)
@@ -130,9 +139,9 @@ class ReproductionPipeline:
 
         navigate -> reproduce -> critique -> execute -> (review -> repair)*
 
-    looping until the verifier-recomputable contract passes or the repair budget
-    is spent. LangGraph State holds routing-relevant metadata while ``workdir``
-    retains the executable and auditable artifacts.
+    looping until the public artifact contract passes or the repair budget is
+    spent. The private verifier runs once after this workflow. LangGraph State
+    holds routing metadata while ``workdir`` retains auditable artifacts.
     """
 
     def __init__(self, config: OracleConfig, policy: PipelinePolicy) -> None:
@@ -141,9 +150,7 @@ class ReproductionPipeline:
         self.prompts = GENERIC_PROMPTS
         self.task_context = generic_task_context(config)
         self.code_validator = make_generic_code_validator(config)
-        self.contract_diagnostics = make_generic_contract_diagnostics(
-            config, pass_gate=self.passed
-        )
+        self.contract_diagnostics = make_generic_contract_diagnostics(config)
         self.synthesis_instruction = (
             f"Return only the complete executable source code for {config.eval_script}. "
             "The program must produce the public result artifact when executed. "
@@ -157,6 +164,9 @@ class ReproductionPipeline:
             self.artifact_dir = self.artifact_dir.parent / artifact_name
 
         self.session = provision_workspace(config, self.artifact_dir)
+        self.route_decision: RouteDecision | None = (
+            route_task(config, self.workdir) if policy.adaptive else None
+        )
         self.role_deps = RoleDeps(
             llm_factory=ChatLLM,
             search_fn=search_repo,
@@ -185,31 +195,20 @@ class ReproductionPipeline:
             "failure_kind": None,
             "failure_next_action": None,
             "failure_probe_hint": None,
+            "public_contract_ok": None,
+            "audit_complete": False,
+            "audit_requires_repair": False,
+            "repeated_failure": False,
         }
 
     # --- shared helpers ---------------------------------------------------
 
     def passed(self, _session: Any) -> bool:
-        """Public pass gate: verifier-recomputable evidence exists and clears the
-        random-chance floor. Never reads the hidden target."""
-        config = self.config
-        markers = public_artifact_names(config.public_result_protocol)
-        if markers and not all((config.workdir / m).is_file() for m in markers):
-            return False
+        """Return whether the artifact satisfies the public schema only."""
         try:
-            probe = config.recompute_fn(config.workdir)
+            return bool(self.config.public_check_fn(self.config.workdir))
         except Exception:
-            probe = None
-        if not (isinstance(probe, tuple) and probe and isinstance(probe[0], (int, float))):
             return False
-        if (
-            config.expected_num_examples is not None
-            and (len(probe) < 2 or probe[1] != config.expected_num_examples)
-        ):
-            return False
-        if config.chance_level is not None and probe[0] < config.chance_level:
-            return False
-        return True
 
     def _sync_eval_file(self) -> None:
         if not self.session.sync_file(self.config.eval_script):
@@ -217,6 +216,44 @@ class ReproductionPipeline:
                 "generated evaluation file is not visible to the execution "
                 f"session: {self.config.eval_script}"
             )
+
+    def _clear_public_artifacts(self) -> None:
+        for name in public_artifact_names(self.config.public_result_protocol):
+            path = self.workdir / name
+            if path.is_file():
+                path.unlink()
+
+    def _execution_update(
+        self, state: _RunState, *, start: int, ok: bool, n_exec: int
+    ) -> dict[str, Any]:
+        public_ok = self.passed(self.session)
+        failure = None
+        repeated = False
+        if not public_ok:
+            failure = classify_failure(
+                session=self.session,
+                diagnostics=self.contract_diagnostics(self.session),
+            )
+            repeated = bool(
+                self.failure_classes
+                and self.failure_classes[-1].get("kind") == failure.kind
+            )
+        return {
+            "latest_execution_start": start,
+            "n_exec": n_exec,
+            "last_execution_ok": ok,
+            "failure_kind": failure.kind if failure else state["failure_kind"],
+            "failure_next_action": (
+                failure.next_action if failure else state["failure_next_action"]
+            ),
+            "failure_probe_hint": (
+                failure.probe_hint if failure else state["failure_probe_hint"]
+            ),
+            "public_contract_ok": public_ok,
+            "audit_complete": False,
+            "audit_requires_repair": False,
+            "repeated_failure": repeated,
+        }
 
     # --- stages -----------------------------------------------------------
 
@@ -241,12 +278,13 @@ class ReproductionPipeline:
         return {"navigator_report_path": "navigator_report.md"}
 
     def _node_reproduce(self, _state: _RunState) -> dict[str, Any]:
-        if self.policy.full_team:
+        navigator_path = _state.get("navigator_report_path")
+        if navigator_path:
             builder_context = (
                 "# Public task and result protocol\n\n"
                 + self.task_context
                 + "\n\n# Navigator handoff\n\n"
-                + require_handoff(self.workdir / "navigator_report.md", "navigator")
+                + require_handoff(self.workdir / navigator_path, "navigator")
             )
         else:
             builder_context = self.task_context
@@ -262,7 +300,7 @@ class ReproductionPipeline:
             submit_name="submit_code",
             submit_description=f"Submit the complete generated {self.config.eval_script}.",
             validator=self.code_validator,
-            trigger="navigator_handoff" if self.policy.full_team else "initial_task",
+            trigger="navigator_handoff" if navigator_path else "initial_task",
             max_steps=7,
             synthesis_instruction=self.synthesis_instruction,
             synthesis_attempts=5,
@@ -304,6 +342,7 @@ class ReproductionPipeline:
 
     def _node_execute(self, _state: _RunState) -> dict[str, Any]:
         self._sync_eval_file()
+        self._clear_public_artifacts()
         execution_start = len(self.session.transcript)
         self.eval_executions_observed += 1
         eval_run = self.config.execute_eval(self.session)
@@ -314,35 +353,54 @@ class ReproductionPipeline:
         ]
         log = public_log(self.session, execution_start)
         self.session.write_file("reproducer_public_log.txt", log)
-        update = {
-            "execution_start": execution_start,
-            "latest_execution_start": execution_start,
-            "n_exec": 1,
-            "last_execution_ok": eval_run.ok,
-        }
+        update = self._execution_update(
+            _state, start=execution_start, ok=eval_run.ok, n_exec=1
+        )
+        update["execution_start"] = execution_start
         if self.policy.full_team:
-            self._review(0, execution_start)
-            update["reviewer_report_path"] = "review_report.md"
+            update.update(
+                {
+                    "reviewer_report_path": "review_report.md",
+                    "audit_complete": True,
+                    "audit_requires_repair": self._review(
+                        0, execution_start, role_prefix="reviewer"
+                    ),
+                }
+            )
         return update
 
-    def _review(self, round_index: int, latest_execution_start: int) -> None:
+    def _review(
+        self,
+        round_index: int,
+        latest_execution_start: int,
+        *,
+        role_prefix: str,
+    ) -> bool:
         diagnostics = self.contract_diagnostics(self.session)
-        review_context = (
-            "# Public task and result protocol\n\n"
-            + self.task_context
-            + "\n\n# Navigator handoff\n\n"
-            + require_handoff(self.workdir / "navigator_report.md", "navigator")
-            + "\n\n# Evaluation implementation\n\n"
-            + clip_text(
-                (self.workdir / self.config.eval_script).read_text(errors="replace"),
-                12000,
+        context_parts = ["# Public task and result protocol\n\n" + self.task_context]
+        navigator_report = self.workdir / "navigator_report.md"
+        if navigator_report.is_file():
+            context_parts.append(
+                "# Navigator handoff\n\n"
+                + require_handoff(navigator_report, "navigator")
             )
-            + "\n\n# Latest public execution log\n\n"
-            + clip_text(public_log(self.session, latest_execution_start), 12000)
-            + "\n\n# Deterministic public-contract audit\n\n"
-            + "\n".join(f"- {issue}" for issue in diagnostics)
+        context_parts.extend(
+            [
+                "# Evaluation implementation\n\n"
+                + clip_text(
+                    (self.workdir / self.config.eval_script).read_text(
+                        errors="replace"
+                    ),
+                    12000,
+                ),
+                "# Latest public execution log\n\n"
+                + clip_text(public_log(self.session, latest_execution_start), 12000),
+                "# Deterministic public-contract audit\n\n"
+                + "\n".join(f"- {issue}" for issue in diagnostics),
+            ]
         )
-        key = f"reviewer_{round_index}"
+        review_context = "\n\n".join(context_parts)
+        key = f"{role_prefix}_{round_index}"
         self.roles[key], self.rag[key] = run_rag_role(
             name=key,
             workdir=self.workdir,
@@ -361,6 +419,21 @@ class ReproductionPipeline:
             allow_runtime_probe=True,
             deps=self.role_deps,
         )
+        report = (self.workdir / "review_report.md").read_text(errors="replace")
+        return "REVIEW_STATUS: REPAIR_REQUIRED" in report
+
+    def _node_audit(self, state: _RunState) -> dict[str, Any]:
+        start = state["latest_execution_start"]
+        if start is None:
+            raise RuntimeError("audit requires a prior execution")
+        requires_repair = self._review(
+            state["round"], start, role_prefix="auditor"
+        )
+        return {
+            "reviewer_report_path": "review_report.md",
+            "audit_complete": True,
+            "audit_requires_repair": requires_repair,
+        }
 
     def _node_repair(self, state: _RunState) -> dict[str, Any]:
         round_index = state["round"] + 1
@@ -400,13 +473,19 @@ class ReproductionPipeline:
                 "# Prior execution history (clipped)\n\n"
                 + clip_text(public_log(self.session, execution_start), 6000)
             )
-        if self.policy.full_team:
+        review_path = state.get("reviewer_report_path")
+        if review_path:
+            label = "Auditor" if self.policy.adaptive else "Independent reviewer"
+            parts.append(
+                f"# {label} audit\n\n"
+                + require_handoff(self.workdir / review_path, label.lower())
+            )
+        navigator_path = state.get("navigator_report_path")
+        if navigator_path:
             parts.extend(
                 [
-                    "# Independent reviewer audit\n\n"
-                    + require_handoff(self.workdir / "review_report.md", "reviewer"),
                     "# Navigator handoff\n\n"
-                    + require_handoff(self.workdir / "navigator_report.md", "navigator"),
+                    + require_handoff(self.workdir / navigator_path, "navigator"),
                 ]
             )
         diagnostic_text = "\n".join(f"- {issue}" for issue in diagnostics)
@@ -455,6 +534,7 @@ class ReproductionPipeline:
         )
 
         self._sync_eval_file()
+        self._clear_public_artifacts()
         start = len(self.session.transcript)
         self.eval_executions_observed += 1
         stepped_run = config.execute_eval(self.session)
@@ -463,30 +543,58 @@ class ReproductionPipeline:
         log = public_log(self.session, execution_start)
         self.session.write_file("reproducer_public_log.txt", log)
 
+        reviewer_requires_repair = False
         if self.policy.full_team:
-            self._review(round_index, start)
+            reviewer_requires_repair = self._review(
+                round_index, start, role_prefix="reviewer"
+            )
 
-        return {
-            "round": round_index,
-            "latest_execution_start": start,
-            "n_exec": state["n_exec"] + 1,
-            "last_execution_ok": stepped_run.ok,
-            "failure_kind": failure.kind,
-            "failure_next_action": failure.next_action,
-            "failure_probe_hint": failure.probe_hint,
-            "reviewer_report_path": "review_report.md" if self.policy.full_team else None,
+        update = self._execution_update(
+            state,
+            start=start,
+            ok=stepped_run.ok,
+            n_exec=state["n_exec"] + 1,
+        )
+        update.update(
+            {
+                "round": round_index,
+                "reviewer_report_path": (
+                    "review_report.md" if self.policy.full_team else None
+                ),
+                "audit_complete": self.policy.full_team,
+                "audit_requires_repair": reviewer_requires_repair,
+            }
+        )
+        return update
+
+    def _needs_adaptive_audit(self, state: _RunState) -> bool:
+        if not self.policy.adaptive or state["audit_complete"]:
+            return False
+        if state["public_contract_ok"]:
+            return bool(
+                self.route_decision and self.route_decision.require_semantic_audit
+            )
+        return state["repeated_failure"] or state["failure_kind"] in {
+            "semantic_mismatch",
+            "unknown_failure",
         }
 
     def _decide(self, state: _RunState) -> str:
-        """Conditional edge: stop on a verifier pass, on the solo condition, or
-        when the repair budget is spent; otherwise run another repair round."""
+        """Stop, audit, or repair from public evidence and the shared budget."""
         if not self.policy.allow_repair:
             return "end"
-        if self.passed(self.session):
+        if self._needs_adaptive_audit(state):
+            return "audit"
+        if state["public_contract_ok"] and not state["audit_requires_repair"]:
             return "end"
         if state["round"] >= MAX_REPAIR_ROUNDS:
             return "end"
         return "repair"
+
+    def _route_entry(self, _state: _RunState) -> str:
+        if self.route_decision and self.route_decision.use_navigator:
+            return "navigate"
+        return "reproduce"
 
     # --- driver -----------------------------------------------------------
 
@@ -495,6 +603,7 @@ class ReproductionPipeline:
         graph.add_node("reproduce", self._node_reproduce)
         graph.add_node("execute", self._node_execute)
         graph.add_node("repair", self._node_repair)
+        graph.add_node("audit", self._node_audit)
 
         if self.policy.full_team:
             graph.add_node("navigate", self._node_navigate)
@@ -503,15 +612,27 @@ class ReproductionPipeline:
             graph.add_edge("navigate", "reproduce")
             graph.add_edge("reproduce", "critique")
             graph.add_edge("critique", "execute")
+        elif self.policy.adaptive:
+            graph.add_node("route", lambda _state: {})
+            graph.add_node("navigate", self._node_navigate)
+            graph.set_entry_point("route")
+            graph.add_conditional_edges(
+                "route",
+                self._route_entry,
+                {"navigate": "navigate", "reproduce": "reproduce"},
+            )
+            graph.add_edge("navigate", "reproduce")
+            graph.add_edge("reproduce", "execute")
         else:
             graph.set_entry_point("reproduce")
             graph.add_edge("reproduce", "execute")
 
-        # navigate -> reproduce -> critique -> execute -> (repair)* -> END
-        # _node_repair already runs its own execution, so after a repair we go
-        # straight back to the decision rather than re-running execute.
-        graph.add_conditional_edges("execute", self._decide, {"repair": "repair", "end": END})
-        graph.add_conditional_edges("repair", self._decide, {"repair": "repair", "end": END})
+        # Repair performs its execution internally, then returns to this routing
+        # decision. Adaptive may insert an audit before generation or repair.
+        destinations = {"audit": "audit", "repair": "repair", "end": END}
+        graph.add_conditional_edges("execute", self._decide, destinations)
+        graph.add_conditional_edges("audit", self._decide, destinations)
+        graph.add_conditional_edges("repair", self._decide, destinations)
         return graph.compile()
 
     def run(self) -> "ReproductionPipeline":
@@ -547,6 +668,13 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
             (pipe.workdir / filename).exists()
             for filename in ("navigator_report.md", "review_report.md")
         )
+    elif policy.adaptive:
+        required = []
+        if "navigator" in pipe.roles:
+            required.append("navigator_report.md")
+        if any(name.startswith("auditor_") for name in pipe.roles):
+            required.append("review_report.md")
+        handoff_requirement = all((pipe.workdir / name).exists() for name in required)
     collaboration_pass = (
         verdict.match
         and pipe.workflow_error is None
@@ -571,6 +699,7 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
         total_commands=len(session.transcript),
         probe_transcript=probe_transcript,
         failure_classes=pipe.failure_classes,
+        routing=pipe.route_decision.as_dict() if pipe.route_decision else None,
     )
     result_json = json.dumps(record, indent=2) + "\n"
 

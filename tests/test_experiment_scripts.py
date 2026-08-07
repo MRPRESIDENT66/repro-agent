@@ -15,6 +15,14 @@ def test_e2_runner_covers_harder_tasks_and_three_conditions() -> None:
     assert {spec.pipeline for spec in specs} == {"solo", "solo-repair", "full"}
 
 
+def test_e2_runner_can_select_adaptive_condition() -> None:
+    specs = build_specs(2, include_robustbench=False, pipelines=["adaptive"])
+
+    e2_specs = [spec for spec in specs if spec.group == "e2_n5"]
+    assert len(e2_specs) == 2 * 4
+    assert {spec.pipeline for spec in e2_specs} == {"adaptive"}
+
+
 def test_summary_uses_passes_over_runs_not_pass_at_k() -> None:
     table = table_for_buckets({}, e2=True)
 

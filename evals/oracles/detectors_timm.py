@@ -23,6 +23,7 @@ import shutil
 from pathlib import Path
 
 from agent.types import OracleConfig
+from agent.public_contract import json_list_contract
 from exec.session import Session
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -166,6 +167,9 @@ def make_config(
         attempt=attempt,
         expected_num_examples=num_examples,
         recompute_fn=recompute,
+        public_check_fn=json_list_contract(
+            "predictions.json", num_examples, minimum=0, maximum=num_classes - 1
+        ),
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_detectors.py",

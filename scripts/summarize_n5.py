@@ -21,7 +21,7 @@ TASK_LABELS = {
     "openood_ebo": "OpenOOD EBO AUROC",
     "robustbench_carmon": "RobustBench Carmon2019",
 }
-PIPELINE_ORDER = ["solo", "solo-repair", "full"]
+PIPELINE_ORDER = ["solo", "solo-repair", "full", "adaptive"]
 TASK_ORDER = list(TASK_LABELS)
 
 

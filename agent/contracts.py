@@ -23,7 +23,11 @@ def extract_python(text: str) -> str:
 
 def public_artifact_names(protocol: str) -> list[str]:
     """Extract result filenames named in the public task contract."""
-    return sorted(set(re.findall(r"`([^`\n]+\.(?:json|jsonl|csv))`", protocol)))
+    quoted = re.findall(r"`([^`\n]+\.(?:json|jsonl|csv))`", protocol)
+    unquoted = re.findall(
+        r"(?<![\w/.-])([A-Za-z0-9_./-]+\.(?:json|jsonl|csv))\b", protocol
+    )
+    return sorted(set(quoted + unquoted))
 
 
 def validate_report(content: str) -> str:
@@ -63,6 +67,11 @@ def validate_review(content: str) -> str:
 
 def make_generic_code_validator(config: OracleConfig) -> Callable[[str], str]:
     artifact_markers = public_artifact_names(config.public_result_protocol)
+    literal_markers = [
+        marker
+        for marker in artifact_markers
+        if marker not in config.public_execution_command
+    ]
 
     def validate(content: str) -> str:
         code = extract_python(content)
@@ -70,7 +79,7 @@ def make_generic_code_validator(config: OracleConfig) -> Callable[[str], str]:
             ast.parse(code)
         except SyntaxError as exc:
             raise ValueError(f"code is not syntactically valid: {exc}") from exc
-        missing = [marker for marker in artifact_markers if marker not in code]
+        missing = [marker for marker in literal_markers if marker not in code]
         if missing:
             raise ValueError(
                 "code does not produce the public result artifact described by the "

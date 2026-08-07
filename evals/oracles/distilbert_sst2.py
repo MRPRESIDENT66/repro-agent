@@ -14,6 +14,7 @@ import shutil
 from pathlib import Path
 
 from agent.types import OracleConfig
+from agent.public_contract import json_list_contract
 from exec.session import Session
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -165,6 +166,9 @@ def make_config(attempt: str) -> OracleConfig:
         attempt=attempt,
         expected_num_examples=N_EXAMPLES,
         recompute_fn=_recompute,
+        public_check_fn=json_list_contract(
+            "predictions.json", N_EXAMPLES, minimum=0, maximum=1
+        ),
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_sst2.py",

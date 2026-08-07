@@ -30,16 +30,19 @@ Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任�
 | **Isolated execution(隔离执行)** | subprocess 会话 + 可选的资源受限 Docker 会话和断网 | [`exec/`](exec/) |
 | **Observability(可观测)** | per-call token + 成本核算、全链路 transcript、可复算 `commands.sh` | [`agent/llm.py`](agent/llm.py) |
 | **Evaluation methodology(评测方法)** | budget-fair 重复运行消融、平均成本、失败模式拆解 | [`evals/`](evals/) |
+| **Declarative task onboarding(声明式任务接入)** | 标准任务由 Oracle 侧 YAML manifest 自动生成 `OracleConfig`；特殊准备或判卷通过显式 hook 扩展 | [`evals/manifest.py`](evals/manifest.py)、[`evals/tasks/`](evals/tasks/) |
 | **Deterministic agent testing(确定性测试)** | `ScriptedLLM` 零 API/token 驱动整条控制流,快速可复现 | [`tests/`](tests/) |
 
 技术栈:Python、**LangGraph**、**MCP**(Model Context Protocol)、OpenAI 兼容 function calling(provider-agnostic,可跑 DeepSeek/任意 OpenAI 风格端点)、BM25 检索、Docker、`pytest`。
+
+Manifest 字段、公开/私有边界、hook 和当前限制见 [`docs/task-manifests.md`](docs/task-manifests.md)。
 
 ### 推荐源码阅读顺序
 
 对 Python 和 Agent 编排还不熟悉时，先看这份简化入口：[`docs/learning-guide.zh-CN.md`](docs/learning-guide.zh-CN.md)。
 
-1. [`agent/types.py`](agent/types.py)：先看完整的 Oracle 配置契约。
-2. [`evals/oracles/distilbert_sst2.py`](evals/oracles/distilbert_sst2.py)：看一个任务如何准备 workspace、执行和隐藏重算。
+1. [`evals/tasks/sentence_transformers_stsb.yaml`](evals/tasks/sentence_transformers_stsb.yaml) 和 [`evals/manifest.py`](evals/manifest.py)：先看标准任务如何声明并生成 `OracleConfig`。
+2. [`agent/types.py`](agent/types.py)：看工厂最终生成的运行时契约。
 3. [`agent/pipeline.py`](agent/pipeline.py)：看 LangGraph 节点、条件路由和 Repair 循环。
 4. [`agent/roles.py`](agent/roles.py) 与 [`agent/loop.py`](agent/loop.py)：看角色工具和共用的 function-calling 循环。
 5. [`agent/failure.py`](agent/failure.py)、[`agent/repair.py`](agent/repair.py) 与 [`verify/check.py`](verify/check.py)：看失败诊断、patch 和最终判卷。
@@ -239,7 +242,7 @@ pytest -m integration  # 依赖 Docker daemon 的测试
 把话说在前面,免得 claim 超过证据:
 
 - **原型规模的评测。** 主消融覆盖 4 任务 × 3 条件 × N=5，full-pipeline coverage 覆盖 6 任务 × N=5；另有 1 个冻结后 held-out 仓库 N=5，但单个仓库还不能代表完整 held-out 集合，也没有置信区间。这些数字是**原型证据**,不是基准定论。
-- **通用性在智能体层,不是端到端。** 一套任务无关的 agent 跨 6 个 ML 代码生态,但**每个新任务都要手写一个评测适配器**(任务描述 + 执行命令 + 样本契约 + 隐藏 gold + 工作区准备)。这不是"任意 repo 零配置复现"。
+- **任务接入是声明式,但不是零配置。** 标准的本地执行 + JSON 对象列表输出任务可通过 Oracle 侧 YAML manifest 接入；特殊执行后端、工作区结构或判卷语义仍需少量 provisioning/verifier hook。现有复杂任务也尚未全部迁移，因此这不是"任意 repo 零配置复现"。
 - **失败分类器是规则式的。** 它是对 stdout/stderr/diagnostics 的 **execution-grounded 正则/规则**分类器,负责给 LLM 拼修复上下文——**不是"智能"自动诊断**。推理在 Repair 智能体里。
 - **检索未做规模化优化。** 每次检索都现扫仓库(`load_corpus` 遍历目录树),**无缓存、无增量索引**;超大仓库要先做工程优化才能上生产。
 - **是隔离,不是安全沙箱。** 这是面向协作式 agent 的实验完整性运行时。Verifier 拒绝不可验证输出,目标和 gold 按设计不进入 Agent 上下文；执行在隔离工作目录中运行,可选 Docker + 断网。宿主机 MPS 更快但隔离更弱,两种模式都**不保证抵御恶意代码**。

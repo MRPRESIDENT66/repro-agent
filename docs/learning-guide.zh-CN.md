@@ -6,7 +6,8 @@
 
 ```text
 run_xxx.py
-  -> OracleConfig：准备任务、工作目录、执行函数和隐藏判卷函数
+  -> YAML Manifest：标准任务的公开参数和 Oracle 私有判卷参数
+  -> make_oracle_config()：自动生成 OracleConfig
   -> run_oracle()：启动流水线，最后调用独立 verifier
   -> ReproductionPipeline.run()：运行 LangGraph
   -> _node_navigate()：Navigator 查仓库并提交报告
@@ -27,8 +28,8 @@ run_xxx.py
 
 ## 建议阅读顺序
 
-1. `run_distilbert_multi_rag.py`：最短入口。
-2. `evals/oracles/distilbert_sst2.py`：一个任务如何生成 `OracleConfig`。
+1. `evals/tasks/sentence_transformers_stsb.yaml`：标准任务需要填写什么。
+2. `evals/manifest.py`：Manifest 如何生成 `OracleConfig`。
 3. `agent/pipeline.py`：只看 `_node_*`、`_decide()` 和 `_build_graph()`。
 4. `agent/roles.py`：看 `_RoleTools` 的三个 LLM 工具方法。
 5. `agent/loop.py`：看 LLM 如何逐轮选择并调用一个工具。

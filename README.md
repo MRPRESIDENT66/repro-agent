@@ -40,16 +40,20 @@ API. Selected tool capabilities are also exposed over **MCP** for external clien
 | **Isolated code execution** | Subprocess sessions plus optional resource-limited Docker sessions with network cutoff | [`exec/`](exec/) |
 | **Observability** | Per-call token + cost accounting, full transcripts, and replayable command scripts | [`agent/llm.py`](agent/llm.py) |
 | **Evaluation methodology** | Budget-fair repeated-run ablation across orchestration depths, mean cost, and failure-mode breakdown | [`evals/`](evals/) |
+| **Declarative task onboarding** | Standard tasks load an Oracle-side YAML manifest into the existing `OracleConfig`; uncommon setup or grading can use explicit hooks | [`evals/manifest.py`](evals/manifest.py), [`evals/tasks/`](evals/tasks/) |
 | **Deterministic agent testing** | `ScriptedLLM` drives the whole control flow with no API/tokens for fast, reproducible tests | [`tests/`](tests/) |
 
 Stack: Python, **LangGraph**, **MCP** (Model Context Protocol), OpenAI-compatible
 function calling (provider-agnostic; runs on DeepSeek/any OpenAI-style endpoint),
 BM25 retrieval, Docker, `pytest`.
 
+Task-manifest schema, privacy boundary, hooks, and current limits are documented
+in [Declarative Oracle Manifests](docs/task-manifests.md).
+
 ### Recommended code-reading order
 
-1. [`agent/types.py`](agent/types.py) — the complete Oracle contract.
-2. [`evals/oracles/distilbert_sst2.py`](evals/oracles/distilbert_sst2.py) — one concrete task from workspace setup through hidden recomputation.
+1. [`evals/tasks/sentence_transformers_stsb.yaml`](evals/tasks/sentence_transformers_stsb.yaml) and [`evals/manifest.py`](evals/manifest.py) — a declarative standard task and the factory that creates `OracleConfig`.
+2. [`agent/types.py`](agent/types.py) — the runtime contract produced by the factory.
 3. [`agent/pipeline.py`](agent/pipeline.py) — LangGraph nodes, routes, and the repair loop.
 4. [`agent/roles.py`](agent/roles.py) and [`agent/loop.py`](agent/loop.py) — role tools and the shared function-calling loop.
 5. [`agent/failure.py`](agent/failure.py), [`agent/repair.py`](agent/repair.py), and [`verify/check.py`](verify/check.py) — diagnosis, patching, and final grading.
@@ -211,7 +215,8 @@ Useful paths:
 - `retrieval/` — repo-navigation search and snippet extraction.
 - `exec/` — subprocess/Docker execution sessions.
 - `verify/` — fail-closed metric recomputation.
-- `evals/oracles/` — public task specs and verifier contracts.
+- `evals/manifest.py` and `evals/tasks/` — declarative standard-task onboarding.
+- `evals/oracles/` — thin manifest wrappers and custom adapters for exceptional tasks.
 
 ## Scope / Limitations
 
@@ -222,10 +227,11 @@ Stated plainly, so the claims don't outrun the evidence:
   no confidence intervals. One post-freeze held-out repository adds direct
   generalization evidence, but one task is not a representative held-out set;
   treat the numbers as prototype evidence, not a benchmark verdict.
-- **Generality is in the agent layer, not end-to-end.** One task-agnostic agent
-  handles 6 different ML code ecosystems, but each new task needs a hand-written
-  adapter (task spec + execution command + sample contract + hidden gold +
-  workspace provisioning). This is not zero-config reproduction of arbitrary repos.
+- **Task onboarding is declarative, not zero-config.** Standard local/JSON-object-list tasks
+  can be added with an Oracle-side YAML manifest; unusual execution backends, workspace
+  layouts, or grading semantics still require a small provisioning or verifier
+  hook. Existing complex benchmarks have not all been migrated. This is not
+  zero-config reproduction of arbitrary repositories.
 - **The failure classifier is rule-based.** It is an execution-grounded *regex/rule*
   classifier over stdout/stderr/diagnostics that builds repair context for the LLM
   — not an "intelligent" auto-diagnoser. The reasoning lives in the repair agent.

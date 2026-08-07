@@ -1,0 +1,68 @@
+name: sentence_transformers_stsb
+
+repository:
+  path: repos/sentence-transformers
+  version: v5.7.0
+  commit: b2a9529cf6312d2b2a8ffa2b64d82fabc1571bd8
+  exclude: [.git, __pycache__, "*.pyc", docs, tests]
+
+model:
+  source: ~/.cache/huggingface/hub/models--sentence-transformers--all-mpnet-base-v2/snapshots/e8c3b32edf5434bc2275fc9bab85f82640a19130
+  mount_as: model
+  required: [model.safetensors]
+
+dataset:
+  public_input: data/sentence_transformers_stsb/test_pairs.jsonl
+  mount_as: stsb_pairs.jsonl
+  format: jsonl
+  public_fields: [id, sentence1, sentence2]
+  expected_samples: 1379
+
+task:
+  description: |
+    Evaluate the pinned `sentence-transformers/all-mpnet-base-v2` checkpoint on
+    the STS Benchmark test split using the provisioned Sentence-Transformers
+    v5.7.0 repository. The environment is offline. The model is available at
+    `model/`, and `stsb_pairs.jsonl` contains 1379 records with `id`, `sentence1`,
+    and `sentence2` but no gold score. Encode each sentence with the checkpoint's
+    normal Sentence-Transformers pipeline and produce paired cosine similarities.
+    Do not train or modify the checkpoint.
+
+output:
+  file: predictions.json
+  format: json
+  allow_extra_fields: false
+  fields:
+    id:
+      type: integer
+      sequence: true
+    similarity:
+      type: number
+      minimum: -1.0001
+      maximum: 1.0001
+      description: cosine similarity produced by real inference
+
+execution:
+  generated_script: eval_stsb.py
+  command: >-
+    PYTHONPATH=. python eval_stsb.py --input stsb_pairs.jsonl --model model
+    --output predictions.json
+  timeout: 900
+  syntax_check: true
+  runtime: local
+  backend: local-offline-cpu-or-mps
+  python: .venv-oracle/bin/python
+  environment:
+    HOME: "{workdir}/.home"
+    PYTHONNOUSERSITE: "1"
+    HF_HUB_OFFLINE: "1"
+    TRANSFORMERS_OFFLINE: "1"
+    TOKENIZERS_PARALLELISM: "false"
+    OMP_NUM_THREADS: "4"
+
+verification:
+  metric: spearman
+  prediction_field: similarity
+  hidden_gold: evals/oracles/gold/stsb_test_scores.json
+  expected: 0.8342216679474351
+  tolerance: 0.001

@@ -16,6 +16,7 @@ mcp==1.27.2
 
 # Misc
 python-dotenv==1.2.2
+PyYAML==6.0.3
 
 # Dev / test
 pytest==9.0.3

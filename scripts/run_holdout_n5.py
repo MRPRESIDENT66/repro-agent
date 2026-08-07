@@ -25,7 +25,9 @@ DATASET_REVISION = "ab7a5ac0e35aa22088bdcf23e7fd99b220e53308"
 MODEL_REVISION = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
 
 ADAPTER_FILES = (
+    "evals/manifest.py",
     "evals/oracles/sentence_transformers_stsb.py",
+    "evals/tasks/sentence_transformers_stsb.yaml",
     "evals/oracles/gold/stsb_test_scores.json",
     "run_sentence_transformers_stsb.py",
     "scripts/prepare_sentence_transformers_stsb.py",

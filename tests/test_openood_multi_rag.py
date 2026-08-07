@@ -128,6 +128,8 @@ AUDIT_STATUS: PASS
 
 def test_pass_review_accepts_documentation_evidence_and_markdown_labels() -> None:
     grounded = """Source-grounded audit of the complete evaluation path.
+- Model: loaded with the requested runtime identifier.
+- Data: complete validation split loaded without shuffling.
 - `model:` `clip/clip.py:94` loads the requested checkpoint.
 - **data**: `data/prompts.md:523` defines the classes and prompt templates.
 - preprocessing: `clip/clip.py:79-86` defines the ordered image transform.

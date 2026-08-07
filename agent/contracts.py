@@ -39,12 +39,13 @@ def validate_report(content: str) -> str:
     return content + "\n"
 
 
-def _audit_evidence_value(body: str, category: str) -> str | None:
-    """Return one source-evidence value, ignoring harmless Markdown styling."""
+def _audit_evidence_values(body: str, category: str) -> list[str]:
+    """Return matching evidence values, ignoring harmless Markdown styling."""
     item = re.compile(
         r"^\s*-\s*(?:`(?P<code>[^`]+)`|\*\*(?P<bold>[^*]+)\*\*|"
         r"(?P<plain>[A-Za-z]+))\s*:?\s*(?P<value>.+)$"
     )
+    values = []
     for raw_line in body.splitlines():
         match = item.match(raw_line)
         if match is None:
@@ -55,8 +56,8 @@ def _audit_evidence_value(body: str, category: str) -> str | None:
             if value is not None
         )
         if label.rstrip(":").strip().lower() == category:
-            return match.group("value")
-    return None
+            values.append(match.group("value"))
+    return values
 
 
 def validate_audit(content: str) -> str:
@@ -72,12 +73,12 @@ def validate_audit(content: str) -> str:
     if matches[-1] == "PASS":
         missing = []
         for category in ("model", "data", "preprocessing", "metric"):
-            value = _audit_evidence_value(body, category)
-            if value is None or not re.search(
+            values = _audit_evidence_values(body, category)
+            source_path = re.compile(
                 r"`[^`\n]+\.(?:py|ya?ml|json|toml|cfg|ini|sh|md|rst|txt|ipynb)"
-                r"(?::\d+(?:-\d+)?)?`",
-                value,
-            ):
+                r"(?::\d+(?:-\d+)?)?`"
+            )
+            if not any(source_path.search(value) for value in values):
                 missing.append(category)
         if missing:
             raise ValueError(

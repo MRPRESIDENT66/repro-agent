@@ -359,6 +359,12 @@ class ReproductionPipeline:
             max_queries=2,
             search_extra_exclude=self.config.search_extra_exclude,
             allow_runtime_probe=True,
+            synthesis_instruction=(
+                "Return only the complete Markdown audit report. Include the four "
+                "required source-evidence lines with backticked repository paths, "
+                "then end with exactly AUDIT_STATUS: PASS or AUDIT_STATUS: "
+                "REPAIR_REQUIRED. Do not return Python source code."
+            ),
             deps=self.role_deps,
         )
         report = (self.workdir / "audit_report.md").read_text(errors="replace")

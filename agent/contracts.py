@@ -39,6 +39,26 @@ def validate_report(content: str) -> str:
     return content + "\n"
 
 
+def _audit_evidence_value(body: str, category: str) -> str | None:
+    """Return one source-evidence value, ignoring harmless Markdown styling."""
+    item = re.compile(
+        r"^\s*-\s*(?:`(?P<code>[^`]+)`|\*\*(?P<bold>[^*]+)\*\*|"
+        r"(?P<plain>[A-Za-z]+))\s*:?\s*(?P<value>.+)$"
+    )
+    for raw_line in body.splitlines():
+        match = item.match(raw_line)
+        if match is None:
+            continue
+        label = next(
+            value
+            for value in (match.group("code"), match.group("bold"), match.group("plain"))
+            if value is not None
+        )
+        if label.rstrip(":").strip().lower() == category:
+            return match.group("value")
+    return None
+
+
 def validate_audit(content: str) -> str:
     content = validate_report(content)
     matches = re.findall(r"AUDIT_STATUS:\s*(PASS|REPAIR_REQUIRED)", content)
@@ -52,10 +72,11 @@ def validate_audit(content: str) -> str:
     if matches[-1] == "PASS":
         missing = []
         for category in ("model", "data", "preprocessing", "metric"):
-            line = re.search(rf"(?im)^\s*-\s*`?{category}`?\s*:\s*(.+)$", body)
-            if line is None or not re.search(
-                r"`[^`\n]+\.(?:py|ya?ml|json|toml|cfg|ini|sh)(?::\d+)?`",
-                line.group(1),
+            value = _audit_evidence_value(body, category)
+            if value is None or not re.search(
+                r"`[^`\n]+\.(?:py|ya?ml|json|toml|cfg|ini|sh|md|rst|txt|ipynb)"
+                r"(?::\d+(?:-\d+)?)?`",
+                value,
             ):
                 missing.append(category)
         if missing:

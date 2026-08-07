@@ -46,3 +46,6 @@ def test_synthesis_retry_drops_invalid_response_from_model_context(tmp_path):
         message.get("content") != "Let me search for one more file."
         for message in second_request
     )
+    correction = second_request[-1]["content"]
+    assert "Return only complete Python source." in correction
+    assert "complete source code" not in correction

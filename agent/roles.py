@@ -526,9 +526,9 @@ def run_rag_role(
                         " This is the SAME error as your previous attempt — locate the "
                         "exact construct the error names and change only that."
                     )
-                correction += (
-                    " Start the next response directly with complete source code. "
-                    "Do not narrate, plan, request tools, or describe another search."
+                correction += " " + (
+                    synthesis_instruction
+                    or "Return only the complete artifact required by the system instruction."
                 )
                 correction_message = {"role": "user", "content": correction}
                 synthesis_log.append(correction_message)

@@ -126,6 +126,19 @@ AUDIT_STATUS: PASS
     assert _validate_audit(grounded).endswith("AUDIT_STATUS: PASS\n")
 
 
+def test_pass_review_accepts_documentation_evidence_and_markdown_labels() -> None:
+    grounded = """Source-grounded audit of the complete evaluation path.
+- `model:` `clip/clip.py:94` loads the requested checkpoint.
+- **data**: `data/prompts.md:523` defines the classes and prompt templates.
+- preprocessing: `clip/clip.py:79-86` defines the ordered image transform.
+- `metric`: `eval_clip.py:72` defines cosine similarity and top-1 argmax.
+The execution log confirms 10000 measured per-sample predictions.
+AUDIT_STATUS: PASS
+"""
+
+    assert _validate_audit(grounded).endswith("AUDIT_STATUS: PASS\n")
+
+
 # ---------------------------------------------------------------------------
 # Dynamic RAG and probe handling
 # ---------------------------------------------------------------------------

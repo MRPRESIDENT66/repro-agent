@@ -12,6 +12,7 @@ Repro-Agent 是一个面向机器学习代码仓库的**盲测自适应多智能
 | OpenOOD：`solo` → `full` | **0/5 → 4/5** verifier 通过 |
 | 6 项任务 full coverage | **27/30** verifier 通过 |
 | 冻结后 STS-B held-out | **5/5** verifier 通过且无流程异常 |
+| Manifest-only adaptive CLIP held-out | **5/5** verifier 通过；**2/5** 无流程异常 |
 
 完整结果、成本和失败分析见 [evals/RESULTS.md](evals/RESULTS.md)。旧流水线代码归档在 Git tag `legacy-pipelines-v1`，正式实验的 commit、补丁哈希和资产版本见 [evals/FREEZE.md](evals/FREEZE.md)。
 
@@ -56,6 +57,7 @@ LangGraph State 只保存路由所需的轮次、失败类型和 artifact 路径
 | mmpretrain | 选择性资源、Docker、percentage accuracy | 无 |
 | RobustBench | 缓存软链接、gold 切片、robust accuracy | 无 |
 | OpenOOD | 选择性资源、Docker/MPS profile、嵌套分数、grouped AUROC 和方向检查 | 无 |
+| OpenAI CLIP ViT-B/32 | 固定仓库/模型/数据、宿主 MPS、accuracy | 无 |
 
 标准任务只填写 YAML；特殊任务通过小型 `provision/session/public_check/verifier` hook 扩展。Hook 在 Oracle 侧运行，不是 LLM 工具，也不会把隐藏值交给 Agent。字段和边界见 [docs/task-manifests.md](docs/task-manifests.md)。
 
@@ -112,6 +114,7 @@ export LLM_THINKING=disabled
 python run_distilbert_multi_rag.py
 python run_openood_multi_rag.py
 python run_robustbench_multi_rag.py
+python run_clip_vitb32_cifar10.py
 ```
 
 OpenOOD 默认使用断网 Docker/CPU。可信仓库可在 Apple Silicon 上启用更快但隔离更弱的 MPS：
@@ -131,6 +134,8 @@ pytest -q tests --ignore=workspaces --ignore=repos
 
 - 历史消融是原型规模 N=5 证据，没有置信区间，不能证明 adaptive 统计上优于 full。
 - adaptive 已在 OpenOOD 上完成开发验证，但该任务参与了设计迭代，不属于 held-out 泛化证据。
+- 两个冻结后新仓库用于检验泛化；其中 CLIP 完全通过 Manifest 接入，
+  verifier 为 5/5，但无流程异常仅 2/5，说明 Auditor 输出稳定性仍需改进。
 - Manifest 是统一入口，不是任意仓库零配置；真正任务特有的资产发现或预处理仍可能需要短 hook。
 - Failure classifier 是基于日志和 diagnostics 的规则分类器，真正推理发生在 Repair Agent。
 - 本地 subprocess 和宿主 MPS 不是安全沙箱；Docker 提供资源与断网隔离，但也未证明能抵御恶意代码。

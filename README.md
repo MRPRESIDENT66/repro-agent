@@ -12,6 +12,7 @@ The current runtime has one production path: `adaptive`. Historical `solo`, `sol
 | OpenOOD, `solo` → `full` | **0/5 → 4/5** verifier passes |
 | Six-task full coverage | **27/30** verifier passes |
 | Post-freeze STS-B held-out task | **5/5** verified and workflow-clean |
+| Manifest-only adaptive CLIP held-out | **5/5** verified; **2/5** workflow-clean |
 
 See [evals/RESULTS.md](evals/RESULTS.md) for costs and failures. Removed pipeline implementations are archived at Git tag `legacy-pipelines-v1`; exact experiment commits, diff hashes, and assets are recorded in [evals/FREEZE.md](evals/FREEZE.md).
 
@@ -52,6 +53,7 @@ Every benchmark enters through `evals/tasks/*.yaml`, [evals/catalog.py](evals/ca
 | mmpretrain | selective assets, Docker, percentage accuracy | none |
 | RobustBench | symlinked caches, gold slice, robust accuracy | none |
 | OpenOOD | selective assets, Docker/MPS profiles, nested scores, grouped AUROC and direction checks | none |
+| OpenAI CLIP ViT-B/32 | pinned repo/model/data, host MPS, accuracy | none |
 
 Hooks are not LLM tools and never expose hidden verifier values. See [docs/task-manifests.md](docs/task-manifests.md).
 
@@ -92,6 +94,7 @@ export LLM_THINKING=disabled
 python run_distilbert_multi_rag.py
 python run_openood_multi_rag.py
 python run_robustbench_multi_rag.py
+python run_clip_vitb32_cifar10.py
 ```
 
 OpenOOD defaults to offline Docker/CPU. Trusted checkouts can use faster but less isolated Apple MPS execution:
@@ -109,6 +112,9 @@ pytest -q tests --ignore=workspaces --ignore=repos
 
 - Historical N=5 ablations are prototype evidence without confidence intervals; they do not prove adaptive is statistically better than full.
 - OpenOOD validates the adaptive engineering path but was used during development, so it is not held-out evidence.
+- Two post-freeze repositories test generalization; CLIP is manifest-only and
+  reached 5/5 verifier passes, while its 2/5 workflow-clean rate exposes Auditor
+  output reliability as a remaining weakness.
 - Manifests are a uniform entry point, not zero-config reproduction of arbitrary repositories; genuinely task-specific source discovery or preprocessing may still need a small hook.
 - Failure classification is rule-based over logs and diagnostics; reasoning remains in the Repair agent.
 - Local subprocess and host MPS are not security sandboxes. Docker adds resource and network isolation but is not proven adversary-resistant.

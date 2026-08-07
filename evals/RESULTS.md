@@ -86,6 +86,14 @@ adaptive orchestration the only path. The tables below remain historical
 ablation evidence and are reproducible from the freeze metadata plus the
 `legacy-pipelines-v1` code tag; they are not claims about the current default.
 
+The final manifest-first adaptive snapshot was then frozen before a second new
+repository was selected. On OpenAI CLIP ViT-B/32 zero-shot CIFAR-10 it achieved
+**5/5 verifier passes**, including one successful failure-to-Repair recovery.
+Only **2/5** runs completed the entire collaboration workflow, however: three
+Auditor calls failed strict report synthesis after already-correct artifacts.
+This is held-out task evidence for reproduction correctness, and direct evidence
+that structured role-output reliability remains the main orchestration weakness.
+
 <!-- GENERATED_N5_START -->
 ## E1: Six-Task Coverage N=5
 
@@ -159,6 +167,47 @@ a regression test was added, and all five attempts were rerun under new names in
 `manifest_20260807T104352Z.json`; no agent/runtime/prompt code changed. The pilot
 artifacts remain locally auditable and were not selected into the reported cell.
 
+## E4: Manifest-Only Adaptive Held-Out Repository N=5
+
+The generic manifest-first adaptive runtime was committed as `1f4cdda` and
+tagged `heldout-v2-freeze` before OpenAI CLIP was selected. The new task was then
+declared entirely in one YAML manifest, with no task hook and no change to
+`agent/`, `retrieval/`, `exec/`, or `verify/`. The frozen task commit is
+`e750069` (`heldout-v2-task-freeze`).
+
+The task used the pinned official CLIP repository and ViT-B/32 checkpoint for
+zero-shot inference over all 10,000 CIFAR-10 test images. The agent had to locate
+the repository's 18 CIFAR-10 prompts, construct normalized class prototypes,
+apply the model loader's preprocessing, and preserve sample order. The private
+verifier independently recomputed top-1 accuracy from 10,000 predicted labels.
+
+| Task | Condition | verified | no workflow error / verified | mean cmds | mean evals | mean cost |
+|---|---|---:|---:|---:|---:|---:|
+| OpenAI CLIP ViT-B/32 / CIFAR-10 zero-shot | `adaptive` | **5/5 (100%)** | **2/5 (40%)** | 2.40 | 1.20 | ¥0.149 |
+
+Four runs recomputed **89.87%** and one recomputed **89.88%**, against the
+predeclared 89.87% reference with 0.05 tolerance. Total configured token cost
+was ¥0.7452. One run initially failed to produce the artifact, then succeeded
+after a patch-first Repair and second execution. The other four produced valid
+predictions in one execution.
+
+Three verifier-accepted runs are not counted as workflow-clean because Auditor
+failed to synthesize a schema-valid report after inference. This does not change
+their independently verified predictions, but it prevents a 5/5 claim for the
+complete multi-agent workflow.
+
+### Excluded CLIP Pilots
+
+- `heldout2_pilot_n1` is excluded because the initial public specification said
+  "official ensembling" without stating the repository's 18-template count and
+  normalization formula. The agent used 38 templates and obtained 89.45%; the
+  public contract was clarified before the task freeze.
+- `heldout2_spec_pilot_n1` confirmed the clarified specification at 89.87%, but
+  ran before `heldout-v2-task-freeze` and is therefore excluded.
+- A first N=5 launcher invocation failed on a local import path before creating
+  an attempt, calling the LLM, or executing evaluation code. The unchanged
+  frozen batch was relaunched with the repository root on `PYTHONPATH`.
+
 ## Failure Analysis
 
 - **One-shot misses the hard tasks.** OpenOOD `solo` produced no recomputable
@@ -172,6 +221,9 @@ artifacts remain locally auditable and were not selected into the reported cell.
   valid model inference.
 - **Easy tasks saturate.** All three DistilBERT conditions passed 5/5, so added
   roles only increased cost and failure surface there.
+- **Adaptive correctness can exceed workflow reliability.** The CLIP held-out
+  batch verified 5/5 artifacts, but strict Auditor synthesis failures reduced
+  complete collaboration success to 2/5.
 
 ## OpenOOD Case Study
 
@@ -200,6 +252,12 @@ and verifier, but host MPS has weaker execution isolation than offline Docker.
   `b2a9529cf6312d2b2a8ffa2b64d82fabc1571bd8` (`v5.7.0`)
 - STS-B dataset revision: `ab7a5ac0e35aa22088bdcf23e7fd99b220e53308`;
   all-mpnet-base-v2 revision: `e8c3b32edf5434bc2275fc9bab85f82640a19130`
+- Second held-out runtime freeze: `1f4cdda` (`heldout-v2-freeze`); frozen CLIP
+  task: `e750069` (`heldout-v2-task-freeze`)
+- OpenAI CLIP source: `d05afc436d78f1c48dc0dbf8e5980a9d471f35f6`;
+  ViT-B/32 SHA-256:
+  `40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af`
+- CLIP formal attempt IDs: `heldout2_n5_s1` through `heldout2_n5_s5`
 - OpenOOD backend: host MPS; mmpretrain: offline Docker/CPU; remaining tasks:
   clean local subprocess environments with pre-cached assets.
 
@@ -210,7 +268,9 @@ commit alone.
 ## Limits
 
 - N=5 is prototype evidence, not a significance-tested benchmark.
-- Six tasks were used while iterating the runtime. E3 adds one post-freeze
-  held-out repository, which is useful evidence but not a representative set.
-- Every new task still requires a hand-written public adapter and hidden verifier.
+- Six tasks were used while iterating the historical runtime. E3 and E4 add two
+  post-freeze repositories, which is stronger evidence but not a representative
+  benchmark set.
+- Standard tasks can now be manifest-only, as E4 demonstrates, but each task
+  still needs a public contract, pinned assets, and private verifier data.
 - Full collaboration is a configurable mode, not a claim of universal dominance.

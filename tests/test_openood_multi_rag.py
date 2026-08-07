@@ -9,12 +9,10 @@ import pytest
 from agent.llm import Reply, ScriptedLLM, ToolCall
 from agent.contracts import (
     extract_python as _extract_python,
-    review_requires_repair as _review_requires_repair,
     validate_review as _validate_review,
 )
-from agent.pipeline import _dynamic_rag_role
 from agent.repair import apply_code_patch as _apply_code_patch
-from agent.roles import _missing_path_hints
+from agent.roles import RoleDeps, missing_path_hints, run_rag_role
 from agent.runtime_probe import runtime_probe_command as _runtime_probe_command
 from evals.oracles.openood_ebo import (
     _ID_COUNT,
@@ -88,15 +86,6 @@ def test_public_contract_accepts_complete_score_coverage(tmp_path: Path) -> None
     assert _recompute(tmp_path) == (100.0, 50379)
 
 
-def test_review_status_fails_closed(tmp_path: Path) -> None:
-    report = tmp_path / "review.md"
-    assert _review_requires_repair(report)
-    report.write_text("REVIEW_STATUS: REPAIR_REQUIRED\n")
-    assert _review_requires_repair(report)
-    report.write_text("REVIEW_STATUS: PASS\n")
-    assert not _review_requires_repair(report)
-
-
 def test_pass_review_requires_source_evidence_for_semantic_pipeline() -> None:
     unsupported = "Plausible review without citations. " + ("x" * 310)
     with pytest.raises(ValueError, match="preprocessing"):
@@ -120,10 +109,7 @@ REVIEW_STATUS: PASS
 
 def test_dynamic_rag_query_is_generated_from_error_context(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    import agent.pipeline as module
-
     workspace = tmp_path / "ws"
     workspace.mkdir()
     artifacts = tmp_path / "artifacts"
@@ -135,21 +121,17 @@ def test_dynamic_rag_query_is_generated_from_error_context(
         Reply("", [ToolCall("s1", "submit_review", {"content": report})]),
     ])
     llms = iter([role_llm, ScriptedLLM([]), ScriptedLLM([])])
-
-    monkeypatch.setattr(module, "ChatLLM", lambda: next(llms))
-    monkeypatch.setattr(
-        module,
-        "search_repo",
-        lambda actual_query, root, llm, **kwargs: (
+    deps = RoleDeps(
+        llm_factory=lambda: next(llms),
+        search_fn=lambda actual_query, root, llm, **kwargs: (
             "Most relevant files:\n  config.yml  —  dataset configuration"
             if actual_query == query
             else "unexpected query"
         ),
     )
 
-    role, rag = _dynamic_rag_role(
+    role, rag = run_rag_role(
         name="reviewer_test",
-        task="Test task",
         workdir=workspace,
         artifact_dir=artifacts,
         session=Session(workspace),
@@ -161,6 +143,7 @@ def test_dynamic_rag_query_is_generated_from_error_context(
         validator=_validate_review,
         trigger="execution_error",
         max_steps=3,
+        deps=deps,
     )
 
     assert rag["dynamic"] is True
@@ -173,10 +156,7 @@ def test_dynamic_rag_query_is_generated_from_error_context(
 
 def test_restricted_runtime_probe_is_audited_and_not_an_eval_command(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    import agent.pipeline as module
-
     workspace = tmp_path / "ws"
     workspace.mkdir()
     artifacts = tmp_path / "artifacts"
@@ -186,13 +166,14 @@ def test_restricted_runtime_probe_is_audited_and_not_an_eval_command(
         Reply("", [ToolCall("s1", "submit_handoff", {"content": "grounded"})]),
     ])
     llms = iter([role_llm, ScriptedLLM([]), ScriptedLLM([])])
-    monkeypatch.setattr(module, "ChatLLM", lambda: next(llms))
-    monkeypatch.setattr(module, "search_repo", lambda *args, **kwargs: "Most relevant files:\n")
+    deps = RoleDeps(
+        llm_factory=lambda: next(llms),
+        search_fn=lambda *args, **kwargs: "Most relevant files:\n",
+    )
     session = Session(workspace, venv_python=sys.executable)
 
-    role, _ = _dynamic_rag_role(
+    role, _ = run_rag_role(
         name="probe_test",
-        task="Test task",
         workdir=workspace,
         artifact_dir=artifacts,
         session=session,
@@ -206,10 +187,10 @@ def test_restricted_runtime_probe_is_audited_and_not_an_eval_command(
         search_extra_exclude=set(),
         max_steps=4,
         allow_runtime_probe=True,
+        deps=deps,
     )
 
     assert role["runtime_probes"] == 1
-    assert role["runtime_probe_required"] is False
     assert role["runtime_probe_hint"] is None
     trace = (artifacts / "probe_test_probe_trace.md").read_text()
     assert "python_signature `json.dumps`" in trace
@@ -299,7 +280,7 @@ def test_missing_path_diagnostic_lists_real_sibling_candidates(
         "'data/benchmark_imglist/cifar10/test.txt'"
     )
 
-    hints = _missing_path_hints(context, tmp_path)
+    hints = missing_path_hints(context, tmp_path)
 
     assert hints[0].endswith("test_cifar10.txt")
     assert all("test.txt" not in hint for hint in hints)
@@ -315,7 +296,7 @@ def test_missing_path_hint_walks_up_to_real_ancestor_on_wrong_root(
         "'/workspace/data/images/cifar10/cifar10/test/airplane/0298.png'"
     )
 
-    hints = _missing_path_hints(context, tmp_path)
+    hints = missing_path_hints(context, tmp_path)
 
     assert any("images_classic" in hint for hint in hints)
     assert all(hint.startswith("data/") for hint in hints)

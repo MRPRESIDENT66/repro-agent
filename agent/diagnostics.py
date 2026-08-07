@@ -37,7 +37,7 @@ def workspace_artifact_snapshot(workdir: Path, limit: int = 16) -> str:
 
 
 def latest_execution_observation(session: Any, limit: int = 1600) -> str:
-    transcript = list(getattr(session, "transcript", []))
+    transcript = session.transcript
     if not transcript:
         return "no evaluation command has run"
     latest = transcript[-1]

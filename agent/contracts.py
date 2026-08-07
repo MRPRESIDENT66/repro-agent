@@ -1,33 +1,29 @@
-"""Task-context, code, and report/review contract plumbing.
+"""Task-context, code, and report/review validation.
 
 Pure, dependency-light helpers shared by the orchestration pipeline: building the
-public task context, validating generated code/reports/reviews, and invoking
-optional workspace hooks. Kept separate from orchestration so the pipeline reads
-as a state machine rather than a wall of string assembly.
+public task context and validating generated code, reports, and reviews. Kept
+separate so the pipeline reads as a state machine rather than string assembly.
 """
 
 from __future__ import annotations
 
 import ast
-import inspect
 import re
-from pathlib import Path
 from typing import Callable
 
-from agent.generic_prompts import GENERIC_PROMPTS, RolePrompts
 from agent.types import OracleConfig
-
-
-def role_prompts() -> RolePrompts:
-    return GENERIC_PROMPTS
 
 
 def extract_python(text: str) -> str:
     blocks = re.findall(r"```(?:python)?\s*\n(.*?)```", text, re.DOTALL)
     if not blocks:
         return text.strip() + "\n"
-    candidates = [b for b in blocks if "predictions.json" in b or "REPRO_RESULT" in b] or blocks
-    return max(candidates, key=len).strip() + "\n"
+    return max(blocks, key=len).strip() + "\n"
+
+
+def public_artifact_names(protocol: str) -> list[str]:
+    """Extract result filenames named in the public task contract."""
+    return sorted(set(re.findall(r"`([^`\n]+\.(?:json|jsonl|csv))`", protocol)))
 
 
 def validate_report(content: str) -> str:
@@ -44,7 +40,11 @@ def validate_review(content: str) -> str:
     matches = re.findall(r"REVIEW_STATUS:\s*(PASS|REPAIR_REQUIRED)", content)
     if not matches:
         raise ValueError("review must end with REVIEW_STATUS: PASS or REPAIR_REQUIRED")
-    body = re.sub(r"[*`]*REVIEW_STATUS:\s*(?:PASS|REPAIR_REQUIRED)[*`]*\s*$", "", content.rstrip()).rstrip()
+    body = re.sub(
+        r"[*`]*REVIEW_STATUS:\s*(?:PASS|REPAIR_REQUIRED)[*`]*\s*$",
+        "",
+        content.rstrip(),
+    ).rstrip()
     if matches[-1] == "PASS":
         missing = []
         for category in ("model", "data", "preprocessing", "metric"):
@@ -61,14 +61,8 @@ def validate_review(content: str) -> str:
     return f"{body}\n\nREVIEW_STATUS: {matches[-1]}\n"
 
 
-def review_requires_repair(path: Path) -> bool:
-    if not path.exists():
-        return True
-    return "REVIEW_STATUS: PASS" not in path.read_text(errors="replace")
-
-
 def make_generic_code_validator(config: OracleConfig) -> Callable[[str], str]:
-    artifact_markers = sorted(set(re.findall(r"`([^`\n]+\.(?:json|jsonl|csv))`", config.public_result_protocol)))
+    artifact_markers = public_artifact_names(config.public_result_protocol)
 
     def validate(content: str) -> str:
         code = extract_python(content)
@@ -104,27 +98,3 @@ def generic_task_context(config: OracleConfig) -> str:
         "the real evaluation; printed aggregate metrics are not evidence.",
     ]
     return "\n".join(lines)
-
-
-def call_workspace_hook(hook: Callable[..., None], workdir: Path) -> None:
-    try:
-        parameters = inspect.signature(hook).parameters
-    except (TypeError, ValueError):
-        hook()
-        return
-    if parameters:
-        hook(workdir)
-    else:
-        hook()
-
-
-__all__ = [
-    "call_workspace_hook",
-    "extract_python",
-    "generic_task_context",
-    "make_generic_code_validator",
-    "review_requires_repair",
-    "role_prompts",
-    "validate_report",
-    "validate_review",
-]

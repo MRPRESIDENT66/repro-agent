@@ -142,6 +142,17 @@ def apply_code_patch(
     return validate_code(updated)
 
 
+def make_patch_validator(
+    path: Path, validate_code: Callable[[str], str]
+) -> Callable[[str], str]:
+    """Bind one eval file to the generic patch validator."""
+
+    def validate(payload: str) -> str:
+        return apply_code_patch(path, payload, validate_code=validate_code)
+
+    return validate
+
+
 def failed_import_packages(session: Any, workdir: Path, start: int = 0) -> set[str]:
     """Extract workspace package initializers implicated by public import failures."""
     failed: set[str] = set()

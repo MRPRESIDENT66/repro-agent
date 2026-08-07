@@ -6,7 +6,7 @@ Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任�
 
 **定位要诚实**:这是 6 项开发任务加 1 个冻结后 held-out 仓库上的 N=5 **原型规模证据**,不是经过大规模验证的通用 runtime。详见 [项目边界](#项目边界)。
 
-编排用 **LangGraph**(一个由角色节点组成的 `StateGraph`,带条件式修复循环);检索、失败分类修复、隔离执行、盲测验证器都直接实现在 provider-agnostic 的 OpenAI 兼容 API 上。部分工具能力还通过 **MCP** 独立暴露给外部客户端。
+编排使用 **LangGraph**(工作流节点 + 条件式修复循环);检索、失败分类修复、隔离执行、盲测验证器都直接实现在 provider-agnostic 的 OpenAI 兼容 API 上。部分工具能力还通过 **MCP** 独立暴露给外部客户端。
 
 | 核心证据 | 结果 |
 |---|---:|
@@ -21,7 +21,7 @@ Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任�
 
 | 能力 | 在本项目里是什么 | 位置 |
 |---|---|---|
-| **Multi-agent orchestration(LangGraph 编排)** | LangGraph `StateGraph`,角色节点(Navigator→Reproducer→Critic→执行→Reviewer→Repair)+ 条件式修复循环 + per-role 上下文隔离 | [`agent/pipeline.py`](agent/pipeline.py) |
+| **Multi-agent orchestration(LangGraph 编排)** | `StateGraph` 负责导航、生成、审查、执行和修复的路由；`full` 模式下每次执行后由 Reviewer 独立复核 | [`agent/pipeline.py`](agent/pipeline.py) |
 | **Tool use / function calling(工具调用)** | 原生 OpenAI function-calling 的 agent loop、顺序工具派发 | [`agent/loop.py`](agent/loop.py) |
 | **Tool interoperability(MCP)** | 仓库检索和受限诊断/命令接口通过 Model Context Protocol 独立暴露 | [`mcp_server.py`](mcp_server.py) |
 | **Self-correction(Reflexion 式自我修复)** | 失败分类驱动、execution-grounded 的修复闭环,patch-first 优先于盲目重写 | [`agent/repair.py`](agent/repair.py)、[`agent/failure.py`](agent/failure.py) |
@@ -35,6 +35,8 @@ Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任�
 技术栈:Python、**LangGraph**、**MCP**(Model Context Protocol)、OpenAI 兼容 function calling(provider-agnostic,可跑 DeepSeek/任意 OpenAI 风格端点)、BM25 检索、Docker、`pytest`。
 
 ### 推荐源码阅读顺序
+
+对 Python 和 Agent 编排还不熟悉时，先看这份简化入口：[`docs/learning-guide.zh-CN.md`](docs/learning-guide.zh-CN.md)。
 
 1. [`agent/types.py`](agent/types.py)：先看完整的 Oracle 配置契约。
 2. [`evals/oracles/distilbert_sst2.py`](evals/oracles/distilbert_sst2.py)：看一个任务如何准备 workspace、执行和隐藏重算。

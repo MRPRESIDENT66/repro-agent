@@ -172,7 +172,6 @@ def make_config(
         make_session=lambda: Session(
             workdir, venv_python=ORACLE_VENV / "bin" / "python", default_timeout=1200
         ),
-        session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir, model_name, expected),
         execute_eval=_make_execute_eval(),
         chance_level=100.0 / num_classes,  # balanced top-1 over num_classes

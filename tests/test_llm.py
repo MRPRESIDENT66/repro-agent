@@ -4,7 +4,7 @@ import sys
 from types import SimpleNamespace
 
 import agent.llm as llm_module
-from agent.loop import _assistant_msg
+from agent.loop import _assistant_message
 
 
 def test_deepseek_v4_disables_thinking_and_preserves_reasoning(monkeypatch) -> None:
@@ -44,7 +44,7 @@ def test_deepseek_v4_disables_thinking_and_preserves_reasoning(monkeypatch) -> N
     assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
     assert captured["parallel_tool_calls"] is False
     assert reply.reasoning_content == "inspect the repository first"
-    assert _assistant_msg(reply)["reasoning_content"] == reply.reasoning_content
+    assert _assistant_message(reply)["reasoning_content"] == reply.reasoning_content
 
 
 def test_non_deepseek_model_does_not_receive_thinking_parameter(monkeypatch) -> None:

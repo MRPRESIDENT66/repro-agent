@@ -5,23 +5,34 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 
 from agent.llm import ChatLLM
-from agent.loop import AgentResult, TOOLS, run_agent
+from agent.loop import AgentResult, run_agent
 from agent.runtime_probe import (
     MAX_RUNTIME_PROBES,
     MAX_RUNTIME_PROBES_PER_ROLE,
     RUNTIME_PROBE_TOOL,
-    runtime_probe_command as _runtime_probe_command,
-    runtime_probe_observation as _runtime_probe_observation,
+    runtime_probe_command,
+    runtime_probe_observation,
 )
 from retrieval.search import relevant_snippet, search_repo
 
-SEARCH_REPO_TOOL = next(t for t in TOOLS if t["function"]["name"] == "search_repo")
+SEARCH_REPO_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_repo",
+        "description": "Search the repository for files relevant to the current uncertainty.",
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
+}
 MAX_REPAIR_ROUNDS = 4
 
 
@@ -32,24 +43,24 @@ class RoleDeps:
     snippet_fn: Callable[..., str] = relevant_snippet
 
 
-def _clip(text: str, limit: int = 5000) -> str:
+def clip_text(text: str, limit: int = 5000) -> str:
     if len(text) <= limit:
         return text
     return f"{text[:2200]}\n...[{len(text) - 4400} chars omitted]...\n{text[-2200:]}"
 
 
-def _public_log(session: Any, start: int) -> str:
+def public_log(session: Any, start: int) -> str:
     parts = []
     for index, run in enumerate(session.transcript[start:], start + 1):
         parts.append(
             f"## Command {index}\n\n```bash\n{run.command}\n```\n\n"
             f"exit={run.exit_code} timed_out={run.timed_out}\n\n"
-            f"```text\n{_clip(run.stdout)}\n{_clip(run.stderr)}\n```\n"
+            f"```text\n{clip_text(run.stdout)}\n{clip_text(run.stderr)}\n```\n"
         )
     return "\n".join(parts)
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
+def atomic_write_text(path: Path, content: str) -> None:
     """Publish generated code atomically for Docker bind-mount readers."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -60,7 +71,7 @@ def _atomic_write_text(path: Path, content: str) -> None:
         temp.unlink(missing_ok=True)
 
 
-def _require_handoff(path: Path, name: str) -> str:
+def require_handoff(path: Path, name: str) -> str:
     if not path.is_file():
         raise RuntimeError(f"{name} handoff missing: {path.name}")
     return path.read_text(errors="replace")
@@ -115,7 +126,7 @@ def _search_evidence(context: str) -> str:
     return "\n".join(dict.fromkeys(paths + failures[-1:]))[-2400:]
 
 
-def _missing_path_hints(context: str, workdir: Path) -> list[str]:
+def missing_path_hints(context: str, workdir: Path) -> list[str]:
     matches = re.findall(r"FileNotFoundError:.*?['\"]([^'\"]+)['\"]", context)
     if not matches:
         return []
@@ -165,7 +176,7 @@ def _search_with_snippets(
     generated.update(p.name for p in workdir.glob("*_transcript.jsonl"))
     generated.update({"runtime_probes.json", "runtime_probes.sh"})
     ranking_evidence = _search_evidence(context or "")
-    path_hints = _missing_path_hints(context or "", workdir)
+    path_hints = missing_path_hints(context or "", workdir)
     if path_hints:
         ranking_evidence += "\nExisting files beside the missing path:\n" + "\n".join(path_hints)
     result = deps.search_fn(
@@ -199,10 +210,174 @@ def _search_with_snippets(
     )
 
 
-def _dynamic_rag_role(
+@dataclass
+class _RoleTools:
+    """State and tool handlers for one role invocation.
+
+    Keeping this state on an object avoids nested functions and ``nonlocal``.
+    The LLM-facing tools below are ordinary methods: search, probe, and submit.
+    """
+
+    name: str
+    workdir: Path
+    artifact_dir: Path
+    session: Any
+    context: str
+    output_path: Path
+    validator: Callable[[str], str]
+    submission_adapter: Callable[[dict], str] | None
+    search_extra_exclude: set[str] | None
+    max_queries: int
+    allow_runtime_probe: bool
+    max_runtime_probes: int
+    deps: RoleDeps
+    rag_llm: ChatLLM
+    trigger: str
+    queries: list[str] = field(default_factory=list, init=False)
+    probes: list[dict[str, Any]] = field(default_factory=list, init=False)
+    submitted: bool = field(default=False, init=False)
+    submission_trace: str | None = field(default=None, init=False)
+    suggested_probe: str | None = field(default=None, init=False)
+    runtime_probe_recommended: bool = field(default=False, init=False)
+    trace_sections: list[str] = field(default_factory=list, init=False)
+
+    def __post_init__(self) -> None:
+        self.trace_sections = [
+            f"# {self.name} dynamic RAG trace",
+            "",
+            f"Trigger: {self.trigger}",
+            "",
+            "Queries below were generated by the role at runtime.",
+        ]
+        match = re.search(r"(?m)^-\s*suggested_probe:\s*(\S+)\s*$", self.context)
+        self.suggested_probe = match.group(1) if match else None
+        self.runtime_probe_recommended = (
+            self.allow_runtime_probe
+            and self.name.startswith("repair_")
+            and self.trigger == "execution_error_and_reviewer_finding"
+            and self.suggested_probe is not None
+        )
+
+    @property
+    def trace_path(self) -> Path:
+        return self.workdir / f"{self.name}_rag_trace.md"
+
+    @property
+    def probe_trace_path(self) -> Path:
+        return self.workdir / f"{self.name}_probe_trace.md"
+
+    def _write_to_output_dirs(self, filename: str, content: str) -> None:
+        for directory in (self.workdir, self.artifact_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / filename).write_text(content)
+
+    def save_trace(self) -> None:
+        self._write_to_output_dirs(
+            self.trace_path.name, "\n".join(self.trace_sections) + "\n"
+        )
+
+    def save_submission(self, raw: str) -> None:
+        if self.submission_adapter is None:
+            return
+        self.submission_trace = f"{self.name}_submission.json"
+        self._write_to_output_dirs(self.submission_trace, raw.strip() + "\n")
+
+    def save_probe_trace(self) -> None:
+        sections = [
+            f"# {self.name} restricted runtime probe trace",
+            "",
+            "These diagnostics are separate from verifier-visible evaluation commands.",
+        ]
+        for index, probe in enumerate(self.probes, 1):
+            sections.extend(
+                [
+                    f"\n## Probe {index}: {probe['kind']} `{probe['target']}`",
+                    f"\n```bash\n{probe['command']}\n```",
+                    f"\n```text\n{probe['observation']}\n```",
+                ]
+            )
+        self._write_to_output_dirs(
+            self.probe_trace_path.name, "\n".join(sections) + "\n"
+        )
+
+    def search_repository(self, arguments: dict) -> str:
+        query = str(arguments.get("query", "")).strip()
+        if len(query) < 8:
+            raise ValueError("query must describe the current uncertainty")
+        if query in self.queries:
+            raise ValueError("duplicate query; refine it from the latest evidence")
+        if len(self.queries) >= self.max_queries:
+            raise ValueError("dynamic RAG query budget exhausted; submit the artifact")
+
+        result = _search_with_snippets(
+            query,
+            self.rag_llm,
+            self.workdir,
+            context=self.context,
+            extra_exclude=self.search_extra_exclude,
+            deps=self.deps,
+        )
+        self.queries.append(query)
+        index = len(self.queries)
+        self.trace_sections.extend(
+            [f"\n## Query {index}\n\n{query}", f"\n## Result {index}\n\n{result}"]
+        )
+        self.save_trace()
+        return result
+
+    def probe_runtime(self, arguments: dict) -> str:
+        if not self.allow_runtime_probe:
+            raise ValueError("runtime probes are disabled for this condition")
+        if len(self.probes) >= self.max_runtime_probes:
+            raise ValueError("runtime probe budget exhausted for this role")
+
+        probe_transcript = self.session.probe_transcript
+        if len(probe_transcript) >= MAX_RUNTIME_PROBES:
+            raise ValueError("runtime probe budget exhausted for this run")
+        reserved = MAX_RUNTIME_PROBES - MAX_REPAIR_ROUNDS
+        if not self.runtime_probe_recommended and len(probe_transcript) >= reserved:
+            raise ValueError(
+                "optional runtime probe budget exhausted; remaining probes are "
+                "reserved for failure-classifier suggested probes"
+            )
+
+        kind = str(arguments.get("kind", "")).strip()
+        target = str(arguments.get("target", "")).strip()
+        command = runtime_probe_command(kind, target)
+        run = self.session.probe(command, timeout=30)
+        observation = runtime_probe_observation(run, clip_text)
+        self.probes.append(
+            {
+                "kind": kind,
+                "target": target,
+                "command": command,
+                "observation": observation,
+            }
+        )
+        self.save_probe_trace()
+        return observation
+
+    def submit_artifact(self, arguments: dict) -> str:
+        if not self.queries:
+            raise ValueError("call search_repo with your own query before submitting")
+        raw = (
+            self.submission_adapter(arguments)
+            if self.submission_adapter is not None
+            else str(arguments.get("content", ""))
+        )
+        content = self.validator(raw)
+        atomic_write_text(self.output_path, content)
+        self.save_submission(raw)
+        self.submitted = True
+        return f"accepted and wrote {self.output_path.name}"
+
+    def should_stop(self) -> bool:
+        return self.submitted or len(self.queries) >= self.max_queries
+
+
+def run_rag_role(
     *,
     name: str,
-    task: str,
     workdir: Path,
     artifact_dir: Path,
     session: Any,
@@ -229,183 +404,70 @@ def _dynamic_rag_role(
     role_llm = deps.llm_factory()
     rag_llm = deps.llm_factory()
     synthesis_llm = deps.llm_factory()
-    queries: list[str] = []
-    submitted = False
-    trace_sections = [
-        f"# {name} dynamic RAG trace",
-        "",
-        f"Trigger: {trigger}",
-        "",
-        "Queries below were generated by the role at runtime.",
-    ]
-    trace_path = workdir / f"{name}_rag_trace.md"
-    probe_trace_path = workdir / f"{name}_probe_trace.md"
-    probes: list[dict[str, Any]] = []
-    submission_trace: str | None = None
-    suggested_probe_match = re.search(
-        r"(?m)^-\s*suggested_probe:\s*(\S+)\s*$",
-        context,
+    tools = _RoleTools(
+        name=name,
+        workdir=workdir,
+        artifact_dir=artifact_dir,
+        session=session,
+        context=context,
+        output_path=output_path,
+        validator=validator,
+        submission_adapter=submission_adapter,
+        search_extra_exclude=search_extra_exclude,
+        max_queries=max_queries,
+        allow_runtime_probe=allow_runtime_probe,
+        max_runtime_probes=max_runtime_probes_per_role,
+        deps=deps,
+        rag_llm=rag_llm,
+        trigger=trigger,
     )
-    runtime_probe_recommended = (
-        allow_runtime_probe
-        and name.startswith("repair_")
-        and trigger == "execution_error_and_reviewer_finding"
-        and suggested_probe_match is not None
-    )
-    suggested_probe = suggested_probe_match.group(1) if suggested_probe_match else None
 
-    def save_trace() -> None:
-        text = "\n".join(trace_sections) + "\n"
-        for d in (workdir, artifact_dir):
-            d.mkdir(parents=True, exist_ok=True)
-            (d / trace_path.name).write_text(text)
-
-    def save_submission(raw: str) -> None:
-        nonlocal submission_trace
-        if submission_adapter is None:
-            return
-        submission_trace = f"{name}_submission.json"
-        for d in (workdir, artifact_dir):
-            d.mkdir(parents=True, exist_ok=True)
-            (d / submission_trace).write_text(raw.strip() + "\n")
-
-    def save_probe_trace() -> None:
-        sections = [
-            f"# {name} restricted runtime probe trace",
-            "",
-            "These diagnostics are separate from verifier-visible evaluation commands.",
-        ]
-        for index, probe in enumerate(probes, 1):
-            sections.extend(
-                [
-                    f"\n## Probe {index}: {probe['kind']} `{probe['target']}`",
-                    f"\n```bash\n{probe['command']}\n```",
-                    f"\n```text\n{probe['observation']}\n```",
-                ]
-            )
-        text = "\n".join(sections) + "\n"
-        for d in (workdir, artifact_dir):
-            d.mkdir(parents=True, exist_ok=True)
-            (d / probe_trace_path.name).write_text(text)
-
-    def dynamic_search(arguments: dict) -> str:
-        query = str(arguments.get("query", "")).strip()
-        if len(query) < 8:
-            raise ValueError("query must describe the current uncertainty")
-        if query in queries:
-            raise ValueError("duplicate query; refine it from the latest evidence")
-        if len(queries) >= max_queries:
-            raise ValueError("dynamic RAG query budget exhausted; submit the artifact")
-        result = _search_with_snippets(
-            query, rag_llm, workdir,
-            context=context,
-            extra_exclude=search_extra_exclude,
-            deps=deps,
-        )
-        queries.append(query)
-        trace_sections.extend([
-            f"\n## Query {len(queries)}\n\n{query}",
-            f"\n## Result {len(queries)}\n\n{result}",
-        ])
-        save_trace()
-        return result
-
-    def runtime_probe(arguments: dict) -> str:
-        if not allow_runtime_probe:
-            raise ValueError("runtime probes are disabled for this condition")
-        role_probe_limit = max_runtime_probes_per_role
-        if len(probes) >= role_probe_limit:
-            raise ValueError("runtime probe budget exhausted for this role")
-        probe_transcript = getattr(session, "probe_transcript", None)
-        probe_fn = getattr(session, "probe", None)
-        if probe_transcript is None or probe_fn is None:
-            raise ValueError("session does not support separated runtime probes")
-        if len(probe_transcript) >= MAX_RUNTIME_PROBES:
-            raise ValueError("runtime probe budget exhausted for this run")
-        if (
-            not runtime_probe_recommended
-            and len(probe_transcript) >= MAX_RUNTIME_PROBES - MAX_REPAIR_ROUNDS
-        ):
-            raise ValueError(
-                "optional runtime probe budget exhausted; remaining probes are "
-                "reserved for failure-classifier suggested probes"
-            )
-        kind = str(arguments.get("kind", "")).strip()
-        target = str(arguments.get("target", "")).strip()
-        command = _runtime_probe_command(kind, target)
-        run = probe_fn(command, timeout=30)
-        observation = _runtime_probe_observation(run, _clip)
-        probes.append(
-            {
-                "kind": kind,
-                "target": target,
-                "command": command,
-                "observation": observation,
-            }
-        )
-        save_probe_trace()
-        return observation
-
-    def submit(arguments: dict) -> str:
-        nonlocal submitted
-        if not queries:
-            raise ValueError("call search_repo with your own query before submitting")
-        raw = (
-            submission_adapter(arguments)
-            if submission_adapter is not None
-            else str(arguments.get("content", ""))
-        )
-        content = validator(raw)
-        _atomic_write_text(output_path, content)
-        save_submission(raw)
-        submitted = True
-        return f"accepted and wrote {output_path.name}"
-
-    execution_feedback_trigger = trigger in {
+    has_execution_feedback = trigger in {
         "execution_result",
         "repair_execution_result",
         "execution_error_and_reviewer_finding",
     }
-    action_nudge = (
-        (
+    if not has_execution_feedback:
+        action_nudge = (
+            "Call search_repo with a query derived from the current context, "
+            f"or call {submit_name} when the artifact is grounded and complete."
+        )
+    elif tools.runtime_probe_recommended:
+        action_nudge = (
             "The failure classifier suggests runtime_probe "
-            f"`{suggested_probe}`. Use it if repository evidence is insufficient; "
-            "you may submit without probing when the repair is already grounded."
-            if runtime_probe_recommended
-            else "Search the exact exception symbol, failing source path, or disputed "
+            f"`{tools.suggested_probe}`. Use it if repository evidence is "
+            "insufficient; you may submit without probing when the repair is "
+            "already grounded."
+        )
+    else:
+        action_nudge = (
+            "Search the exact exception symbol, failing source path, or disputed "
             "API from the latest execution evidence before submitting the artifact."
         )
-        if execution_feedback_trigger
-        else f"Call search_repo with a query derived from the current context, "
-        f"or call {submit_name} when the artifact is grounded and complete."
-    )
 
     tool_schemas = [SEARCH_REPO_TOOL]
-    tool_handlers = {"search_repo": dynamic_search, submit_name: submit}
+    tool_handlers = {
+        "search_repo": tools.search_repository,
+        submit_name: tools.submit_artifact,
+    }
     if allow_runtime_probe:
         tool_schemas.append(RUNTIME_PROBE_TOOL)
-        tool_handlers["runtime_probe"] = runtime_probe
+        tool_handlers["runtime_probe"] = tools.probe_runtime
     tool_schemas.append(submit_schema or _submit_tool(submit_name, submit_description))
 
     result = run_agent(
-        task,
-        session,
         role_llm,
         max_steps=max_steps,
-        compress=False,
         system_prompt=instruction,
         initial_user_message=context,
         action_nudge=action_nudge,
         tool_schemas=tool_schemas,
         tool_handlers=tool_handlers,
-        stop_when=lambda: submitted or (
-            len(queries) >= max_queries
-        ),
-        stop_summary=f"{name} search phase complete",
+        stop_when=tools.should_stop,
     )
 
     synthesis_steps = synthesis_peak = 0
-    if queries and not submitted:
+    if tools.queries and not tools.submitted:
         synthesis_messages = [
             {
                 "role": "system",
@@ -425,12 +487,13 @@ def _dynamic_rag_role(
                 "content": (
                     context
                     + "\n\n# Runtime-generated RAG trace\n\n"
-                    + trace_path.read_text(errors="replace")
+                    + tools.trace_path.read_text(errors="replace")
                 ),
             },
         ]
         last_error: str | None = None
         last_candidate: str | None = None
+        final_validator = synthesis_validator or validator
         for _ in range(synthesis_attempts):
             reply = synthesis_llm.chat(synthesis_messages)
             synthesis_steps += 1
@@ -438,7 +501,7 @@ def _dynamic_rag_role(
             synthesis_messages.append({"role": "assistant", "content": reply.content})
             candidate = reply.content
             try:
-                validated = (synthesis_validator or validator)(candidate)
+                validated = final_validator(candidate)
             except Exception as exc:
                 message = str(exc)
                 near_identical = (
@@ -462,47 +525,54 @@ def _dynamic_rag_role(
                     )
                 synthesis_messages.append({"role": "user", "content": correction})
                 continue
-            _atomic_write_text(output_path, validated)
-            save_submission(candidate)
-            submitted = True
+            atomic_write_text(output_path, validated)
+            tools.save_submission(candidate)
+            tools.submitted = True
             break
         _save_messages(f"{name}_synthesis", synthesis_messages, workdir, artifact_dir)
 
     _save_role_transcript(name, result, workdir, artifact_dir)
-    if not queries:
+    if not tools.queries:
         raise RuntimeError(f"{name} submitted no runtime-generated RAG query")
-    if not submitted:
+    if not tools.submitted:
         raise RuntimeError(f"{name} failed to synthesize a valid artifact")
 
+    role_usage = role_llm.usage.as_dict()
+    synthesis_usage = synthesis_llm.usage.as_dict()
+    combined_usage = {
+        key: role_usage[key] + synthesis_usage[key]
+        for key in (
+            "llm_calls",
+            "prompt_tokens",
+            "cache_hit_tokens",
+            "completion_tokens",
+        )
+    }
+    combined_usage["cost_yuan"] = round(
+        role_usage["cost_yuan"] + synthesis_usage["cost_yuan"], 4
+    )
     role = {
         "steps": result.steps + synthesis_steps,
-        "errors": result.errors,
+        "errors": 0,
         "format_errors": result.format_errors,
-        "gave_final": submitted,
-        "usage": {
-            "llm_calls": role_llm.usage.as_dict()["llm_calls"] + synthesis_llm.usage.as_dict()["llm_calls"],
-            "prompt_tokens": role_llm.usage.as_dict()["prompt_tokens"] + synthesis_llm.usage.as_dict()["prompt_tokens"],
-            "cache_hit_tokens": role_llm.usage.as_dict()["cache_hit_tokens"] + synthesis_llm.usage.as_dict()["cache_hit_tokens"],
-            "completion_tokens": role_llm.usage.as_dict()["completion_tokens"] + synthesis_llm.usage.as_dict()["completion_tokens"],
-            "cost_yuan": round(role_llm.usage.as_dict()["cost_yuan"] + synthesis_llm.usage.as_dict()["cost_yuan"], 4),
-        },
+        "artifact_submitted": tools.submitted,
+        "usage": combined_usage,
         "peak_ctx_tokens": max(result.peak_ctx_tokens, synthesis_peak),
         "tool_counts": result.tool_counts,
         "command_indexes": [],
-        "submission_trace": submission_trace,
-        "runtime_probes": len(probes),
-        "runtime_probe_required": False,
-        "runtime_probe_recommended": runtime_probe_recommended,
-        "runtime_probe_hint": suggested_probe,
-        "probe_trace": probe_trace_path.name if probes else None,
+        "submission_trace": tools.submission_trace,
+        "runtime_probes": len(tools.probes),
+        "runtime_probe_recommended": tools.runtime_probe_recommended,
+        "runtime_probe_hint": tools.suggested_probe,
+        "probe_trace": tools.probe_trace_path.name if tools.probes else None,
     }
     rag = {
         "dynamic": True,
         "trigger": trigger,
-        "queries": queries,
-        "calls": len(queries),
+        "queries": tools.queries,
+        "calls": len(tools.queries),
         "max_queries": max_queries,
         "usage": rag_llm.usage.as_dict(),
-        "trace": trace_path.name,
+        "trace": tools.trace_path.name,
     }
     return role, rag

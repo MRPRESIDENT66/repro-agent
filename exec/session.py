@@ -6,8 +6,8 @@ state**: a `pip install` or a written script in one step persists for the next
 (state lives in the filesystem, not the process). That's what makes it a
 *session* rather than a string of disposable containers.
 
-This is the M1 backend (subprocess + MPS, for human-reviewed repos). Untrusted
-repos get a Docker/VM backend later — same interface.
+This is the lightweight subprocess backend for human-reviewed repositories.
+Untrusted repositories use :class:`exec.docker_session.DockerSession`.
 
 Every command is recorded so the whole run is replayable and auditable.
 """
@@ -118,12 +118,6 @@ class Session:
         """Run an audited diagnostic command outside the evaluation transcript."""
         return self._run(command, timeout, self.probe_transcript)
 
-    def read_file(self, path: str) -> str:
-        f = self.workdir / path
-        if not f.exists():
-            return f"ERROR: file not found: {path}"
-        return f.read_text(encoding="utf-8", errors="replace")
-
     def write_file(self, path: str, content: str) -> None:
         f = self.workdir / path
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -140,3 +134,6 @@ class Session:
 
     def probe_replay_script(self) -> str:
         return "\n".join(r.command for r in self.probe_transcript)
+
+    def close(self) -> None:
+        """Local subprocess sessions have no external resource to release."""

@@ -173,7 +173,6 @@ def make_config(attempt: str) -> OracleConfig:
             venv_python=ROOT / ".venv" / "bin" / "python",
             default_timeout=2700,
         ),
-        session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(N_EXAMPLES, EPSILON),
         public_result_protocol=EVIDENCE,

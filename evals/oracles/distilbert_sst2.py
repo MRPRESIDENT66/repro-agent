@@ -171,7 +171,6 @@ def make_config(attempt: str) -> OracleConfig:
         make_session=lambda: Session(
             workdir, venv_python=ORACLE_VENV / "bin" / "python", default_timeout=900
         ),
-        session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(),
         chance_level=CHANCE_LEVEL,

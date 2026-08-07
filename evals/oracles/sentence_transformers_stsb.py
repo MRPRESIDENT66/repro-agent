@@ -236,7 +236,6 @@ def make_config(attempt: str) -> OracleConfig:
                 "OMP_NUM_THREADS": "4",
             },
         ),
-        session_go_offline=False,
         execution_backend="local-offline-cpu-or-mps",
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(),

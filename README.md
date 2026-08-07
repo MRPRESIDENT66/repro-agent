@@ -13,8 +13,8 @@ Scope is honest: this is prototype-scale N=5 evidence across six development
 tasks plus one post-freeze held-out repository, not a battle-tested universal
 runtime. See [Scope / Limitations](#scope--limitations).
 
-Orchestrated with **LangGraph** (a `StateGraph` of role nodes with a conditional
-repair loop); the retrieval, failure-classified repair, sandboxed execution, and
+Orchestrated with **LangGraph** (workflow stages plus a conditional repair loop);
+the retrieval, failure-classified repair, sandboxed execution, and
 blind verifier are implemented directly on a provider-agnostic OpenAI-compatible
 API. Selected tool capabilities are also exposed over **MCP** for external clients.
 
@@ -31,7 +31,7 @@ API. Selected tool capabilities are also exposed over **MCP** for external clien
 
 | Capability | What it is here | Where |
 |---|---|---|
-| **Multi-agent orchestration (LangGraph)** | A LangGraph `StateGraph` of role nodes (Navigator → Reproducer → Critic → execute → Reviewer → Repair) with a conditional repair loop and per-role context isolation | [`agent/pipeline.py`](agent/pipeline.py) |
+| **Multi-agent orchestration (LangGraph)** | A `StateGraph` routes navigation, generation, critique, execution, and repair; in `full` mode each execution is independently reviewed before repair | [`agent/pipeline.py`](agent/pipeline.py) |
 | **Tool use / function calling** | Native OpenAI function-calling agent loop with sequential tool dispatch | [`agent/loop.py`](agent/loop.py) |
 | **Tool interoperability (MCP)** | Repo search and restricted diagnostic/command interfaces exposed separately over the Model Context Protocol | [`mcp_server.py`](mcp_server.py) |
 | **Self-correction (Reflexion-style)** | A failure-classified, execution-grounded repair loop; patch-first edits over blind regeneration | [`agent/repair.py`](agent/repair.py), [`agent/failure.py`](agent/failure.py) |

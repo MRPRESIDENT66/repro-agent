@@ -28,16 +28,10 @@ class OracleConfig:
 
     # Session lifecycle
     make_session: Callable[[], Any]
+    copy_clean_source: Callable[[], None]
+    execute_eval: Callable[[Any], Any]
     session_go_offline: bool = False
     execution_backend: str = "unspecified"
-
-    # Oracle lifecycle
-    copy_clean_source: Callable[..., None] = field(default=lambda *args: None)
-    execute_eval: Callable[[Any], Any] = field(default=lambda s: None)
-
-    # Validation
-    validate_report: Callable[[str], str] | None = None
-    validate_review: Callable[[str], str] | None = None
 
     # Random-chance floor for a higher-is-better metric (e.g. 50.0 for binary
     # AUROC, 100/num_classes for balanced top-1 accuracy). When set, the generic
@@ -49,13 +43,4 @@ class OracleConfig:
     search_extra_exclude: set[str] = field(default_factory=set)
 
     # Blind workspace check (optional)
-    assert_blind_workspace: Callable[..., None] | None = None
-
-    # Files copied to artifact_dir after the run
-    handoff_files: tuple[str, ...] = (
-        "navigator_report.md",
-        "review_report.md",
-        "reproducer_public_log.txt",
-    )
-
-    retrieval_ranker: str = "exact_path_symbol_plus_bm25_llm"
+    assert_blind_workspace: Callable[[], None] | None = None

@@ -1,7 +1,7 @@
-"""Orchestration tests for run_oracle's ablation conditions (P0-3).
+"""Orchestration tests for the three pipeline conditions.
 
-Verifies — deterministically, no real LLM/exec — that the five pipeline
-conditions share one execution budget, stop on a contract pass, and route the
+Verifies deterministically, without real LLM calls, that the conditions share
+one execution budget, stop on a contract pass, and route the
 right roles (retry vs repair vs reviewer). A scripted auto-responder drives every
 role; a controllable `execute_eval` stub decides each execution's success.
 """
@@ -17,7 +17,6 @@ from agent import pipeline
 from agent.contracts import (
     generic_task_context as _generic_task_context,
     make_generic_code_validator as _make_generic_code_validator,
-    role_prompts as _role_prompts,
 )
 from agent.diagnostics import make_generic_contract_diagnostics as _make_generic_contract_diagnostics
 from agent.generic_prompts import GENERIC_PROMPTS
@@ -28,9 +27,9 @@ from agent.repair import (
     failed_import_packages as _failed_import_packages,
     make_generic_repair_validator as _make_generic_repair_validator,
 )
-from agent.roles import _atomic_write_text
+from agent.roles import atomic_write_text
+from agent.runtime_probe import MAX_RUNTIME_PROBES
 from exec.session import RunResult, Session
-from agent.loop import run_agent
 
 
 class _AutoLLM:
@@ -49,13 +48,28 @@ class _AutoLLM:
         submit = next((n for n in names if n.startswith("submit_")), None)
         if submit:
             if "review" in submit:
-                content = "REVIEW_STATUS: PASS\n"
+                content = """Source-grounded audit of the complete evaluation path.
+- `model`: `repo/model.py:12` defines model construction and checkpoint loading.
+- `data`: `repo/data.py:30` defines the requested test split and sample order.
+- `preprocessing`: `repo/preprocess.py:8` defines transforms and normalization.
+- `metric`: `repo/metric.py:20` defines the metric and aggregation semantics.
+The execution artifact follows these definitions and the public output contract.
+REVIEW_STATUS: PASS
+"""
+            elif submit == "submit_handoff":
+                content = (
+                    "Source-grounded Navigator handoff covering the evaluation entry, "
+                    "model and data assets, preprocessing, metric semantics, and open "
+                    "risks. Repository evidence identifies the exact paths required "
+                    "by the public task. "
+                    + ("evidence " * 30)
+                )
             elif submit == "submit_patch":
                 self._submissions += 1
                 return Reply("", [ToolCall("s", submit, {"edits": [
                     {
-                        "old": "print('REPRO_RESULT')\n",
-                        "new": "print('REPRO_RESULT')\n"
+                        "old": "output_path = 'predictions.json'\n",
+                        "new": "output_path = 'predictions.json'\n"
                                f"repair_marker = {self._submissions}\n",
                     }
                 ], "rationale": "mark that repair used the existing file"})])
@@ -68,8 +82,11 @@ class _AutoLLM:
                     else ""
                 )
                 content = (
+                    "import json\n"
+                    "from pathlib import Path\n\n"
                     "output_path = 'predictions.json'\n"
-                    "print('REPRO_RESULT')\n"
+                    "def write_predictions(values):\n"
+                    "    Path(output_path).write_text(json.dumps(values))\n"
                     + repair_line
                 )
             return Reply("", [ToolCall("s", submit, {"content": content})])
@@ -102,7 +119,7 @@ def _make_config(tmp_path: Path, outcomes: list[bool]) -> OracleConfig:
             predictions.unlink(missing_ok=True)
         rr = RunResult(
             command="python eval.py",
-            stdout=('REPRO_RESULT {"metric":"acc","actual":50.0,"num_examples":10}' if ok else ""),
+            stdout=("evaluation complete" if ok else ""),
             stderr=("" if ok else "boom: it failed"),
             exit_code=(0 if ok else 1),
             timed_out=False,
@@ -137,29 +154,11 @@ def _make_config(tmp_path: Path, outcomes: list[bool]) -> OracleConfig:
         make_session=lambda: Session(workdir),
         copy_clean_source=lambda: workdir.mkdir(exist_ok=True),
         execute_eval=execute_eval,
-        validate_report=lambda s: s or "report",
-        validate_review=lambda s: s or "review",
     )
 
 
 def _result(cfg: OracleConfig) -> dict:
     return json.loads((cfg.workdir / "result.json").read_text())
-
-
-def test_role_system_prompt_replaces_default_reproduction_prompt(tmp_path: Path) -> None:
-    llm = ScriptedLLM([
-        Reply("", [ToolCall("c1", "finish", {"summary": "done"})])
-    ])
-    result = run_agent(
-        "private task",
-        Session(tmp_path / "ws"),
-        llm,
-        system_prompt="You are the Navigator. Write a handoff.",
-    )
-
-    assert result.gave_final
-    assert llm.calls[0][0]["content"] == "You are the Navigator. Write a handoff."
-    assert "private task" not in llm.calls[0][0]["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +167,7 @@ def test_atomic_write_text_replaces_complete_file_without_temp_artifacts(tmp_pat
     output = tmp_path / "eval.py"
     output.write_text("old\n")
 
-    _atomic_write_text(output, "new complete content\n")
+    atomic_write_text(output, "new complete content\n")
 
     assert output.read_text() == "new complete content\n"
     assert list(tmp_path.glob(".eval.py.*.tmp")) == []
@@ -206,8 +205,7 @@ def test_loop_stops_on_contract_pass(tmp_path, monkeypatch):
         run_oracle(cfg, pipeline=pipeline)
         res = _result(cfg)
         # The loop stops as soon as the deterministic contract passes (3rd exec),
-        # not at the budget. (Final verdict match also depends on the provenance
-        # gate, which is covered in test_verify.py — not asserted here.)
+        # not at the full repair budget.
         assert res["eval_executions"] == 3, f"{pipeline} should stop on the pass"
         assert res["public_evidence_found"] is True
 
@@ -250,12 +248,6 @@ def test_unknown_pipeline_rejected(tmp_path, monkeypatch):
     cfg = _make_config(tmp_path, outcomes=[True])
     with pytest.raises(ValueError, match="unknown pipeline"):
         run_oracle(cfg, pipeline="turbo")
-
-
-def test_role_prompts_are_always_generic(tmp_path):
-    cfg = _make_config(tmp_path, outcomes=[True])
-
-    assert _role_prompts() == GENERIC_PROMPTS
 
 
 def test_generic_task_context_exposes_artifact_contract_not_private_target(tmp_path):
@@ -419,7 +411,7 @@ def test_generic_context_and_runtime_probe_are_always_enabled(tmp_path, monkeypa
 
     result = _result(cfg)
     assert result["runtime_probe_enabled"] is True
-    assert result["runtime_probe_budget"] == pipeline.MAX_RUNTIME_PROBES
+    assert result["runtime_probe_budget"] == MAX_RUNTIME_PROBES
     assert result["total_runtime_probes"] == 0
 
     navigator_messages = [

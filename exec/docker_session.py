@@ -37,7 +37,6 @@ class DockerSession:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.name = "repro-" + uuid.uuid4().hex[:8]
         self.default_timeout = default_timeout
-        self.offline = False
         self.transcript: list[RunResult] = []
         self.probe_transcript: list[RunResult] = []
         subprocess.run(
@@ -63,9 +62,23 @@ class DockerSession:
                 ["docker", "exec", self.name, "bash", "-c", command],
                 capture_output=True, text=True, timeout=timeout,
             )
-            r = RunResult(command, p.stdout, p.stderr, p.returncode, False, time.monotonic() - start)
+            r = RunResult(
+                command,
+                p.stdout,
+                p.stderr,
+                p.returncode,
+                False,
+                time.monotonic() - start,
+            )
         except subprocess.TimeoutExpired as e:
-            r = RunResult(command, e.stdout or "", e.stderr or "", -1, True, time.monotonic() - start)
+            r = RunResult(
+                command,
+                e.stdout or "",
+                e.stderr or "",
+                -1,
+                True,
+                time.monotonic() - start,
+            )
         transcript.append(r)
         return r
 
@@ -77,12 +90,10 @@ class DockerSession:
 
     def go_offline(self) -> None:
         """End the Provision phase: cut the container's network for Execution."""
-        subprocess.run(["docker", "network", "disconnect", "bridge", self.name], capture_output=True)
-        self.offline = True
-
-    def read_file(self, path: str) -> str:
-        f = self.workdir / path
-        return f.read_text(errors="replace") if f.exists() else f"ERROR: not found: {path}"
+        subprocess.run(
+            ["docker", "network", "disconnect", "bridge", self.name],
+            capture_output=True,
+        )
 
     def write_file(self, path: str, content: str) -> None:
         f = self.workdir / path
@@ -114,6 +125,3 @@ class DockerSession:
 
     def close(self) -> None:
         subprocess.run(["docker", "rm", "-f", self.name], capture_output=True)
-
-    def __enter__(self): return self
-    def __exit__(self, *exc): self.close()

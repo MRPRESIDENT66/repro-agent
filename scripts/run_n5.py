@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import subprocess
 import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,14 +43,59 @@ E1_TASKS = [
 E2_TASKS = [
     ("distilbert", "run_distilbert_multi_rag.py", "DISTILBERT_ATTEMPT"),
     ("detectors_rn18", "run_detectors_resnet18_cifar100_multi_rag.py", "DETECTORS_ATTEMPT"),
+    ("mmpretrain", "run_mmpretrain_multi_rag.py", "MMPRETRAIN_ATTEMPT"),
+    ("openood", "run_openood_multi_rag.py", "OPENOOD_MULTI_RAG_ATTEMPT"),
 ]
 PIPELINES = ["solo", "solo-repair", "full"]
 
 
-def build_specs(seeds: int, include_robustbench: bool) -> list[RunSpec]:
+def write_run_manifest(specs: list[RunSpec]) -> Path:
+    """Record enough local provenance to distinguish repeated experiment batches."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, capture_output=True, check=True
+    ).stdout.strip()
+    diff = subprocess.run(
+        ["git", "diff", "--binary", "HEAD"], cwd=ROOT, text=True, capture_output=True, check=True
+    ).stdout
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from agent.config import LLM_MODEL, LLM_THINKING
+
+    payload = {
+        "started_at_utc": timestamp,
+        "agent_commit": commit,
+        "working_tree_clean": not bool(diff),
+        "working_tree_diff_sha256": hashlib.sha256(diff.encode()).hexdigest() if diff else None,
+        "llm_model": LLM_MODEL,
+        "llm_thinking": LLM_THINKING,
+        "temperature": 0.0,
+        "max_eval_executions": 5,
+        "openood_execution_backend": os.getenv(
+            "OPENOOD_EXECUTION_BACKEND", "docker"
+        ),
+        "runs": [
+            {
+                "group": spec.group,
+                "task": spec.task,
+                "pipeline": spec.pipeline,
+                "attempt": spec.attempt,
+            }
+            for spec in specs
+        ],
+    }
+    path = LOG_DIR / f"manifest_{timestamp}.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    if diff:
+        (LOG_DIR / f"agent_diff_{timestamp}.patch").write_text(diff)
+    return path
+
+
+def build_specs(repeats: int, include_robustbench: bool) -> list[RunSpec]:
     specs: list[RunSpec] = []
     e1_tasks = E1_TASKS if include_robustbench else [t for t in E1_TASKS if t[0] != "robustbench"]
-    for seed in range(1, seeds + 1):
+    for repeat in range(1, repeats + 1):
         for task, script, env_name in e1_tasks:
             specs.append(
                 RunSpec(
@@ -55,7 +103,7 @@ def build_specs(seeds: int, include_robustbench: bool) -> list[RunSpec]:
                     task=task,
                     script=script,
                     attempt_env=env_name,
-                    attempt=f"e1_n5_s{seed}",
+                    attempt=f"e1_n5_s{repeat}",
                     pipeline="full",
                 )
             )
@@ -67,7 +115,7 @@ def build_specs(seeds: int, include_robustbench: bool) -> list[RunSpec]:
                         task=task,
                         script=script,
                         attempt_env=env_name,
-                        attempt=f"e2_n5_s{seed}_{pipeline}",
+                        attempt=f"e2_n5_s{repeat}_{pipeline}",
                         pipeline=pipeline,
                     )
                 )
@@ -136,7 +184,10 @@ def run_lock():
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run E1+E2 N=5 experiments.")
-    parser.add_argument("--seeds", type=int, default=5)
+    parser.add_argument("--repeats", "--seeds", dest="repeats", type=int, default=5)
+    parser.add_argument("--group", choices=("all", "e1_n5", "e2_n5"), default="all")
+    parser.add_argument("--task", action="append", choices=sorted({t[0] for t in E1_TASKS + E2_TASKS}))
+    parser.add_argument("--pipeline", action="append", choices=PIPELINES)
     parser.add_argument("--force", action="store_true", help="rerun even if result.json exists")
     parser.add_argument("--stop-on-fail", action="store_true")
     parser.add_argument("--include-robustbench", action="store_true", default=True)
@@ -144,7 +195,17 @@ def main() -> int:
     args = parser.parse_args()
 
     with run_lock():
-        specs = build_specs(args.seeds, args.include_robustbench)
+        specs = build_specs(args.repeats, args.include_robustbench)
+        if args.group != "all":
+            specs = [spec for spec in specs if spec.group == args.group]
+        if args.task:
+            selected = set(args.task)
+            specs = [spec for spec in specs if spec.task in selected]
+        if args.pipeline:
+            selected = set(args.pipeline)
+            specs = [spec for spec in specs if spec.pipeline in selected]
+        manifest = write_run_manifest(specs)
+        print(f"manifest: {manifest.relative_to(ROOT)}", flush=True)
         print(f"total specs: {len(specs)}", flush=True)
         failures = 0
         for index, spec in enumerate(specs, start=1):

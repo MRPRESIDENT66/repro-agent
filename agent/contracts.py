@@ -45,6 +45,19 @@ def validate_review(content: str) -> str:
     if not matches:
         raise ValueError("review must end with REVIEW_STATUS: PASS or REPAIR_REQUIRED")
     body = re.sub(r"[*`]*REVIEW_STATUS:\s*(?:PASS|REPAIR_REQUIRED)[*`]*\s*$", "", content.rstrip()).rstrip()
+    if matches[-1] == "PASS":
+        missing = []
+        for category in ("model", "data", "preprocessing", "metric"):
+            line = re.search(rf"(?im)^\s*-\s*`?{category}`?\s*:\s*(.+)$", body)
+            if line is None or not re.search(
+                r"`[^`\n]+\.(?:py|ya?ml|json|toml|cfg|ini|sh)(?::\d+)?`",
+                line.group(1),
+            ):
+                missing.append(category)
+        if missing:
+            raise ValueError(
+                "PASS review lacks source-path evidence for: " + ", ".join(missing)
+            )
     return f"{body}\n\nREVIEW_STATUS: {matches[-1]}\n"
 
 

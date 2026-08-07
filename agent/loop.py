@@ -190,6 +190,8 @@ def _msg_len(m: Message) -> int:
 
 def _assistant_msg(reply: Reply) -> Message:
     msg: Message = {"role": "assistant", "content": reply.content}
+    if reply.reasoning_content:
+        msg["reasoning_content"] = reply.reasoning_content
     if reply.tool_calls:
         msg["tool_calls"] = [
             {

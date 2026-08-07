@@ -15,6 +15,7 @@ Every command is recorded so the whole run is replayable and auditable.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -41,16 +42,20 @@ class Session:
         workdir: str | Path,
         venv_python: str | Path | None = None,
         default_timeout: int = 180,
+        extra_env: dict[str, str] | None = None,
     ) -> None:
         self.workdir = Path(workdir).resolve()
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.default_timeout = default_timeout
         self.transcript: list[RunResult] = []
         self.probe_transcript: list[RunResult] = []
-        self._env = self._clean_env(venv_python)
+        self._env = self._clean_env(venv_python, extra_env)
 
     @staticmethod
-    def _clean_env(venv_python: str | Path | None) -> dict[str, str]:
+    def _clean_env(
+        venv_python: str | Path | None,
+        extra_env: dict[str, str] | None = None,
+    ) -> dict[str, str]:
         # Deliberately minimal: no inherited secrets (API keys/tokens), just
         # enough to run Python + reach the user caches (torch.hub / HF datasets).
         path = "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -63,6 +68,14 @@ class Session:
         for k in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"):
             if k in os.environ:
                 env[k] = os.environ[k]
+        for key, value in (extra_env or {}).items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise ValueError(f"invalid environment variable name: {key!r}")
+            if re.search(
+                r"(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?)$", key, re.I
+            ):
+                raise ValueError(f"refusing to inject secret-like variable: {key}")
+            env[key] = str(value)
         return env
 
     def _run(

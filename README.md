@@ -9,14 +9,19 @@ writes and executes an evaluation program with **native tool calling**,
 **independent, fail-closed evaluation harness** that recomputes the metric from
 per-sample outputs — the agent never sees the target number.
 
-Scope is honest: this is prototype-scale evidence (a handful of tasks, small
-sample counts), not a battle-tested universal runtime. The hardest task is not
-yet stable. See [Scope / Limitations](#scope--limitations).
+Scope is honest: this is prototype-scale N=5 evidence across six tasks, not a
+battle-tested universal runtime. See [Scope / Limitations](#scope--limitations).
 
 Orchestrated with **LangGraph** (a `StateGraph` of role nodes with a conditional
 repair loop); the retrieval, failure-classified repair, sandboxed execution, and
 blind verifier are implemented directly on a provider-agnostic OpenAI-compatible
-API. The same toolbelt is also exposed over **MCP** for any MCP client.
+API. Selected tool capabilities are also exposed over **MCP** for external clients.
+
+| Evidence | Result |
+|---|---:|
+| Fresh full-pipeline coverage across 6 tasks | **27 verified passes / 30 runs** |
+| Four-task ablation, `solo` → `solo-repair` → `full` | **7/20 → 14/20 → 17/20 verified** |
+| Hardest task (OpenOOD), `solo` → `full` | **0/5 → 4/5 verified** |
 
 ![Architecture: blind inputs feed a generic role pipeline that emits per-sample predictions, which an independent verifier recomputes against pinned gold labels.](docs/architecture.svg)
 
@@ -25,14 +30,14 @@ API. The same toolbelt is also exposed over **MCP** for any MCP client.
 | Capability | What it is here | Where |
 |---|---|---|
 | **Multi-agent orchestration (LangGraph)** | A LangGraph `StateGraph` of role nodes (Navigator → Reproducer → Critic → execute → Reviewer → Repair) with a conditional repair loop and per-role context isolation | [`agent/pipeline.py`](agent/pipeline.py) |
-| **Tool use / function calling** | Native OpenAI function-calling agent loop, sequential tool dispatch, context compression | [`agent/loop.py`](agent/loop.py) |
-| **Tool interoperability (MCP)** | The toolbelt (repo search, runtime probe, sandboxed execution) exposed over the Model Context Protocol for any MCP client | [`mcp_server.py`](mcp_server.py) |
+| **Tool use / function calling** | Native OpenAI function-calling agent loop with sequential tool dispatch | [`agent/loop.py`](agent/loop.py) |
+| **Tool interoperability (MCP)** | Repo search and restricted diagnostic/command interfaces exposed separately over the Model Context Protocol | [`mcp_server.py`](mcp_server.py) |
 | **Self-correction (Reflexion-style)** | A failure-classified, execution-grounded repair loop; patch-first edits over blind regeneration | [`agent/repair.py`](agent/repair.py), [`agent/failure.py`](agent/failure.py) |
 | **RAG / retrieval** | Repo-navigation retrieval: BM25 lexical search + path/symbol signals + LLM reranking + dynamic query rewriting | [`retrieval/`](retrieval/) |
-| **LLM evaluation & guardrails** | Blind, fail-closed verifier that recomputes the metric from per-sample artifacts and rejects unverifiable / leaked outputs | [`verify/`](verify/) |
-| **Sandboxed code execution** | Subprocess + Docker execution sessions with two-phase network isolation | [`exec/`](exec/) |
+| **LLM evaluation & guardrails** | Blind, fail-closed verifier that recomputes metrics from per-sample artifacts while hidden targets/gold stay outside agent context | [`verify/`](verify/) |
+| **Isolated code execution** | Subprocess sessions plus optional resource-limited Docker sessions with network cutoff | [`exec/`](exec/) |
 | **Observability** | Per-call token + cost accounting, full transcripts, and replayable command scripts | [`agent/llm.py`](agent/llm.py) |
-| **Evaluation methodology** | Budget-fair ablation across orchestration depths, `pass@k`, mean cost, failure-mode breakdown | [`evals/`](evals/) |
+| **Evaluation methodology** | Budget-fair repeated-run ablation across orchestration depths, mean cost, and failure-mode breakdown | [`evals/`](evals/) |
 | **Deterministic agent testing** | `ScriptedLLM` drives the whole control flow with no API/tokens for fast, reproducible tests | [`tests/`](tests/) |
 
 Stack: Python, **LangGraph**, **MCP** (Model Context Protocol), OpenAI-compatible
@@ -69,20 +74,20 @@ Navigator ──handoff──▶ Reproducer ──program──▶ Critic
 | Navigator | public task, repo snippets, retrieved evidence | Find entry points, assets, metric semantics, and unresolved risks. |
 | Reproducer | public task, navigator handoff, retrieved source | Write the complete evaluation script and output per-sample predictions. |
 | Critic | generated code, source evidence | Audit code before execution without seeing verifier gold or target values. |
-| Reviewer | code, execution log, public verifier diagnostics | Decide whether the failure is contract, runtime, semantic, or workflow related. |
+| Reviewer | code, execution log, public verifier diagnostics | Independently audit the implementation and execution evidence for Repair. |
 | Repair | previous code, failure summary, selected evidence | Patch the existing script, avoiding blind regeneration and duplicate retries. |
 
 **Context engineering:** each role starts from a fresh LLM context instead of inheriting the full chat history, which keeps prompts focused and bounds token growth. **Retrieval (RAG)** is repo-navigation oriented: BM25 lexical search, path/symbol signals, source snippets, optional LLM rerank, and dynamic query rewriting generated from the current uncertainty, code, and failure logs.
 
 ## Self-Correction: Failure-Grounded Repair Loop
 
-The repair loop is a Reflexion-style self-correction mechanism driven by a failure classifier over stdout/stderr and verifier diagnostics. It produces a compact failure summary, distinguishes contract/runtime/semantic/workflow failures, and can suggest restricted runtime probes (a constrained tool-use surface) for import, signature, path, or CLI uncertainty.
+The repair loop is a Reflexion-style self-correction mechanism. A deterministic rule-based classifier over stdout/stderr and verifier diagnostics produces a compact failure summary and may suggest restricted runtime probes; the Repair LLM performs the source-grounded diagnosis and edit.
 
 Runtime probes are soft hints, not mandatory gates: repairs may skip probing when source evidence is sufficient. The default repair policy is patch-first, with full-file replacement only as a fallback.
 
 ## Evaluation Harness & Guardrails (the Verifier)
 
-The agent never sees the hidden target metric. It must write a public artifact with per-sample predictions; the verifier loads pinned gold labels and recomputes the metric independently — an offline, fail-closed eval that cannot be passed by guessing or echoing the published number.
+The agent context and provisioned workspace omit the hidden target metric. It must write a public artifact with per-sample predictions; the verifier loads pinned gold labels and recomputes the metric independently. Aggregate-only guessing or echoing the published number cannot pass this contract.
 
 Fail-closed cases include missing artifact, malformed JSONL/CSV, wrong sample count, aggregate-only output, non-recomputable predictions, and values outside tolerance. Public diagnostics can be fed back to Reviewer/Repair, but hidden expected values are not exposed to the agent workspace.
 
@@ -97,25 +102,25 @@ auditable and reproducible after the fact.
 
 ## MCP Server
 
-The agent's toolbelt — repo search, restricted runtime probing, and command
-execution — is also exposed over the **Model Context Protocol** in
-[`mcp_server.py`](mcp_server.py), so any MCP client (Claude Desktop, Claude Code,
-Cursor) can drive the same tools the in-process agent uses.
+Selected capabilities are exposed separately over the **Model Context Protocol**
+in [`mcp_server.py`](mcp_server.py), so an MCP client can call repository search,
+restricted probes, and temporary-directory command execution. The main pipeline
+still uses native function calling and task-specific Session/Docker execution; it
+does not route its tools through MCP.
 
 ```bash
 python mcp_server.py   # stdio transport
 ```
 
-> "Sandboxed" here means **working-directory isolation** (each command runs in its
-> own temp dir) with an optional Docker session and two-phase network cutoff — not
-> a hardened adversarial sandbox. Treat it as isolation for *cooperative* eval
-> commands, not a security boundary against malicious code.
+> The MCP command tool uses a fresh temporary working directory and a subprocess;
+> it is not the pipeline's optional Docker backend. Neither should be treated as a
+> hardened security boundary against malicious code.
 
 ## Experiment Results
 
 Current summarized results live in [evals/RESULTS.md](evals/RESULTS.md). The
-coverage table there is kept as an archived N=5 summary; the current ablation is
-the simplified three-condition E2 (`solo`, `solo-repair`, `full`).
+fresh evaluation contains 70 DeepSeek V4 Flash runs: a four-task, three-condition
+N=5 ablation plus two additional full-pipeline N=5 coverage cells.
 
 ## Pipeline Ablation
 
@@ -127,7 +132,12 @@ All conditions use the same generic prompts, verifier, and execution budget; the
 | `solo-repair` | Reproducer + Repair | real logs + diagnostics | Isolate execution-grounded repair. |
 | `full` | Navigator + Reproducer + Critic + Reviewer + Repair | real logs + diagnostics | Configurable collaboration mode, not assumed to be always best. |
 
-N=5 results show that full collaboration is not universally strongest: repair feedback helps harder tasks, while extra handoffs can introduce workflow failures. Detailed tables, OpenOOD notes, cost, pass@k, and failure analysis are in [evals/RESULTS.md](evals/RESULTS.md).
+Across four tasks, verified success rises from `solo` 7/20 to `solo-repair`
+14/20 and `full` 17/20. Full collaboration is still not universally strongest:
+among its 17 verifier-accepted runs, 12/17 (70.6%) had no workflow error because
+extra Reviewer/handoff steps can fail after valid inference. The corresponding
+conditional rates are 7/7 for `solo` and 14/14 for `solo-repair`. Detailed
+tables, cost, and failure analysis are in [evals/RESULTS.md](evals/RESULTS.md).
 
 ## Run
 
@@ -139,7 +149,8 @@ pip install -r requirements.txt
 ```bash
 export LLM_API_KEY=...
 export LLM_BASE_URL=...
-export LLM_MODEL=...
+export LLM_MODEL=deepseek-v4-flash
+export LLM_THINKING=disabled
 ```
 
 ```bash
@@ -147,6 +158,19 @@ python run_distilbert_multi_rag.py
 PIPELINE=solo-repair python run_openood_multi_rag.py
 PIPELINE=full python run_robustbench_multi_rag.py
 ```
+
+OpenOOD defaults to the offline Docker/CPU backend. On Apple Silicon, a faster
+host-MPS backend is available for trusted, human-reviewed checkouts:
+
+```bash
+.venv-oracle/bin/pip install --target repos/OpenOOD/.mps-site numpy==1.26.4
+OPENOOD_EXECUTION_BACKEND=mps PIPELINE=solo-repair python run_openood_multi_rag.py
+```
+
+The MPS backend keeps the blind workspace, clean secret-free subprocess
+environment, full sample contract, and independent verifier. It does not provide
+Docker's container or network isolation, so its backend is recorded in every new
+run artifact and benchmark manifest.
 
 Tests — the unit suite needs no LLM/Docker/network and runs in ~1s:
 
@@ -174,10 +198,10 @@ Useful paths:
 
 Stated plainly, so the claims don't outrun the evidence:
 
-- **Prototype-scale evaluation.** The main ablation covers two tasks at N=5 and
-  OpenOOD at N=3 (where the full pipeline currently passes ~1/3). There are no
-  confidence intervals, and the hardest task is not yet stable. Treat the numbers
-  as prototype evidence, not a benchmark verdict.
+- **Prototype-scale evaluation.** The main ablation covers four tasks × three
+  conditions at N=5, and full-pipeline coverage spans six tasks at N=5. There are
+  no confidence intervals or held-out repository set; treat the numbers as
+  prototype evidence, not a benchmark verdict.
 - **Generality is in the agent layer, not end-to-end.** One task-agnostic agent
   handles 5 different ML frameworks, but each new task needs a hand-written
   adapter (task spec + execution command + sample contract + hidden gold +
@@ -189,8 +213,9 @@ Stated plainly, so the claims don't outrun the evidence:
   (`load_corpus` walks the tree); there is no caching or incremental indexing, so
   very large repos would need work before this is production-grade.
 - **Isolation, not a security sandbox.** This is an experiment-integrity runtime
-  for cooperative agents. The verifier rejects unverifiable outputs and target
-  leakage, and execution runs in an isolated workdir (optionally Docker with
-  network cutoff), but the workspace is not proven adversary-proof.
+  for cooperative agents. The verifier rejects unverifiable outputs; workspace
+  provisioning keeps targets/gold outside agent context. Execution runs in an
+  isolated workdir (optionally Docker with network cutoff). Host-MPS execution is
+  faster but weaker, and neither mode is proven adversary-proof.
 
-Run artifacts under `evals/runs/`, `logs/`, `workspaces/`, and `repos/` are generated outputs. They are intentionally kept out of the main project narrative; only summarized, auditable results should be committed or documented in `evals/RESULTS.md`.
+Run artifacts under `evals/runs/`, `logs/`, `workspaces/`, and `repos/` are generated outputs. They are intentionally kept out of the main project narrative; summarized evidence and reproducibility metadata belong in `evals/RESULTS.md` and `evals/FREEZE.md`.

@@ -23,6 +23,7 @@ from evals.oracles.openood_ebo import (
     _RUNS,
     _make_public_contract_diagnostics,
     _recompute,
+    make_config,
 )
 from exec.session import Session
 
@@ -64,6 +65,24 @@ json.dump({}, open("predictions.json", "w"))
 """
 
 
+def test_openood_mps_config_is_explicit_and_not_docker_offline(monkeypatch) -> None:
+    monkeypatch.setenv("OPENOOD_EXECUTION_BACKEND", "mps")
+
+    config = make_config("mps_config_test")
+
+    assert config.execution_backend == "mps"
+    assert config.session_go_offline is False
+    assert "MPS acceleration" in config.task
+    assert config.public_execution_command.startswith("REPRO_DEVICE=mps ")
+
+
+def test_openood_rejects_unknown_execution_backend(monkeypatch) -> None:
+    monkeypatch.setenv("OPENOOD_EXECUTION_BACKEND", "cuda-ish")
+
+    with pytest.raises(ValueError, match="docker.*mps"):
+        make_config("bad_backend_test")
+
+
 # ---------------------------------------------------------------------------
 # Public verifier contract
 # ---------------------------------------------------------------------------
@@ -100,6 +119,23 @@ def test_review_status_fails_closed(tmp_path: Path) -> None:
     assert _review_requires_repair(report)
     report.write_text("REVIEW_STATUS: PASS\n")
     assert not _review_requires_repair(report)
+
+
+def test_pass_review_requires_source_evidence_for_semantic_pipeline() -> None:
+    unsupported = "Plausible review without citations. " + ("x" * 310)
+    with pytest.raises(ValueError, match="preprocessing"):
+        _validate_review(unsupported + "\nREVIEW_STATUS: PASS")
+
+    grounded = """Source-grounded audit of the complete evaluation path.
+- `model`: `repo/model.py:12` defines the constructor and checkpoint load.
+- `data`: `repo/data.py:30` defines the requested test split.
+- `preprocessing`: `repo/preprocess.py:8` defines ordered transforms and constants.
+- `metric`: `repo/metric.py:20` defines score direction and aggregation.
+The execution log confirms that the measured artifact follows those definitions.
+REVIEW_STATUS: PASS
+"""
+
+    assert _validate_review(grounded).endswith("REVIEW_STATUS: PASS\n")
 
 
 # ---------------------------------------------------------------------------

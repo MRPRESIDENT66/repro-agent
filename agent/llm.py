@@ -23,6 +23,7 @@ from agent.config import (
     LLM_API_KEY,
     LLM_BASE_URL,
     LLM_MODEL,
+    LLM_THINKING,
     PRICE_INPUT_HIT,
     PRICE_INPUT_MISS,
     PRICE_OUTPUT,
@@ -103,6 +104,7 @@ class Reply:
     tool_calls: list[ToolCall] = field(default_factory=list)
     prompt_tokens: int = 0      # real tokenizer count of the context sent
     completion_tokens: int = 0
+    reasoning_content: str = ""
 
 
 class LLM(Protocol):
@@ -131,6 +133,8 @@ class ChatLLM:
             "messages": messages,
             "temperature": self._temperature,
         }
+        if self._model.startswith("deepseek-v4-"):
+            kwargs["extra_body"] = {"thinking": {"type": LLM_THINKING}}
         if tools:
             kwargs["tools"] = tools
             # The agent protocol is deliberately sequential. Ask the provider
@@ -155,6 +159,7 @@ class ChatLLM:
             calls,
             getattr(u, "prompt_tokens", 0) or 0,
             getattr(u, "completion_tokens", 0) or 0,
+            getattr(msg, "reasoning_content", "") or "",
         )
 
     def complete(self, messages: list[Message]) -> str:

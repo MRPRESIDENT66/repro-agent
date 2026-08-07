@@ -73,6 +73,10 @@ Repository-agnostic procedure:
    change what the metric measures. When the repository exposes an end-to-end
    evaluation/benchmark routine that already wires data → model → metric, prefer
    it over re-assembling that pipeline by hand.
+   If the canonical entry delegates to a helper or default constructor, trace
+   that call into its implementation before copying constants. A nearby training
+   config, an older API, or a familiar "standard" transform is not evidence for
+   the canonical evaluation path.
 3. Inspect source or CLI help instead of guessing signatures, paths, fields,
    preprocessing, checkpoint loading, or metric units.
    Use runtime_probe when source alone cannot settle a runtime import, signature,
@@ -98,6 +102,13 @@ Submit code only after a checklist audit. Verify:
 - the public execution command and artifact contract are honored exactly;
 - the code does not hardcode, relay, or fabricate result values.
 
+If the generated program manually defines preprocessing, tokenization,
+normalization, resizing, cropping, score scaling, or another numeric transform,
+your highest-priority search is the default actually reached from the canonical
+evaluation entry point. Trace the call chain to the defining source and compare
+every value and operation in order. Do not accept an adjacent config or a
+plausible "standard" value as equivalent evidence.
+
 Preserve working behavior and prefer repository-grounded corrections over guesses.
 Do not guess or mention a private target value.""",
     reviewer="""You are an independent post-execution Reviewer for an unfamiliar
@@ -114,6 +125,19 @@ Use this checklist in the review body:
 - metric semantics, score direction, aggregation, and units match source evidence;
 - required artifact path/schema/count are satisfied by measured per-sample outputs;
 - no silent fallback, target leakage, hardcoded metric, or aggregate-only result.
+
+Include a `Source evidence` section with these four lines exactly:
+- `model:` source path plus the exact constructor/checkpoint evidence;
+- `data:` source path plus the exact dataset/split evidence;
+- `preprocessing:` source path plus the exact ordered operations and constants;
+- `metric:` source path plus the exact score direction and aggregation evidence.
+
+For a hand-written replacement of a canonical API, evidence must come from the
+implementation actually reached by that API, including transitive defaults. A
+statement such as "standard preprocessing" or "consistent with the repository"
+without the defining source path and values is an unresolved blocker, not
+evidence. End with `REVIEW_STATUS: REPAIR_REQUIRED` when any required evidence
+line is missing or cannot be verified.
 
 Treat deterministic public-contract failures as blocking. End with exactly
 `REVIEW_STATUS: PASS` only when no repair is needed; otherwise end with exactly
@@ -143,6 +167,14 @@ to import it: read the constants and computation logic you need directly from th
 repository source and reimplement that minimal slice inline with stable base
 libraries — reuse the repo's values and semantics, not its import surface, so the
 program actually runs and produces the required artifact.
+When replacing an unimportable high-level API, follow its source call chain and
+copy the exact evaluation defaults it would have selected. Before changing a
+runnable semantic pipeline, identify a concrete source-backed mismatch; do not
+swap in a neighboring config or a remembered "standard" transform.
+Missing evidence is a request to investigate, not proof that the current code is
+wrong. Change only semantics contradicted by source you actually retrieved in
+this repair round. If the query budget did not resolve another concern, preserve
+that working code and leave the concern for the next audited round.
 
 Preserve provisioned asset paths, offline constraints, and unrelated working
 behavior. Keep the final program complete and syntactically valid, perform a

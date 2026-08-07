@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
 
 from agent.types import OracleConfig
 from exec.docker_session import DockerSession
+from exec.session import Session
+
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "repos" / "OpenOOD"
 IMAGE = "repro-openood:latest"
+MPS_PYTHON = ROOT / ".venv-oracle" / "bin" / "python"
+MPS_SITE = SOURCE / ".mps-site"
 
 EXPECTED = 87.58
 TOLERANCE = 0.05
@@ -27,8 +32,28 @@ _OOD = {"cifar100": 9000, "tin": 7793}  # near-OOD sets + their exact sample cou
 TASK = """Reproduce the official EBO Near-OOD AUROC for CIFAR-10 using the
 official s0, s1, and s2 CrossEntropy ResNet-18 checkpoints and both Near-OOD
 datasets, CIFAR-100 and TinyImageNet. The fixed OpenOOD repository, data, and
-checkpoints are already present. The environment is CPU-only and offline.
-Preserve repository evaluation semantics and report percentage AUROC."""
+checkpoints are already present. Preserve repository evaluation semantics and
+report percentage AUROC."""
+
+
+def _execution_backend() -> str:
+    backend = os.getenv("OPENOOD_EXECUTION_BACKEND", "docker").strip().lower()
+    if backend not in {"docker", "mps"}:
+        raise ValueError("OPENOOD_EXECUTION_BACKEND must be 'docker' or 'mps'")
+    return backend
+
+
+def _task_for_backend(backend: str) -> str:
+    if backend == "mps":
+        device = """
+All required assets are local; do not access the network. The host provides Apple
+MPS acceleration. Use `REPRO_DEVICE=mps` for both the model and input tensors,
+with a CPU fallback only if `torch.backends.mps.is_available()` is false. Do not
+reduce sample coverage to improve speed."""
+    else:
+        device = """
+The execution environment is CPU-only and offline."""
+    return TASK + device
 
 EVIDENCE = f"""The eval must WRITE a file `predictions.json` in the working
 directory: the per-sample EBO energy scores, structured as
@@ -196,6 +221,7 @@ def _make_copy_clean_source(workdir: Path):
             workdir,
             ignore=shutil.ignore_patterns(
                 ".git",
+                ".mps-site",
                 "__pycache__",
                 "run_nearood_ebo_cpu.py",
                 "nearood_ebo_cpu_results.json",
@@ -230,13 +256,38 @@ def _make_assert_blind_workspace(workdir: Path):
     return _assert_blind_workspace
 
 
-def _make_execute_eval(workdir: Path):
-    def _execute_eval(session: DockerSession):
+def _make_execute_eval(workdir: Path, backend: str):
+    def _execute_eval(session):
         syntax = session.shell("python -m py_compile eval_ebo.py", timeout=120)
         if not syntax.ok:
             return syntax
-        return session.shell(f"python eval_ebo.py --root {CHECKPOINT_ROOT}")
+        device = "REPRO_DEVICE=mps " if backend == "mps" else ""
+        return session.shell(f"{device}python eval_ebo.py --root {CHECKPOINT_ROOT}")
     return _execute_eval
+
+
+def _make_session(workdir: Path, backend: str):
+    if backend == "docker":
+        return DockerSession(
+            workdir, image=IMAGE, mem="6g", cpus=6.0, default_timeout=1800
+        )
+    if not MPS_PYTHON.is_file():
+        raise RuntimeError(f"OpenOOD MPS Python is missing: {MPS_PYTHON}")
+    if not (MPS_SITE / "numpy" / "__init__.py").is_file():
+        raise RuntimeError(
+            "OpenOOD MPS compatibility packages are missing. Run: "
+            f"{MPS_PYTHON} -m pip install --target {MPS_SITE} numpy==1.26.4"
+        )
+    return Session(
+        workdir,
+        venv_python=MPS_PYTHON,
+        default_timeout=1800,
+        extra_env={
+            "PYTHONPATH": str(MPS_SITE),
+            "PYTORCH_ENABLE_MPS_FALLBACK": "1",
+            "REPRO_DEVICE": "mps",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +295,7 @@ def _make_execute_eval(workdir: Path):
 # ---------------------------------------------------------------------------
 
 def make_config(attempt: str) -> OracleConfig:
+    backend = _execution_backend()
     workdir = ROOT / "workspaces" / "openood_ebo_multi_rag" / attempt
     artifact_dir = ROOT / "evals" / "runs" / f"openood_ebo_multi_rag_{attempt}"
 
@@ -254,7 +306,7 @@ def make_config(attempt: str) -> OracleConfig:
 
     return OracleConfig(
         name="openood_ebo",
-        task=TASK,
+        task=_task_for_backend(backend),
         metric=METRIC,
         expected=EXPECTED,
         tolerance=TOLERANCE,
@@ -262,12 +314,11 @@ def make_config(attempt: str) -> OracleConfig:
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_ebo.py",
-        make_session=lambda: DockerSession(
-            workdir, image=IMAGE, mem="6g", cpus=6.0, default_timeout=1800
-        ),
-        session_go_offline=True,
+        make_session=lambda: _make_session(workdir, backend),
+        session_go_offline=backend == "docker",
+        execution_backend=backend,
         copy_clean_source=_make_copy_clean_source(workdir),
-        execute_eval=_make_execute_eval(workdir),
+        execute_eval=_make_execute_eval(workdir, backend),
         public_contract_passes=public_contract_passes,
         chance_level=CHANCE_LEVEL,
         verify_kwargs={
@@ -275,7 +326,10 @@ def make_config(attempt: str) -> OracleConfig:
             "recompute_fn": _recompute,
         },
         public_result_protocol=EVIDENCE,
-        public_execution_command=f"python eval_ebo.py --root {CHECKPOINT_ROOT}",
+        public_execution_command=(
+            ("REPRO_DEVICE=mps " if backend == "mps" else "")
+            + f"python eval_ebo.py --root {CHECKPOINT_ROOT}"
+        ),
         search_extra_exclude={
             "eval_ebo.py",
             "navigator_report.md",

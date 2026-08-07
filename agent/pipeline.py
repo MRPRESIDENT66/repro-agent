@@ -56,10 +56,23 @@ from verify.check import verify_run
 
 
 class _RunState(TypedDict):
-    """LangGraph state passed between nodes. ``round`` counts repair rounds; all
-    other run state (roles, session, counters) lives on the pipeline instance."""
+    """Decision-relevant workflow state passed between LangGraph nodes.
+
+    Large, auditable artifacts remain in ``workdir``.  State keeps their paths
+    plus the execution metadata that determines the next route.
+    """
 
     round: int
+    eval_script_path: str
+    navigator_report_path: str | None
+    reviewer_report_path: str | None
+    execution_start: int | None
+    latest_execution_start: int | None
+    n_exec: int
+    last_execution_ok: bool | None
+    failure_kind: str | None
+    failure_next_action: str | None
+    failure_probe_hint: str | None
 
 
 @dataclass(frozen=True)
@@ -148,6 +161,7 @@ def build_run_record(
         "blind_workspace_checked": config.assert_blind_workspace is not None,
         "agents": len(roles),
         "attempt": config.attempt,
+        "execution_backend": config.execution_backend,
         "roles": roles,
         "rag": rag,
         "dynamic_rag": True,
@@ -233,8 +247,8 @@ class ReproductionPipeline:
         navigate -> reproduce -> critique -> execute -> (review -> repair)*
 
     looping until the verifier-recomputable contract passes or the repair budget
-    is spent. All run state lives on the instance so the orchestration reads as a
-    short, linear ``run`` instead of a deep nest of closures.
+    is spent. LangGraph State holds routing-relevant metadata while ``workdir``
+    retains the executable and auditable artifacts.
     """
 
     def __init__(self, config: OracleConfig, policy: PipelinePolicy) -> None:
@@ -267,10 +281,26 @@ class ReproductionPipeline:
         self.roles: dict[str, dict] = {}
         self.rag: dict[str, dict] = {}
         self.workflow_error: str | None = None
-        self.execution_start = 0
-        self.latest_execution_start = 0
-        self.n_exec = 0
         self.failure_classes: list[dict[str, str | None]] = []
+        # Kept outside LangGraph State so an exception after execution (for
+        # example, Reviewer synthesis failure) cannot erase the observed count.
+        self.eval_executions_observed = 0
+        self.run_state: _RunState = self._initial_state()
+
+    def _initial_state(self) -> _RunState:
+        return {
+            "round": 0,
+            "eval_script_path": self.config.eval_script,
+            "navigator_report_path": None,
+            "reviewer_report_path": None,
+            "execution_start": None,
+            "latest_execution_start": None,
+            "n_exec": 0,
+            "last_execution_ok": None,
+            "failure_kind": None,
+            "failure_next_action": None,
+            "failure_probe_hint": None,
+        }
 
     # --- shared helpers ---------------------------------------------------
 
@@ -376,16 +406,22 @@ class ReproductionPipeline:
             synthesis_attempts=5,
         )
 
-    def _execute_reproducer(self) -> None:
+    def _execute_reproducer(self) -> dict[str, Any]:
         self._sync_eval_file()
-        self.execution_start = len(self.session.transcript)
+        execution_start = len(self.session.transcript)
+        self.eval_executions_observed += 1
         eval_run = self.config.execute_eval(self.session)
         self.roles["reproducer"]["errors"] = 0 if eval_run.ok else 1
-        self.roles["reproducer"]["command_indexes"] = [self.execution_start + 1, len(self.session.transcript)]
-        self.session.write_file("reproducer_public_log.txt", _public_log(self.session, self.execution_start))
-        self.latest_execution_start = self.execution_start
+        self.roles["reproducer"]["command_indexes"] = [execution_start + 1, len(self.session.transcript)]
+        self.session.write_file("reproducer_public_log.txt", _public_log(self.session, execution_start))
+        return {
+            "execution_start": execution_start,
+            "latest_execution_start": execution_start,
+            "n_exec": 1,
+            "last_execution_ok": eval_run.ok,
+        }
 
-    def _review(self, round_index: int) -> None:
+    def _review(self, round_index: int, latest_execution_start: int) -> None:
         diagnostics = self.contract_diagnostics(self.session)
         review_context = (
             "# Public task and result protocol\n\n"
@@ -395,7 +431,7 @@ class ReproductionPipeline:
             + "\n\n# Evaluation implementation\n\n"
             + _clip((self.workdir / self.config.eval_script).read_text(errors="replace"), 12000)
             + "\n\n# Latest public execution log\n\n"
-            + _clip(_public_log(self.session, self.latest_execution_start), 12000)
+            + _clip(_public_log(self.session, latest_execution_start), 12000)
             + "\n\n# Deterministic public-contract audit\n\n"
             + "\n".join(f"- {issue}" for issue in diagnostics)
         )
@@ -413,10 +449,14 @@ class ReproductionPipeline:
             max_queries=2,
         )
 
-    def _repair_round(self, round_index: int) -> None:
+    def _repair_round(self, state: _RunState, round_index: int) -> dict[str, Any]:
         config = self.config
         diagnostics = self.contract_diagnostics(self.session)
         failure = classify_failure(session=self.session, diagnostics=diagnostics)
+        latest_execution_start = state["latest_execution_start"]
+        execution_start = state["execution_start"]
+        if latest_execution_start is None or execution_start is None:
+            raise RuntimeError("repair requires a prior execution in LangGraph State")
         self.failure_classes.append(
             {
                 "round": str(round_index),
@@ -436,11 +476,11 @@ class ReproductionPipeline:
         parts.extend(
             [
                 "# Current evaluation script\n\n" + (self.workdir / config.eval_script).read_text(errors="replace"),
-                "# Latest public execution log\n\n" + _public_log(self.session, self.latest_execution_start),
+                "# Latest public execution log\n\n" + _public_log(self.session, latest_execution_start),
             ]
         )
-        if self.latest_execution_start != self.execution_start:
-            parts.append("# Prior execution history (clipped)\n\n" + _clip(_public_log(self.session, self.execution_start), 6000))
+        if latest_execution_start != execution_start:
+            parts.append("# Prior execution history (clipped)\n\n" + _clip(_public_log(self.session, execution_start), 6000))
         if self.policy.use_reviewer:
             parts.append("# Independent reviewer audit\n\n" + _require_handoff(self.workdir / "review_report.md", "reviewer"))
         if self.policy.run_critic:
@@ -451,7 +491,7 @@ class ReproductionPipeline:
             self.code_validator,
             self.session,
             self.workdir,
-            self.execution_start,
+            execution_start,
             current_code=(self.workdir / config.eval_script).read_text(errors="replace"),
         )
         patch_validator = lambda payload, rv=repair_validator: _apply_code_patch(self.workdir / config.eval_script, payload, validate_code=rv)
@@ -480,45 +520,53 @@ class ReproductionPipeline:
 
         self._sync_eval_file()
         start = len(self.session.transcript)
+        self.eval_executions_observed += 1
         stepped_run = config.execute_eval(self.session)
-        self.n_exec += 1
-        self.latest_execution_start = start
         self.roles[key]["errors"] = 0 if stepped_run.ok else 1
         self.roles[key]["command_indexes"] = [start + 1, len(self.session.transcript)]
-        self.session.write_file("reproducer_public_log.txt", _public_log(self.session, self.execution_start))
+        self.session.write_file("reproducer_public_log.txt", _public_log(self.session, execution_start))
 
         if self.policy.use_reviewer:
-            self._review(round_index)
+            self._review(round_index, start)
+
+        return {
+            "round": round_index,
+            "latest_execution_start": start,
+            "n_exec": state["n_exec"] + 1,
+            "last_execution_ok": stepped_run.ok,
+            "failure_kind": failure.kind,
+            "failure_next_action": failure.next_action,
+            "failure_probe_hint": failure.probe_hint,
+            "reviewer_report_path": "review_report.md" if self.policy.use_reviewer else None,
+        }
 
     # --- LangGraph nodes --------------------------------------------------
     #
-    # Each node wraps an existing stage method and returns the (possibly
-    # updated) graph state. The stages mutate the pipeline instance; the graph
-    # only carries the repair-round counter.
+    # Each node wraps an existing stage method and returns workflow metadata.
+    # The executable source and reports remain auditable files in workdir.
 
-    def _node_navigate(self, state: _RunState) -> _RunState:
+    def _node_navigate(self, state: _RunState) -> dict[str, Any]:
         self._navigate()
-        return state
+        return {"navigator_report_path": "navigator_report.md"}
 
-    def _node_reproduce(self, state: _RunState) -> _RunState:
+    def _node_reproduce(self, state: _RunState) -> dict[str, Any]:
         self._reproduce()
-        return state
+        return {"eval_script_path": self.config.eval_script}
 
-    def _node_critique(self, state: _RunState) -> _RunState:
+    def _node_critique(self, state: _RunState) -> dict[str, Any]:
         self._critique()
-        return state
+        return {"eval_script_path": self.config.eval_script}
 
-    def _node_execute(self, state: _RunState) -> _RunState:
-        self._execute_reproducer()
-        self.n_exec = 1
+    def _node_execute(self, state: _RunState) -> dict[str, Any]:
+        update = self._execute_reproducer()
         if self.policy.use_reviewer:
-            self._review(0)
-        return state
+            self._review(0, update["latest_execution_start"])
+            update["reviewer_report_path"] = "review_report.md"
+        return update
 
-    def _node_repair(self, state: _RunState) -> _RunState:
+    def _node_repair(self, state: _RunState) -> dict[str, Any]:
         round_index = state["round"] + 1
-        self._repair_round(round_index)
-        return {"round": round_index}
+        return self._repair_round(state, round_index)
 
     def _decide(self, state: _RunState) -> str:
         """Conditional edge: stop on a verifier pass, on the solo condition, or
@@ -559,7 +607,7 @@ class ReproductionPipeline:
 
     def run(self) -> "ReproductionPipeline":
         try:
-            self._build_graph().invoke({"round": 0})
+            self.run_state = self._build_graph().invoke(self.run_state)
         except Exception as exc:
             self.workflow_error = f"{type(exc).__name__}: {exc}"
         finally:
@@ -589,13 +637,18 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
         handoff_requirement = (pipe.workdir / "navigator_report.md").exists()
     if policy.use_reviewer:
         handoff_requirement = handoff_requirement and (pipe.workdir / "review_report.md").exists()
-    collaboration_pass = verdict.match and rag_requirement and handoff_requirement
+    collaboration_pass = (
+        verdict.match
+        and pipe.workflow_error is None
+        and rag_requirement
+        and handoff_requirement
+    )
     probe_transcript = list(getattr(session, "probe_transcript", []))
 
     record = build_run_record(
         config=config,
         pipeline=pipeline,
-        n_exec=pipe.n_exec,
+        n_exec=pipe.eval_executions_observed,
         roles=pipe.roles,
         rag=pipe.rag,
         workflow_error=pipe.workflow_error,

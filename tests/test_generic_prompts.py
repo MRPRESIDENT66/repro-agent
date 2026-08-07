@@ -60,6 +60,10 @@ def test_generic_prompts_require_evidence_and_real_execution() -> None:
     assert "same failing chain" in combined
     assert "runtime_probe" in combined
     assert "do not use it to run the full evaluation" in combined
+    assert "default actually reached from the canonical" in combined
+    assert "source evidence" in combined
+    assert "transitive defaults" in combined
+    assert "missing evidence is a request to investigate" in combined
 
 
 def test_all_v2_oracles_publish_a_generic_artifact_contract() -> None:

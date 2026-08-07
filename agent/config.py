@@ -14,7 +14,10 @@ load_dotenv(REPO_ROOT / ".env")
 #     existing local .env files keep working. ---
 LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("DASHSCOPE_API_KEY", "")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("DASHSCOPE_BASE_URL", "")
-LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("CHAT_MODEL", "deepseek-chat")
+LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("CHAT_MODEL", "deepseek-v4-flash")
+LLM_THINKING = os.getenv("LLM_THINKING", "disabled").strip().lower()
+if LLM_THINKING not in {"enabled", "disabled"}:
+    raise ValueError("LLM_THINKING must be 'enabled' or 'disabled'")
 
 # --- Cost accounting: yuan per 1M tokens. Defaults = deepseek-chat list price;
 #     override in .env when the provider or its pricing changes. ---

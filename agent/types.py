@@ -25,6 +25,7 @@ class OracleConfig:
     # Session lifecycle
     make_session: Callable[[], Any]
     session_go_offline: bool = False
+    execution_backend: str = "unspecified"
 
     # Oracle lifecycle
     copy_clean_source: Callable[..., None] = field(default=lambda *args: None)

@@ -22,7 +22,7 @@ from agent.contracts import (
 from agent.diagnostics import make_generic_contract_diagnostics as _make_generic_contract_diagnostics
 from agent.generic_prompts import GENERIC_PROMPTS
 from agent.llm import Reply, ScriptedLLM, ToolCall, Usage
-from agent.pipeline import run_oracle
+from agent.pipeline import ReproductionPipeline, PipelinePolicy, run_oracle
 from agent.types import OracleConfig
 from agent.repair import (
     failed_import_packages as _failed_import_packages,
@@ -199,6 +199,20 @@ def test_loop_stops_on_contract_pass(tmp_path, monkeypatch):
         assert res["public_evidence_found"] is True
 
 
+def test_langgraph_state_keeps_routing_metadata_but_not_large_artifacts(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[False, True])
+
+    pipe = ReproductionPipeline(cfg, PipelinePolicy.from_name("solo-repair")).run()
+
+    assert pipe.run_state["round"] == 1
+    assert pipe.run_state["n_exec"] == 2
+    assert pipe.run_state["last_execution_ok"] is True
+    assert pipe.run_state["failure_kind"] is not None
+    assert pipe.run_state["eval_script_path"] == "eval.py"
+    assert "execution_log" not in pipe.run_state
+
+
 def test_repair_vs_full_route_distinct_roles(tmp_path, monkeypatch):
     _patch(monkeypatch)
     outcomes = [False, False, True]
@@ -372,6 +386,24 @@ def test_generic_repair_uses_shared_full_file_path(tmp_path, monkeypatch):
     assert result["repair_mode"] == "patch_first_full_file_fallback"
     assert "repair_1" in result["roles"]
     assert result["roles"]["repair_1"]["tool_counts"].get("submit_patch") == 1
+
+
+def test_execution_count_survives_reviewer_exception(tmp_path, monkeypatch):
+    _patch(monkeypatch)
+    cfg = _make_config(tmp_path, outcomes=[True])
+
+    def fail_after_execution(*_args, **_kwargs):
+        raise RuntimeError("review synthesis failed")
+
+    monkeypatch.setattr(ReproductionPipeline, "_review", fail_after_execution)
+
+    run_oracle(cfg, pipeline="full")
+
+    result = _result(cfg)
+    assert result["verdict"]["actual"] == 50.0
+    assert result["eval_executions"] == 1
+    assert result["workflow_error"] == "RuntimeError: review synthesis failed"
+    assert result["collaboration_pass"] is False
 
 
 def test_generic_context_and_runtime_probe_are_always_enabled(tmp_path, monkeypatch):

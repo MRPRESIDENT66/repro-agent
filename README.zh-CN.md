@@ -4,9 +4,15 @@
 
 Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任务的**盲测多智能体复现基准 + 运行时(blind multi-agent reproduction benchmark + runtime)**。一队角色分工的 LLM 智能体在盲测条件下复现已发布的 ML 结果:用 **native tool calling** 自主读 repo、写评测脚本、执行、**从真实执行失败中自我修复(self-correction)**,最终由一个**独立、fail-closed 的评测器(evaluation harness)**从逐样本 artifact 重算指标——智能体全程看不到目标数字。
 
-**定位要诚实**:这是**原型规模**的证据(少数任务、小样本量),不是经过大规模验证的通用 runtime;最难的任务目前还不稳定。详见 [项目边界](#项目边界)。
+**定位要诚实**:这是 6 项任务上的 N=5 **原型规模证据**,不是经过大规模验证的通用 runtime。详见 [项目边界](#项目边界)。
 
-编排用 **LangGraph**(一个由角色节点组成的 `StateGraph`,带条件式修复循环);检索、失败分类修复、沙箱执行、盲测验证器都直接实现在 provider-agnostic 的 OpenAI 兼容 API 上。同一套工具集还通过 **MCP** 暴露给任意 MCP 客户端。
+编排用 **LangGraph**(一个由角色节点组成的 `StateGraph`,带条件式修复循环);检索、失败分类修复、隔离执行、盲测验证器都直接实现在 provider-agnostic 的 OpenAI 兼容 API 上。部分工具能力还通过 **MCP** 独立暴露给外部客户端。
+
+| 核心证据 | 结果 |
+|---|---:|
+| 6 项任务的 fresh full-pipeline coverage | **30 次运行中 27 次通过独立验证** |
+| 4 任务消融：`solo` → `solo-repair` → `full` | **7/20 → 14/20 → 17/20 通过验证** |
+| 最难任务 OpenOOD：`solo` → `full` | **0/5 → 4/5 通过验证** |
 
 ![Architecture: blind inputs feed a generic role pipeline that emits per-sample predictions, which an independent verifier recomputes against pinned gold labels.](docs/architecture.svg)
 
@@ -15,14 +21,14 @@ Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任�
 | 能力 | 在本项目里是什么 | 位置 |
 |---|---|---|
 | **Multi-agent orchestration(LangGraph 编排)** | LangGraph `StateGraph`,角色节点(Navigator→Reproducer→Critic→执行→Reviewer→Repair)+ 条件式修复循环 + per-role 上下文隔离 | [`agent/pipeline.py`](agent/pipeline.py) |
-| **Tool use / function calling(工具调用)** | 原生 OpenAI function-calling 的 agent loop、顺序工具派发、上下文压缩 | [`agent/loop.py`](agent/loop.py) |
-| **Tool interoperability(MCP)** | 工具集(仓库检索、runtime probe、沙箱执行)通过 Model Context Protocol 暴露给任意 MCP 客户端 | [`mcp_server.py`](mcp_server.py) |
+| **Tool use / function calling(工具调用)** | 原生 OpenAI function-calling 的 agent loop、顺序工具派发 | [`agent/loop.py`](agent/loop.py) |
+| **Tool interoperability(MCP)** | 仓库检索和受限诊断/命令接口通过 Model Context Protocol 独立暴露 | [`mcp_server.py`](mcp_server.py) |
 | **Self-correction(Reflexion 式自我修复)** | 失败分类驱动、execution-grounded 的修复闭环,patch-first 优先于盲目重写 | [`agent/repair.py`](agent/repair.py)、[`agent/failure.py`](agent/failure.py) |
 | **RAG / retrieval(检索增强)** | 面向代码仓库的检索:BM25 + 路径/符号信号 + LLM rerank + 动态 query rewriting | [`retrieval/`](retrieval/) |
-| **LLM evaluation & guardrails(评测与护栏)** | 盲测、fail-closed 验证器,从逐样本 artifact 重算指标,拒绝不可复算/泄漏结果 | [`verify/`](verify/) |
-| **Sandboxed execution(沙箱执行)** | subprocess + Docker 执行会话,两阶段网络隔离 | [`exec/`](exec/) |
+| **LLM evaluation & guardrails(评测与护栏)** | 盲测、fail-closed 验证器从逐样本 artifact 重算指标,隐藏目标/gold 不进入 Agent 上下文 | [`verify/`](verify/) |
+| **Isolated execution(隔离执行)** | subprocess 会话 + 可选的资源受限 Docker 会话和断网 | [`exec/`](exec/) |
 | **Observability(可观测)** | per-call token + 成本核算、全链路 transcript、可复算 `commands.sh` | [`agent/llm.py`](agent/llm.py) |
-| **Evaluation methodology(评测方法)** | budget-fair 消融、`pass@k`、平均成本、失败模式拆解 | [`evals/`](evals/) |
+| **Evaluation methodology(评测方法)** | budget-fair 重复运行消融、平均成本、失败模式拆解 | [`evals/`](evals/) |
 | **Deterministic agent testing(确定性测试)** | `ScriptedLLM` 零 API/token 驱动整条控制流,快速可复现 | [`tests/`](tests/) |
 
 技术栈:Python、**LangGraph**、**MCP**(Model Context Protocol)、OpenAI 兼容 function calling(provider-agnostic,可跑 DeepSeek/任意 OpenAI 风格端点)、BM25 检索、Docker、`pytest`。
@@ -47,7 +53,7 @@ Agent 从不看到目标值。它必须生成公开协议要求的结果文件�
 - 只打印 aggregate 数字；
 - 样本数不对；
 - artifact 格式错误；
-- 硬编码/伪造结果；
+- 只硬编码 aggregate 数字或提交不可重算结果；
 - 指标可重算但超过容差。
 
 **当前所有任务都走重算路径(`recompute_fn`)**:判定结果是从逐样本输出对隐藏 gold 现算出来的。旧的 provenance 启发式(只判断"代码看起来像不像评测",可被 dead-code block 伪造)只作为未迁移任务的 fallback 保留,**本基准里没有任何任务用它**。
@@ -120,19 +126,19 @@ Dense embedding 不是默认路径必须项。
 
 ## MCP Server
 
-智能体的工具集(仓库检索、受限 runtime probe、命令执行)也通过 **Model Context Protocol** 暴露在 [`mcp_server.py`](mcp_server.py),任何 MCP 客户端(Claude Desktop、Claude Code、Cursor)都能调用和内部 agent 同一套工具。
+部分能力通过 **Model Context Protocol** 独立暴露在 [`mcp_server.py`](mcp_server.py)：外部 MCP 客户端可以调用仓库检索、受限 probe 和临时目录命令执行。主 Pipeline 仍使用原生 Function Calling 和任务专用的 Session/Docker 后端，并不通过 MCP 调度内部工具。
 
 ```bash
 python mcp_server.py   # stdio 传输
 ```
 
-> 这里的"沙箱"指的是**工作目录隔离**(每条命令在自己的临时目录里跑)+ 可选 Docker 会话 + 两阶段断网,**不是抗对抗的强安全沙箱**。它是给*协作式*评测命令做隔离的,不是防御恶意代码的安全边界。
+> MCP 命令工具使用临时工作目录和 subprocess，并不是 Pipeline 的可选 Docker 后端；两者都不是抵御恶意代码的强安全边界。
 
 ## 实验结果
 
-当前实验摘要放在 [evals/RESULTS.md](evals/RESULTS.md)。其中 E1 coverage
-表保留为历史 N=5 摘要；当前 E2 消融只保留三种条件：
-`solo`、`solo-repair`、`full`。
+当前实验摘要放在 [evals/RESULTS.md](evals/RESULTS.md)。fresh evaluation
+共 70 次 DeepSeek V4 Flash 运行：4 任务 × 3 条件 × N=5 的主消融，外加
+2 个任务的 full-pipeline N=5 覆盖实验。
 
 ## Pipeline Conditions
 
@@ -143,6 +149,11 @@ python mcp_server.py   # stdio 传输
 - `full`：Navigator + Reproducer + Critic + Reviewer + Repair，最多 5 次执行。
 
 这个版本更适合作为项目展示：对比“一次生成”“执行反馈修复”“完整多角色协作”，避免过多消融条件让代码和讲解变复杂。
+
+4 任务汇总结果为：`solo` 7/20、`solo-repair` 14/20、`full` 17/20
+通过独立 verifier。在各自通过 verifier 的样本中，无流程异常的比例分别为
+`solo` 7/7、`solo-repair` 14/14、`full` 12/17（70.6%）。这说明角色分工
+提高了解题上限，但 Reviewer/handoff 也引入了额外流程失败面。
 
 ## 目录结构
 
@@ -172,7 +183,8 @@ pip install -r requirements.txt
 ```bash
 LLM_API_KEY=...
 LLM_BASE_URL=...
-LLM_MODEL=...
+LLM_MODEL=deepseek-v4-flash
+LLM_THINKING=disabled
 ```
 
 部分任务需要本地预置模型、数据集缓存或 Docker 镜像，具体见对应的 `evals/oracles/` 文件。
@@ -185,6 +197,17 @@ PIPELINE=solo-repair python run_openood_multi_rag.py
 PIPELINE=full python run_robustbench_multi_rag.py
 ```
 
+OpenOOD 默认使用断网的 Docker/CPU 后端。Apple Silicon 可以对可信、人工检查过
+的仓库启用更快的宿主机 MPS 后端:
+
+```bash
+.venv-oracle/bin/pip install --target repos/OpenOOD/.mps-site numpy==1.26.4
+OPENOOD_EXECUTION_BACKEND=mps PIPELINE=solo-repair python run_openood_multi_rag.py
+```
+
+MPS 模式仍保留盲测工作区、无密钥子进程环境、完整样本契约和独立 verifier，
+但不具备 Docker 的容器与断网隔离。新实验会在结果文件和 manifest 中记录后端。
+
 测试——单元测试不依赖 LLM/Docker/网络,约 1 秒跑完:
 
 ```bash
@@ -196,11 +219,11 @@ pytest -m integration  # 依赖 Docker daemon 的测试
 
 把话说在前面,免得 claim 超过证据:
 
-- **原型规模的评测。** 主消融是两个任务 N=5、OpenOOD N=3(full 当前约 1/3 通过);没有置信区间,最难的任务还不稳定。这些数字是**原型证据**,不是基准定论。
+- **原型规模的评测。** 主消融覆盖 4 任务 × 3 条件 × N=5，full-pipeline coverage 覆盖 6 任务 × N=5；没有置信区间，也没有 held-out 仓库集合。这些数字是**原型证据**,不是基准定论。
 - **通用性在智能体层,不是端到端。** 一套任务无关的 agent 跨 5 个 ML 框架,但**每个新任务都要手写一个评测适配器**(任务描述 + 执行命令 + 样本契约 + 隐藏 gold + 工作区准备)。这不是"任意 repo 零配置复现"。
 - **失败分类器是规则式的。** 它是对 stdout/stderr/diagnostics 的 **execution-grounded 正则/规则**分类器,负责给 LLM 拼修复上下文——**不是"智能"自动诊断**。推理在 Repair 智能体里。
 - **检索未做规模化优化。** 每次检索都现扫仓库(`load_corpus` 遍历目录树),**无缓存、无增量索引**;超大仓库要先做工程优化才能上生产。
-- **是隔离,不是安全沙箱。** 这是面向协作式 agent 的实验完整性运行时。Verifier 拒绝不可验证输出和目标泄漏,执行也在隔离工作目录(可选 Docker + 断网)里跑,但**不保证抵御恶意代码**。
+- **是隔离,不是安全沙箱。** 这是面向协作式 agent 的实验完整性运行时。Verifier 拒绝不可验证输出,目标和 gold 按设计不进入 Agent 上下文；执行在隔离工作目录中运行,可选 Docker + 断网。宿主机 MPS 更快但隔离更弱,两种模式都**不保证抵御恶意代码**。
 
 更准确地说,本项目的 claim 不是"任意 repo 零配置自动复现",而是:
 

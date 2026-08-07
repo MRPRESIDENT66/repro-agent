@@ -66,7 +66,7 @@ def test_generic_prompts_require_evidence_and_real_execution() -> None:
     assert "missing evidence is a request to investigate" in combined
 
 
-def test_all_v2_oracles_publish_a_generic_artifact_contract() -> None:
+def test_all_oracles_publish_a_generic_artifact_contract() -> None:
     from evals.oracles.detectors_timm import make_config as detectors_config
     from evals.oracles.distilbert_sst2 import make_config as distilbert_config
     from evals.oracles.mmpretrain_resnet18 import make_config as mmpretrain_config
@@ -97,7 +97,7 @@ def test_all_v2_oracles_publish_a_generic_artifact_contract() -> None:
         assert "predictions.json" in context
         assert config.public_execution_command in context
         assert "REPRO_RESULT" not in context
-        assert "recompute_fn" in config.verify_kwargs
+        assert callable(config.recompute_fn)
 
 
 def test_oracle_workspaces_are_attempt_scoped() -> None:

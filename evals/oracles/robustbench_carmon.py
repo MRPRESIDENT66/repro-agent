@@ -71,33 +71,6 @@ def _make_recompute(n_examples: int):
 
 
 # ---------------------------------------------------------------------------
-# Contract
-# ---------------------------------------------------------------------------
-
-def _make_public_contract_diagnostics(workdir: Path, recompute, n_examples: int):
-    def _public_contract_diagnostics(session) -> list[str]:
-        if not (workdir / "predictions.json").is_file():
-            issue = (
-                f"No `predictions.json` written. After AutoAttack, the eval must "
-                f"write a JSON list of {n_examples} predicted class ids — the model's "
-                f"prediction on each ADVERSARIAL example, in dataset order."
-            )
-            latest = next(
-                (run for run in reversed(session.transcript) if not run.ok), None
-            )
-            if latest is not None:
-                tail = f"{latest.stdout}\n{latest.stderr}".strip()[-1500:]
-                if tail:
-                    issue += f"\nFix the latest blocking execution error first:\n{tail}"
-            return [issue]
-        if recompute(workdir) is None:
-            return [f"`predictions.json` is malformed or not {n_examples} integer labels."]
-        return []
-
-    return _public_contract_diagnostics
-
-
-# ---------------------------------------------------------------------------
 # Workspace helpers
 # ---------------------------------------------------------------------------
 
@@ -182,7 +155,6 @@ def make_config(attempt: str) -> OracleConfig:
     artifact_dir = ROOT / "evals" / "runs" / f"robustbench_carmon_{attempt}"
 
     recompute = _make_recompute(N_EXAMPLES)
-    contract_diagnostics = _make_public_contract_diagnostics(workdir, recompute, N_EXAMPLES)
 
     return OracleConfig(
         name="robustbench_carmon",
@@ -191,6 +163,8 @@ def make_config(attempt: str) -> OracleConfig:
         expected=EXPECTED,
         tolerance=TOLERANCE,
         attempt=attempt,
+        expected_num_examples=N_EXAMPLES,
+        recompute_fn=recompute,
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_robustbench.py",
@@ -202,8 +176,6 @@ def make_config(attempt: str) -> OracleConfig:
         session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(N_EXAMPLES, EPSILON),
-        public_contract_passes=lambda session: not contract_diagnostics(session),
-        verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": recompute},
         public_result_protocol=EVIDENCE,
         public_execution_command=(
             f"PYTHONPATH=. python eval_robustbench.py "

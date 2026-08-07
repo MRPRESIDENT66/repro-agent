@@ -1,20 +1,10 @@
-"""The reproduction agent — a ReAct loop over shell actions.
+"""Native function-calling loop shared by all reproduction roles.
 
-Each turn the LLM sees the task + the transcript and acts through **native
-function calling** (tools: ``bash`` / ``search_repo`` / ``finish``). The legacy
-text protocol — one ```bash code block or ``FINAL: done`` parsed by regex — is
-kept behind ``use_tools=False`` as the ablation twin, so "tool calls vs text
-parsing" is a measured comparison (format-error rate, success), not a fashion
-choice. Both transports share the same evidence rules, repair tiers, and
-compression.
-
-We run each command in the persistent :class:`~exec.session.Session`, feed back
-a truncated observation, and repeat. On failure, repair escalates by consecutive
-error (traceback → re-state environment → change approach).
-
-M1 scope: the env is pre-provisioned (torch/datasets available); the agent's job
-is to write+run the eval, recover from the real gotchas (dead links, API drift,
-preprocessing), and report a number that deterministic verification can check.
+Each turn the LLM sees the task and transcript, then calls exactly one tool.
+Commands run in a persistent :class:`~exec.session.Session`; their truncated
+observations are fed into the next turn. On repeated command failures, feedback
+escalates from reading the traceback to changing the approach. A small
+``FINAL:`` text fallback handles providers that omit the finish tool call.
 """
 
 from __future__ import annotations
@@ -27,8 +17,6 @@ from typing import Callable
 from agent.llm import LLM, Message, Reply
 from exec.session import Session
 
-_BASH = re.compile(r"```(?:bash|sh)?\s*\n(.*?)```", re.DOTALL)
-_SEARCH = re.compile(r"```search\s*\n(.*?)```", re.DOTALL)
 _FINAL = re.compile(r"^\s*FINAL:\s*(.*?)\s*$", re.DOTALL)
 
 _PREAMBLE = """You are an ML reproduction agent with a persistent bash shell in a \
@@ -47,15 +35,6 @@ _PROTOCOL_TOOLS = """Protocol — every step, call exactly ONE tool:
     cifar10") returns the most relevant file paths in the repo.
   - finish(summary): only after an executed command printed the REPRO_RESULT
     evidence line described below."""
-
-_PROTOCOL_TEXT = """Protocol — every reply is EITHER:
-  1. exactly one ```bash code block: a single shell command. Write scripts with a
-     heredoc, e.g.   cat > eval.py <<'EOF' ... EOF   then run them.
-  2. a line `FINAL: done` only after an executed command printed the REPRO_RESULT
-     evidence line described below.
-  3. if you have cloned a LARGE repo and need to find the eval entry/config, a
-     ```search code block with a natural-language query (e.g. "evaluate resnet18
-     on cifar10") — it returns the most relevant file paths in the repo."""
 
 _EVIDENCE = """A result only counts when an EXECUTED command prints a machine-readable line
 (one per evaluated target):
@@ -141,10 +120,9 @@ TOOLS = [
 ]
 
 
-def _system(task: str, use_tools: bool, evidence_instructions: str | None = None) -> str:
-    protocol = _PROTOCOL_TOOLS if use_tools else _PROTOCOL_TEXT
+def _system(task: str, evidence_instructions: str | None = None) -> str:
     evidence = evidence_instructions or _EVIDENCE
-    return "\n\n".join([_PREAMBLE.format(task=task), protocol, evidence, _STRATEGY])
+    return "\n\n".join([_PREAMBLE.format(task=task), _PROTOCOL_TOOLS, evidence, _STRATEGY])
 
 
 def _truncate(text: str, limit: int = 3000) -> str:
@@ -183,7 +161,7 @@ def _repair(tier: int, obs: str) -> str:
 
 def _msg_len(m: Message) -> int:
     n = len(m["content"]) if isinstance(m.get("content"), str) else 0
-    for tc in m.get("tool_calls", ()):  # in FC mode the command text lives here
+    for tc in m.get("tool_calls", ()):  # command text lives in tool arguments
         n += len(tc["function"]["arguments"])
     return n
 
@@ -240,15 +218,12 @@ class AgentResult:
     peak_ctx_chars: int = 0        # largest context actually sent to the LLM
     peak_ctx_tokens: int = 0       # same, in real tokens (max prompt_tokens/call)
     usage: dict = field(default_factory=dict)  # this run's tokens + yuan (delta)
-    format_errors: int = 0         # turns the model violated the action protocol
-                                   # (text: unparseable reply; FC: no/empty/bad tool call)
-                                   # — the metric the FC-vs-text ablation turns on
+    format_errors: int = 0         # no/empty/bad tool calls from the model
     tool_counts: dict[str, int] = field(default_factory=dict)
 
 
 def run_agent(task: str, session: Session, llm: LLM,
               max_steps: int = 12, compress: bool = False,
-              use_tools: bool = True,
               evidence_instructions: str | None = None,
               system_prompt: str | None = None,
               initial_user_message: str = "Begin.",
@@ -260,7 +235,7 @@ def run_agent(task: str, session: Session, llm: LLM,
     messages: list[Message] = [
         {
             "role": "system",
-            "content": system_prompt or _system(task, use_tools, evidence_instructions),
+            "content": system_prompt or _system(task, evidence_instructions),
         },
         {"role": "user", "content": initial_user_message},
     ]
@@ -280,7 +255,7 @@ def run_agent(task: str, session: Session, llm: LLM,
                            tool_counts=dict(tool_counts))
 
     def run_bash(command: str) -> str:
-        """Execute + classify into observation-or-repair text (shared by both modes)."""
+        """Execute a command and return observation or escalating repair feedback."""
         nonlocal errors, consecutive, ran_eval
         r = session.shell(command)
         if r.stdout.strip():
@@ -296,91 +271,66 @@ def run_agent(task: str, session: Session, llm: LLM,
     for step in range(1, max_steps + 1):
         view = _compress(messages) if compress else messages
         peak_chars = max(peak_chars, sum(_msg_len(m) for m in view))
-        reply = llm.chat(view, tools=active_tools if use_tools else None)
+        reply = llm.chat(view, tools=active_tools)
         peak_tokens = max(peak_tokens, reply.prompt_tokens)
         messages.append(_assistant_msg(reply))
 
-        if use_tools:
-            if not reply.tool_calls:
-                final = _FINAL.search(reply.content or "")
-                if final:
-                    return done(final.group(1).strip(), step, True)
-                format_errors += 1  # prose instead of a tool call
-                messages.append({
-                    "role": "user",
-                    "content": action_nudge or (
-                        "Call the bash tool with one command, or finish "
-                        "once the evidence line was printed."
-                    ),
-                })
-                continue
-            # The protocol promises one action per step. Providers may still
-            # return several parallel tool calls; execute only the first and
-            # acknowledge the rest so assistant↔tool pairing remains valid.
-            call, *skipped = reply.tool_calls
-            if skipped:
-                format_errors += len(skipped)
+        if not reply.tool_calls:
+            final = _FINAL.search(reply.content or "")
+            if final:
+                return done(final.group(1).strip(), step, True)
+            format_errors += 1
+            messages.append({
+                "role": "user",
+                "content": action_nudge or (
+                    "Call the bash tool with one command, or finish "
+                    "once the evidence line was printed."
+                ),
+            })
+            continue
 
-            tool_counts[call.name] = tool_counts.get(call.name, 0) + 1
-            if call.name in custom_handlers:
-                try:
-                    observation = custom_handlers[call.name](call.arguments)
-                except Exception as exc:
-                    format_errors += 1
-                    observation = f"Custom tool failed: {exc}"
-                messages.append(_tool_msg(call.id, observation))
-            elif call.name == "bash":
-                command = str(call.arguments.get("command", "")).strip()
-                if not command:
-                    format_errors += 1  # empty/malformed bash arguments
-                    messages.append(_tool_msg(call.id, "bash requires a 'command' string argument."))
-                else:
-                    messages.append(_tool_msg(call.id, run_bash(command)))
-            elif call.name == "search_repo":
-                from retrieval.search import search_repo
-                obs = search_repo(str(call.arguments.get("query", "")), session.workdir, llm)
-                messages.append(_tool_msg(call.id, f"Search results:\n{obs}"))
-            elif call.name == "finish":
-                final_summary = str(call.arguments.get("summary") or "done")
-                messages.append(_tool_msg(call.id, "finished."))
-                for extra in skipped:
-                    messages.append(_tool_msg(
-                        extra.id,
-                        "Skipped: exactly one tool call is executed per turn.",
-                    ))
-                return done(final_summary, step, True)
+        # Providers may ignore the sequential-tool request. Execute only the
+        # first call, but acknowledge every skipped call to keep API pairing valid.
+        call, *skipped = reply.tool_calls
+        if skipped:
+            format_errors += len(skipped)
+
+        tool_counts[call.name] = tool_counts.get(call.name, 0) + 1
+        if call.name in custom_handlers:
+            try:
+                observation = custom_handlers[call.name](call.arguments)
+            except Exception as exc:
+                format_errors += 1
+                observation = f"Custom tool failed: {exc}"
+            messages.append(_tool_msg(call.id, observation))
+        elif call.name == "bash":
+            command = str(call.arguments.get("command", "")).strip()
+            if not command:
+                format_errors += 1
+                messages.append(_tool_msg(call.id, "bash requires a 'command' string argument."))
             else:
-                format_errors += 1  # hallucinated tool name
-                messages.append(_tool_msg(call.id, f"Unknown tool '{call.name}'."))
-
-            for extra in skipped:
-                messages.append(_tool_msg(
-                    extra.id,
-                    "Skipped: exactly one tool call is executed per turn. "
-                    "Call this tool again on a later turn if still needed.",
-                ))
-            if stop_when is not None and stop_when():
-                return done(stop_summary, step, True)
-            continue
-
-        # --- legacy text protocol (the ablation twin) ---
-        text = reply.content or ""
-        final = _FINAL.search(text)
-        if final:
-            return done(final.group(1).strip(), step, True)
-
-        sq = _SEARCH.search(text)
-        if sq:
+                messages.append(_tool_msg(call.id, run_bash(command)))
+        elif call.name == "search_repo":
             from retrieval.search import search_repo
-            obs = search_repo(sq.group(1).strip(), session.workdir, llm)
-            messages.append({"role": "user", "content": f"Search results:\n{obs}"})
-            continue
+            obs = search_repo(str(call.arguments.get("query", "")), session.workdir, llm)
+            messages.append(_tool_msg(call.id, f"Search results:\n{obs}"))
+        elif call.name == "finish":
+            final_summary = str(call.arguments.get("summary") or "done")
+            messages.append(_tool_msg(call.id, "finished."))
+            for extra in skipped:
+                messages.append(_tool_msg(extra.id, "Skipped: exactly one tool call is executed per turn."))
+            return done(final_summary, step, True)
+        else:
+            format_errors += 1
+            messages.append(_tool_msg(call.id, f"Unknown tool '{call.name}'."))
 
-        m = _BASH.search(text)
-        if not m:
-            format_errors += 1  # reply had no parseable ```bash / search / FINAL
-            messages.append({"role": "user", "content": "Reply with one ```bash block or `FINAL: done`."})
-            continue
-        messages.append({"role": "user", "content": run_bash(m.group(1).strip())})
+        for extra in skipped:
+            messages.append(_tool_msg(
+                extra.id,
+                "Skipped: exactly one tool call is executed per turn. "
+                "Call this tool again on a later turn if still needed.",
+            ))
+        if stop_when is not None and stop_when():
+            return done(stop_summary, step, True)
 
     return done(None, max_steps, False)

@@ -32,14 +32,14 @@ from agent.contracts import (
     validate_report as default_validate_report,
     validate_review as default_validate_review,
 )
-from agent.diagnostics import make_generic_contract_diagnostics as _make_generic_contract_diagnostics
+from agent.diagnostics import make_generic_contract_diagnostics
 from agent.failure import classify_failure
 from agent.llm import ChatLLM
 from agent.repair import (
-    apply_code_patch as _apply_code_patch,
-    make_generic_repair_validator as _make_generic_repair_validator,
-    patch_submission_adapter as _patch_submission_adapter,
-    patch_tool as _patch_tool,
+    apply_code_patch,
+    make_generic_repair_validator,
+    patch_submission_adapter,
+    patch_tool,
 )
 from agent.roles import (
     MAX_REPAIR_ROUNDS,
@@ -259,7 +259,7 @@ class ReproductionPipeline:
         self.code_validator = make_generic_code_validator(config)
         self.validate_report = config.validate_report or default_validate_report
         self.validate_review = config.validate_review or default_validate_review
-        self.contract_diagnostics = _make_generic_contract_diagnostics(config, pass_gate=self.passed)
+        self.contract_diagnostics = make_generic_contract_diagnostics(config, pass_gate=self.passed)
         self.synthesis_instruction = (
             f"Return only the complete executable source code for {config.eval_script}. "
             "The program must produce the public result artifact when executed. "
@@ -308,17 +308,19 @@ class ReproductionPipeline:
         """Public pass gate: verifier-recomputable evidence exists and clears the
         random-chance floor. Never reads the hidden target."""
         config = self.config
-        recompute_fn = config.verify_kwargs.get("recompute_fn")
-        if not callable(recompute_fn):
-            return config.public_contract_passes(session)
         markers = sorted(set(re.findall(r"`([^`\n]+\.(?:json|jsonl|csv))`", config.public_result_protocol)))
         if markers and not all((config.workdir / m).is_file() for m in markers):
             return False
         try:
-            probe = recompute_fn(config.workdir)
+            probe = config.recompute_fn(config.workdir)
         except Exception:
             probe = None
         if not (isinstance(probe, tuple) and probe and isinstance(probe[0], (int, float))):
+            return False
+        if (
+            config.expected_num_examples is not None
+            and (len(probe) < 2 or probe[1] != config.expected_num_examples)
+        ):
             return False
         if config.chance_level is not None and probe[0] < config.chance_level:
             return False
@@ -487,14 +489,16 @@ class ReproductionPipeline:
             parts.append("# Navigator handoff\n\n" + _require_handoff(self.workdir / "navigator_report.md", "navigator"))
         parts.append("# Deterministic public-contract audit\n\n" + "\n".join(f"- {issue}" for issue in diagnostics))
         repair_context = "\n\n".join(parts)
-        repair_validator = _make_generic_repair_validator(
+        repair_validator = make_generic_repair_validator(
             self.code_validator,
             self.session,
             self.workdir,
             execution_start,
             current_code=(self.workdir / config.eval_script).read_text(errors="replace"),
         )
-        patch_validator = lambda payload, rv=repair_validator: _apply_code_patch(self.workdir / config.eval_script, payload, validate_code=rv)
+        patch_validator = lambda payload, rv=repair_validator: apply_code_patch(
+            self.workdir / config.eval_script, payload, validate_code=rv
+        )
         key = f"repair_{round_index}"
         self.roles[key], self.rag[key] = self.rag_role(
             name=key,
@@ -510,8 +514,10 @@ class ReproductionPipeline:
             trigger="execution_error_and_reviewer_finding",
             max_steps=7,
             max_queries=3,
-            submit_schema=_patch_tool("submit_patch", "Patch the current eval script with exact old/new replacements."),
-            submission_adapter=_patch_submission_adapter,
+            submit_schema=patch_tool(
+                "submit_patch", "Patch the current eval script with exact old/new replacements."
+            ),
+            submission_adapter=patch_submission_adapter,
             synthesis_instruction=self.synthesis_instruction
             + " The interactive patch phase did not submit a valid patch, so now return a complete repaired source file.",
             synthesis_validator=repair_validator,
@@ -623,12 +629,12 @@ def run_oracle(config: OracleConfig, pipeline: str = "full") -> None:
     session = pipe.session
 
     verdict = verify_run(
-        session.transcript,
         pipe.workdir,
         expected=config.expected,
         tolerance=config.tolerance,
         metric=config.metric,
-        **config.verify_kwargs,
+        expected_num_examples=config.expected_num_examples,
+        recompute_fn=config.recompute_fn,
     )
 
     rag_requirement = bool(pipe.rag) and all(stage["dynamic"] and stage["calls"] >= 1 for stage in pipe.rag.values())

@@ -71,10 +71,9 @@ def below_chance_diagnostic(
 
 
 def make_generic_contract_diagnostics(
-    config: OracleConfig, pass_gate: Callable[[Any], bool] | None = None
+    config: OracleConfig, pass_gate: Callable[[Any], bool]
 ) -> Callable[[Any], list[str]]:
     """Expose pass/fail contract feedback without oracle-specific repair hints."""
-    gate = pass_gate if pass_gate is not None else config.public_contract_passes
     artifact_markers = sorted(
         set(re.findall(r"`([^`\n]+\.(?:json|jsonl|csv))`", config.public_result_protocol))
     )
@@ -94,7 +93,7 @@ def make_generic_contract_diagnostics(
         return type(value).__name__
 
     def diagnostics(session: Any) -> list[str]:
-        if gate(session):
+        if pass_gate(session):
             return []
         missing = [
             marker for marker in artifact_markers if not (config.workdir / marker).is_file()
@@ -115,22 +114,20 @@ def make_generic_contract_diagnostics(
                     observations.append(f"{marker}: {json_shape(json.loads(path.read_text()))}")
                 except (OSError, ValueError):
                     observations.append(f"{marker}: invalid JSON")
-        recompute = config.verify_kwargs.get("recompute_fn")
         measured = None
-        if callable(recompute):
-            try:
-                measured = recompute(config.workdir)
-            except Exception:
-                measured = None
-            if (
-                isinstance(measured, tuple)
-                and len(measured) >= 2
-                and isinstance(measured[0], (int, float))
-            ):
-                observations.append(
-                    f"public verifier recomputed {config.metric}={measured[0]} "
-                    f"over n={measured[1]} from this artifact"
-                )
+        try:
+            measured = config.recompute_fn(config.workdir)
+        except Exception:
+            measured = None
+        if (
+            isinstance(measured, tuple)
+            and len(measured) >= 2
+            and isinstance(measured[0], (int, float))
+        ):
+            observations.append(
+                f"public verifier recomputed {config.metric}={measured[0]} "
+                f"over n={measured[1]} from this artifact"
+            )
         observed = (
             " Observed public artifact evidence: " + "; ".join(observations) + "."
             if observations
@@ -154,10 +151,3 @@ def make_generic_contract_diagnostics(
         return base
 
     return diagnostics
-
-
-# Backward-compatible private names used by older tests/imports.
-_workspace_artifact_snapshot = workspace_artifact_snapshot
-_latest_execution_observation = latest_execution_observation
-_below_chance_diagnostic = below_chance_diagnostic
-_make_generic_contract_diagnostics = make_generic_contract_diagnostics

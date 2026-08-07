@@ -9,8 +9,7 @@
 # Build (on Apple Silicon / arm64 the x86_64 wheels need amd64 emulation):
 #   docker build --platform linux/amd64 -f docker/mmpretrain.Dockerfile -t repro-mmpretrain:latest .
 #
-# The manifest evals/benchmark/mmpretrain_resnet18_cifar10.yaml references this
-# image by name (docker_image: repro-mmpretrain:latest).
+# evals/oracles/mmpretrain_resnet18.py references this image by name.
 
 FROM --platform=linux/amd64 python:3.10-slim
 

@@ -16,6 +16,10 @@ class OracleConfig:
     expected: float
     tolerance: float
     attempt: str
+    expected_num_examples: int | None
+    recompute_fn: Callable[[Path], tuple[float, int] | None]
+    public_result_protocol: str
+    public_execution_command: str
 
     # Paths
     workdir: Path
@@ -35,22 +39,11 @@ class OracleConfig:
     validate_report: Callable[[str], str] | None = None
     validate_review: Callable[[str], str] | None = None
 
-    # Contract
-    public_contract_passes: Callable[[Any], bool] = field(default=lambda s: True)
     # Random-chance floor for a higher-is-better metric (e.g. 50.0 for binary
     # AUROC, 100/num_classes for balanced top-1 accuracy). When set, the generic
     # path emits a framework-level "below chance => inverted direction" diagnostic
     # from the verifier-recomputed value, never the hidden target.
     chance_level: float | None = None
-
-    # Verify kwargs (forwarded to verify_run)
-    verify_kwargs: dict = field(default_factory=dict)
-
-    # Public machine-readable artifact contract: what output the external verifier
-    # accepts, and the exact command the orchestrator uses to invoke the generated
-    # program. Interface information, not an oracle solution hint.
-    public_result_protocol: str = ""
-    public_execution_command: str = ""
 
     # File names excluded from search (oracle-generated files, e.g. "eval_ebo.py")
     search_extra_exclude: set[str] = field(default_factory=set)

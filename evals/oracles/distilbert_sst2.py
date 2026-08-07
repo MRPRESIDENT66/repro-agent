@@ -75,47 +75,6 @@ def _recompute(workdir: Path):
 
 
 # ---------------------------------------------------------------------------
-# Contract
-# ---------------------------------------------------------------------------
-
-def _make_public_contract_diagnostics(workdir: Path, n_examples: int):
-    def _public_contract_diagnostics(session) -> list[str]:
-        # Feedback for the repair loop, recomputed from the predictions file (the
-        # agent's OWN accuracy — not the hidden target, which it can compute itself
-        # from the dataset anyway).
-        if not (workdir / "predictions.json").is_file():
-            issue = (
-                f"No `predictions.json` written. The eval must write a JSON list of "
-                f"{n_examples} predicted labels (0/1) in SST-2 validation order."
-            )
-            latest = next(
-                (run for run in reversed(session.transcript) if not run.ok), None
-            )
-            if latest is not None:
-                tail = f"{latest.stdout}\n{latest.stderr}".strip()[-1200:]
-                if tail:
-                    issue += f"\nFix the latest blocking execution error first:\n{tail}"
-            return [issue]
-        rec = _recompute(workdir)
-        if rec is None:
-            return [
-                f"`predictions.json` is malformed or not a list of exactly "
-                f"{n_examples} integer labels."
-            ]
-        acc, _ = rec
-        if acc < CHANCE_LEVEL:
-            return [
-                f"Recomputed accuracy ({acc:.2f}) is below the {CHANCE_LEVEL} "
-                f"random-chance baseline for this higher-is-better metric. Inspect "
-                f"label mapping, score direction, and metric computation against "
-                f"public source evidence."
-            ]
-        return []
-
-    return _public_contract_diagnostics
-
-
-# ---------------------------------------------------------------------------
 # Workspace helpers
 # ---------------------------------------------------------------------------
 
@@ -197,8 +156,6 @@ def make_config(attempt: str) -> OracleConfig:
     workdir = ROOT / "workspaces" / "distilbert_sst2_multi_rag" / attempt
     artifact_dir = ROOT / "evals" / "runs" / f"distilbert_sst2_multi_rag_{attempt}"
 
-    contract_diagnostics = _make_public_contract_diagnostics(workdir, N_EXAMPLES)
-
     return OracleConfig(
         name="distilbert_sst2",
         task=TASK,
@@ -206,6 +163,8 @@ def make_config(attempt: str) -> OracleConfig:
         expected=EXPECTED,
         tolerance=TOLERANCE,
         attempt=attempt,
+        expected_num_examples=N_EXAMPLES,
+        recompute_fn=_recompute,
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_sst2.py",
@@ -215,9 +174,7 @@ def make_config(attempt: str) -> OracleConfig:
         session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(),
-        public_contract_passes=lambda session: not contract_diagnostics(session),
-        chance_level=50.0,  # binary SST-2 sentiment classification
-        verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": _recompute},
+        chance_level=CHANCE_LEVEL,
         public_result_protocol=EVIDENCE,
         public_execution_command="python eval_sst2.py",
         search_extra_exclude={

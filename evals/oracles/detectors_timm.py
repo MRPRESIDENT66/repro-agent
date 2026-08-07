@@ -55,42 +55,6 @@ def _make_recompute(gold_path: Path):
     return _recompute
 
 
-def _make_public_contract_diagnostics(workdir: Path, recompute, num_examples: int, num_classes: int):
-    chance = 100.0 / num_classes
-
-    def _public_contract_diagnostics(session) -> list[str]:
-        if not (workdir / "predictions.json").is_file():
-            issue = (
-                f"No `predictions.json` written. The eval must write a JSON list of "
-                f"{num_examples} predicted class ids in dataset order."
-            )
-            latest = next(
-                (run for run in reversed(session.transcript) if not run.ok), None
-            )
-            if latest is not None:
-                tail = f"{latest.stdout}\n{latest.stderr}".strip()[-1500:]
-                if tail:
-                    issue += f"\nFix the latest blocking execution error first:\n{tail}"
-            return [issue]
-        rec = recompute(workdir)
-        if rec is None:
-            return [
-                f"`predictions.json` is malformed or not a list of exactly "
-                f"{num_examples} integer class ids."
-            ]
-        acc, _ = rec
-        if acc <= chance * 1.5:
-            return [
-                f"Recomputed accuracy ({acc:.2f}) is at/near the {chance:.2f}% "
-                f"random-chance baseline for this {num_classes}-class task. Inspect "
-                f"model loading, label mapping, preprocessing, and metric computation "
-                f"against public source evidence."
-            ]
-        return []
-
-    return _public_contract_diagnostics
-
-
 def _scrub_card(text: str, expected: float) -> str:
     """Drop lines that reveal the published number, keep the loading recipe.
 
@@ -193,10 +157,6 @@ def make_config(
         f"trained weights and the preprocessing it expects, evaluate on the full "
         f"test set, and report top-1 accuracy as a percentage."
     )
-    contract_diagnostics = _make_public_contract_diagnostics(
-        workdir, recompute, num_examples, num_classes
-    )
-
     return OracleConfig(
         name=workspace_slug,
         task=task,
@@ -204,6 +164,8 @@ def make_config(
         expected=expected,
         tolerance=tolerance,
         attempt=attempt,
+        expected_num_examples=num_examples,
+        recompute_fn=recompute,
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_detectors.py",
@@ -213,9 +175,7 @@ def make_config(
         session_go_offline=False,
         copy_clean_source=_make_copy_clean_source(workdir, model_name, expected),
         execute_eval=_make_execute_eval(),
-        public_contract_passes=lambda session: not contract_diagnostics(session),
         chance_level=100.0 / num_classes,  # balanced top-1 over num_classes
-        verify_kwargs={"expected_num_examples": num_examples, "recompute_fn": recompute},
         public_result_protocol=evidence,
         public_execution_command=(
             "HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1 "

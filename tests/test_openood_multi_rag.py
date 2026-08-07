@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -21,15 +20,10 @@ from evals.oracles.openood_ebo import (
     _ID_COUNT,
     _OOD,
     _RUNS,
-    _make_public_contract_diagnostics,
     _recompute,
     make_config,
 )
 from exec.session import Session
-
-def _session(*, ok: bool = True, stderr: str = "") -> SimpleNamespace:
-    run = SimpleNamespace(ok=ok, command="python eval_ebo.py", stdout="", stderr=stderr)
-    return SimpleNamespace(transcript=[run])
 
 
 def _write_scores(
@@ -48,11 +42,6 @@ def _write_scores(
         for run in _RUNS
     }
     (workdir / "predictions.json").write_text(json.dumps(data))
-
-
-def _contract(workdir: Path):
-    diagnostics = _make_public_contract_diagnostics(workdir)
-    return diagnostics, lambda session: not diagnostics(session)
 
 
 def _valid_code() -> str:
@@ -89,27 +78,14 @@ def test_openood_rejects_unknown_execution_backend(monkeypatch) -> None:
 
 def test_public_contract_rejects_incomplete_id_scores(tmp_path: Path) -> None:
     _write_scores(tmp_path, id_count=2)
-    _, passes = _contract(tmp_path)
 
-    assert not passes(_session())
     assert _recompute(tmp_path) is None
 
 
 def test_public_contract_accepts_complete_score_coverage(tmp_path: Path) -> None:
     _write_scores(tmp_path)
-    _, passes = _contract(tmp_path)
 
-    assert passes(_session())
     assert _recompute(tmp_path) == (100.0, 50379)
-
-
-def test_missing_predictions_prioritizes_latest_execution_error(tmp_path: Path) -> None:
-    diagnostics, _ = _contract(tmp_path)
-    issues = diagnostics(_session(ok=False, stderr="FileNotFoundError: missing image"))
-
-    assert len(issues) == 1
-    assert "No `predictions.json`" in issues[0]
-    assert "FileNotFoundError: missing image" in issues[0]
 
 
 def test_review_status_fails_closed(tmp_path: Path) -> None:

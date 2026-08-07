@@ -1,9 +1,4 @@
-"""Agent loop — native TOOL-CALL protocol (the default transport).
-
-Mirror of test_loop.py: same loop, function-calling transport. Also covers what
-only this mode adds: assistant↔tool message pairing, compression that must not
-break that pairing, and token/cost accounting.
-"""
+"""Native function-calling loop, message pairing, and usage accounting."""
 
 from __future__ import annotations
 

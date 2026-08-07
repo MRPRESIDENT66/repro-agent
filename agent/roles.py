@@ -393,7 +393,6 @@ def _dynamic_rag_role(
         role_llm,
         max_steps=max_steps,
         compress=False,
-        use_tools=True,
         system_prompt=instruction,
         initial_user_message=context,
         action_nudge=action_nudge,

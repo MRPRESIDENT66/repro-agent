@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 from pathlib import Path
 
@@ -125,91 +124,6 @@ def _recompute(workdir: Path):
     return (sum(run_aucs) / len(run_aucs), total)
 
 # ---------------------------------------------------------------------------
-# Contract diagnostics
-# ---------------------------------------------------------------------------
-
-_DROP_SIGNAL_RE = re.compile(
-    r"broken|FileNotFoundError|No such file|cannot identify image|truncat|"
-    r"could not|UnidentifiedImageError|skipp",
-    re.IGNORECASE,
-)
-
-
-def _silent_drop_hint(session: DockerSession, command_index: int | None) -> str:
-    transcript = list(getattr(session, "transcript", []) or [])
-    run = None
-    if command_index and 1 <= command_index <= len(transcript):
-        run = transcript[command_index - 1]
-    text = f"{getattr(run, 'stdout', '')}\n{getattr(run, 'stderr', '')}" if run else ""
-    dropped = len(_DROP_SIGNAL_RE.findall(text))
-    hint = (
-        " A short count means the pipeline silently dropped listed items rather "
-        "than scoring all of them. Inspect data loading, path resolution, and "
-        "decode errors against the public task; do not subset or drop items."
-    )
-    if dropped:
-        hint += (
-            f" The evaluation log shows at least {dropped} drop/error signal(s) "
-            f"(e.g. 'broken' / FileNotFoundError) — those items did not load."
-        )
-    return hint
-
-
-def _below_chance_diagnostic(actual: float) -> str | None:
-    if actual >= CHANCE_LEVEL:
-        return None
-    return (
-        f"The reported value ({actual}) is below the {CHANCE_LEVEL} random-chance "
-        f"baseline for this higher-is-better metric. Inspect the score direction, "
-        f"label polarity, and metric aggregation against repository evidence."
-    )
-
-
-def _make_public_contract_diagnostics(workdir: Path):
-    def _public_contract_diagnostics(session: DockerSession) -> list[str]:
-        # V2: feedback recomputed from the per-sample EBO scores file the eval wrote.
-        if not (workdir / "predictions.json").is_file():
-            issue = (
-                "No `predictions.json` (the per-sample EBO scores file) was written. "
-                f"It must be {{s0,s1,s2}} each with `id` ({_ID_COUNT}), "
-                "`cifar100` (9000) and `tin` (7793) score lists."
-            )
-            latest = next(
-                (run for run in reversed(session.transcript) if not run.ok), None
-            )
-            if latest is not None:
-                from agent.roles import _search_evidence, _missing_path_hints
-                failure = _search_evidence(f"{latest.stdout}\n{latest.stderr}")
-                hints = _missing_path_hints(f"{latest.stdout}\n{latest.stderr}", workdir)
-                if failure:
-                    issue += f" Fix the latest blocking execution error first:\n{failure}"
-                if hints:
-                    issue += "\nExisting files beside the missing path:\n" + "\n".join(hints)
-            return [issue]
-
-        rec = _recompute(workdir)
-        if rec is None:
-            malformed = (
-                "`predictions.json` is malformed: it must be a dict with keys "
-                f"{{s0,s1,s2}}, each a dict with `id` (exactly {_ID_COUNT} scores), "
-                "`cifar100` (exactly 9000 scores) and `tin` (exactly 7793 scores). "
-                "Inspect the public result protocol and the latest execution log."
-            )
-            transcript = list(getattr(session, "transcript", []) or [])
-            malformed += _silent_drop_hint(session, len(transcript) if transcript else None)
-            return [malformed]
-
-        issues: list[str] = []
-        auroc, _ = rec
-        below = _below_chance_diagnostic(auroc)
-        if below:
-            issues.append(below)
-        return issues
-
-    return _public_contract_diagnostics
-
-
-# ---------------------------------------------------------------------------
 # Workspace helpers
 # ---------------------------------------------------------------------------
 
@@ -299,11 +213,6 @@ def make_config(attempt: str) -> OracleConfig:
     workdir = ROOT / "workspaces" / "openood_ebo_multi_rag" / attempt
     artifact_dir = ROOT / "evals" / "runs" / f"openood_ebo_multi_rag_{attempt}"
 
-    contract_diagnostics = _make_public_contract_diagnostics(workdir)
-
-    def public_contract_passes(session) -> bool:
-        return not contract_diagnostics(session)
-
     return OracleConfig(
         name="openood_ebo",
         task=_task_for_backend(backend),
@@ -311,6 +220,8 @@ def make_config(attempt: str) -> OracleConfig:
         expected=EXPECTED,
         tolerance=TOLERANCE,
         attempt=attempt,
+        expected_num_examples=None,
+        recompute_fn=_recompute,
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_ebo.py",
@@ -319,12 +230,7 @@ def make_config(attempt: str) -> OracleConfig:
         execution_backend=backend,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(workdir, backend),
-        public_contract_passes=public_contract_passes,
         chance_level=CHANCE_LEVEL,
-        verify_kwargs={
-            "expected_num_examples": None,
-            "recompute_fn": _recompute,
-        },
         public_result_protocol=EVIDENCE,
         public_execution_command=(
             ("REPRO_DEVICE=mps " if backend == "mps" else "")

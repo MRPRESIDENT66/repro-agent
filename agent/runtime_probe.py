@@ -129,8 +129,3 @@ def runtime_probe_observation(run: Any, clip) -> str:
         f"stdout:\n{clip(run.stdout, 4000)}\n"
         f"stderr:\n{clip(run.stderr, 4000)}"
     )
-
-
-# Backward-compatible private names used by older tests/imports.
-_runtime_probe_command = runtime_probe_command
-_runtime_probe_observation = runtime_probe_observation

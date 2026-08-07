@@ -95,6 +95,11 @@ def _make_config(tmp_path: Path, outcomes: list[bool]) -> OracleConfig:
     def execute_eval(session):
         ok = outcomes[min(state["i"], len(outcomes) - 1)]
         state["i"] += 1
+        predictions = workdir / "predictions.json"
+        if ok:
+            predictions.write_text(json.dumps([0] * 10))
+        else:
+            predictions.unlink(missing_ok=True)
         rr = RunResult(
             command="python eval.py",
             stdout=('REPRO_RESULT {"metric":"acc","actual":50.0,"num_examples":10}' if ok else ""),
@@ -106,8 +111,12 @@ def _make_config(tmp_path: Path, outcomes: list[bool]) -> OracleConfig:
         session.transcript.append(rr)
         return rr
 
-    def contract_passes(session):
-        return any(r.ok and "REPRO_RESULT" in r.stdout for r in session.transcript)
+    def recompute(path: Path):
+        try:
+            predictions = json.loads((path / "predictions.json").read_text())
+        except (OSError, ValueError):
+            return None
+        return (50.0, len(predictions)) if isinstance(predictions, list) else None
 
     return OracleConfig(
         name="mock",
@@ -116,6 +125,12 @@ def _make_config(tmp_path: Path, outcomes: list[bool]) -> OracleConfig:
         expected=50.0,
         tolerance=1.0,
         attempt="t",
+        expected_num_examples=10,
+        recompute_fn=recompute,
+        public_result_protocol=(
+            "Write `predictions.json`: a JSON list of exactly 10 measured predictions."
+        ),
+        public_execution_command="python eval.py",
         workdir=workdir,
         artifact_dir=tmp_path / "art",
         eval_script="eval.py",
@@ -124,8 +139,6 @@ def _make_config(tmp_path: Path, outcomes: list[bool]) -> OracleConfig:
         execute_eval=execute_eval,
         validate_report=lambda s: s or "report",
         validate_review=lambda s: s or "review",
-        public_contract_passes=contract_passes,
-        verify_kwargs={"expected_num_examples": 10},
     )
 
 
@@ -245,24 +258,8 @@ def test_role_prompts_are_always_generic(tmp_path):
     assert _role_prompts() == GENERIC_PROMPTS
 
 
-def test_generic_task_context_exposes_protocol_but_not_private_target(tmp_path):
+def test_generic_task_context_exposes_artifact_contract_not_private_target(tmp_path):
     cfg = _make_config(tmp_path, outcomes=[True])
-
-    context = _generic_task_context(cfg)
-
-    assert cfg.task in context
-    assert 'metric id must be "acc"' in context
-    assert "num_examples` value must be 10" in context
-    assert "REPRO_RESULT" in context
-    assert str(cfg.expected) not in context
-    assert str(cfg.tolerance) not in context
-
-
-def test_generic_task_context_uses_v2_artifact_contract_when_provided(tmp_path):
-    cfg = _make_config(tmp_path, outcomes=[True])
-    cfg.public_result_protocol = (
-        "Write `predictions.json`: a JSON list of exactly 10 measured predictions."
-    )
     cfg.public_execution_command = (
         "python eval.py --model-dir provisioned_models --data-dir provisioned_data"
     )
@@ -282,7 +279,9 @@ def test_missing_artifact_diagnostic_includes_workspace_snapshot(tmp_path):
     cfg = _make_config(tmp_path, outcomes=[False])
     cfg.public_result_protocol = "Write `predictions.json`: a JSON list."
     (cfg.workdir / "scores.csv").write_text("score\n1.0\n")
-    diagnostics = _make_generic_contract_diagnostics(cfg)(Session(cfg.workdir))
+    diagnostics = _make_generic_contract_diagnostics(
+        cfg, pass_gate=lambda _session: False
+    )(Session(cfg.workdir))
 
     assert "predictions.json" in diagnostics[0]
     assert "scores.csv" in diagnostics[0]
@@ -308,7 +307,9 @@ def test_generic_contract_diagnostics_report_shape_not_solution_hints(tmp_path):
     cfg.public_result_protocol = (
         "Write `predictions.json`: a JSON list of measured predictions."
     )
-    diagnostics = _make_generic_contract_diagnostics(cfg)
+    diagnostics = _make_generic_contract_diagnostics(
+        cfg, pass_gate=lambda _session: False
+    )
 
     issues = diagnostics(Session(cfg.workdir))
 
@@ -322,12 +323,13 @@ def test_generic_contract_diagnostics_expose_own_artifact_shape_and_metric(tmp_p
     cfg.public_result_protocol = (
         "Write `predictions.json`: a JSON object of measured predictions."
     )
-    cfg.public_contract_passes = lambda _session: False
-    cfg.verify_kwargs["recompute_fn"] = lambda _workdir: (12.5, 3)
+    cfg.recompute_fn = lambda _workdir: (12.5, 3)
     (cfg.workdir / "predictions.json").write_text(
         json.dumps({"run": {"id": [1, 2], "ood": [3]}})
     )
-    diagnostics = _make_generic_contract_diagnostics(cfg)
+    diagnostics = _make_generic_contract_diagnostics(
+        cfg, pass_gate=lambda _session: False
+    )
 
     issue = diagnostics(Session(cfg.workdir))[0]
 

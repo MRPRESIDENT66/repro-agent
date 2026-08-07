@@ -34,6 +34,14 @@ Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任�
 
 技术栈:Python、**LangGraph**、**MCP**(Model Context Protocol)、OpenAI 兼容 function calling(provider-agnostic,可跑 DeepSeek/任意 OpenAI 风格端点)、BM25 检索、Docker、`pytest`。
 
+### 推荐源码阅读顺序
+
+1. [`agent/types.py`](agent/types.py)：先看完整的 Oracle 配置契约。
+2. [`evals/oracles/distilbert_sst2.py`](evals/oracles/distilbert_sst2.py)：看一个任务如何准备 workspace、执行和隐藏重算。
+3. [`agent/pipeline.py`](agent/pipeline.py)：看 LangGraph 节点、条件路由和 Repair 循环。
+4. [`agent/roles.py`](agent/roles.py) 与 [`agent/loop.py`](agent/loop.py)：看角色工具和共用的 function-calling 循环。
+5. [`agent/failure.py`](agent/failure.py)、[`agent/repair.py`](agent/repair.py) 与 [`verify/check.py`](verify/check.py)：看失败诊断、patch 和最终判卷。
+
 ## 为什么不是普通 Agent Demo
 
 很多“AI 复现论文”的 demo 最后只输出一个 aggregate 数字，例如 `accuracy=94.82%`。这个数字本身没有证明力：Agent 可能硬编码、抄 README、只跑部分样本，或者根本没做真实评测。
@@ -57,7 +65,7 @@ Agent 从不看到目标值。它必须生成公开协议要求的结果文件�
 - 只硬编码 aggregate 数字或提交不可重算结果；
 - 指标可重算但超过容差。
 
-**当前所有任务都走重算路径(`recompute_fn`)**:判定结果是从逐样本输出对隐藏 gold 现算出来的。旧的 provenance 启发式(只判断"代码看起来像不像评测",可被 dead-code block 伪造)只作为未迁移任务的 fallback 保留,**本基准里没有任何任务用它**。
+`recompute_fn` 是唯一判卷路径：所有结果都由逐样本输出和隐藏 gold 现场重算，不存在 aggregate 分数或“代码看起来像评测”的 fallback。
 
 ### 2. 通用角色提示词 + 公共任务规格
 

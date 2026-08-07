@@ -131,31 +131,6 @@ def _recompute(workdir: Path):
     return score, N_EXAMPLES
 
 
-def _make_public_contract_diagnostics(workdir: Path):
-    def _public_contract_diagnostics(session) -> list[str]:
-        if not (workdir / "predictions.json").is_file():
-            issue = (
-                f"No predictions.json written. Write {N_EXAMPLES} ordered "
-                "objects with integer `id` and finite cosine `similarity`."
-            )
-            latest = next(
-                (run for run in reversed(session.transcript) if not run.ok), None
-            )
-            if latest is not None:
-                tail = f"{latest.stdout}\n{latest.stderr}".strip()[-1500:]
-                if tail:
-                    issue += f"\nFix the latest blocking execution error first:\n{tail}"
-            return [issue]
-        if _load_similarities(workdir) is None:
-            return [
-                f"predictions.json must contain exactly {N_EXAMPLES} ordered "
-                "objects with ids 0..1378 and finite cosine similarities."
-            ]
-        return []
-
-    return _public_contract_diagnostics
-
-
 def _check_assets() -> None:
     required = [SOURCE / "sentence_transformers", PUBLIC_PAIRS, GOLD_SCORES]
     missing = [str(path) for path in required if not path.exists()]
@@ -238,8 +213,6 @@ def _make_execute_eval():
 def make_config(attempt: str) -> OracleConfig:
     workdir = ROOT / "workspaces" / "sentence_transformers_stsb" / attempt
     artifact_dir = ROOT / "evals" / "runs" / f"sentence_transformers_stsb_{attempt}"
-    diagnostics = _make_public_contract_diagnostics(workdir)
-
     return OracleConfig(
         name="sentence_transformers_stsb",
         task=TASK,
@@ -247,6 +220,8 @@ def make_config(attempt: str) -> OracleConfig:
         expected=EXPECTED,
         tolerance=TOLERANCE,
         attempt=attempt,
+        expected_num_examples=N_EXAMPLES,
+        recompute_fn=_recompute,
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_stsb.py",
@@ -265,8 +240,6 @@ def make_config(attempt: str) -> OracleConfig:
         execution_backend="local-offline-cpu-or-mps",
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(),
-        public_contract_passes=lambda session: not diagnostics(session),
-        verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": _recompute},
         public_result_protocol=EVIDENCE,
         public_execution_command=(
             "PYTHONPATH=. python eval_stsb.py --input stsb_pairs.jsonl "

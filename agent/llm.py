@@ -165,11 +165,6 @@ class ChatLLM:
     def complete(self, messages: list[Message]) -> str:
         return self.chat(messages).content
 
-
-# Back-compat alias (was DashScope-specific).
-DashScopeLLM = ChatLLM
-
-
 class ScriptedLLM:
     """Deterministic stand-in replaying canned responses (str or Reply), in order."""
 

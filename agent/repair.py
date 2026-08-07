@@ -207,11 +207,3 @@ def make_generic_repair_validator(
         return code
 
     return validate
-
-
-# Backward-compatible private names used by older tests/imports.
-_patch_tool = patch_tool
-_patch_submission_adapter = patch_submission_adapter
-_apply_code_patch = apply_code_patch
-_failed_import_packages = failed_import_packages
-_make_generic_repair_validator = make_generic_repair_validator

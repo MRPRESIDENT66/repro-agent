@@ -81,40 +81,6 @@ def _recompute(workdir: Path):
 
 
 # ---------------------------------------------------------------------------
-# Contract
-# ---------------------------------------------------------------------------
-
-def _make_public_contract_diagnostics(workdir: Path, n_examples: int):
-    def _public_contract_diagnostics(session) -> list[str]:
-        if not (workdir / "predictions.json").is_file():
-            issue = (
-                f"No `predictions.json` written. Run the repo's test tool with "
-                f"per-sample prediction dumping and write a JSON list of "
-                f"{n_examples} predicted class ids in test order."
-            )
-            latest = next(
-                (run for run in reversed(session.transcript) if not run.ok), None
-            )
-            if latest is not None:
-                tail = f"{latest.stdout}\n{latest.stderr}".strip()[-1500:]
-                if tail:
-                    issue += f"\nFix the latest blocking execution error first:\n{tail}"
-            return [issue]
-        rec = _recompute(workdir)
-        if rec is None:
-            return [
-                f"`predictions.json` is malformed or not a list of {n_examples} "
-                f"integer class ids."
-            ]
-        acc, _ = rec
-        if not 0.0 <= acc <= 100.0:
-            return ["recomputed top-1 must be a percentage in 0-100."]
-        return []
-
-    return _public_contract_diagnostics
-
-
-# ---------------------------------------------------------------------------
 # Workspace helpers
 # ---------------------------------------------------------------------------
 
@@ -182,8 +148,6 @@ def make_config(attempt: str) -> OracleConfig:
     workdir = ROOT / "workspaces" / "mmpretrain_resnet18_multi_rag" / attempt
     artifact_dir = ROOT / "evals" / "runs" / f"mmpretrain_resnet18_multi_rag_{attempt}"
 
-    contract_diagnostics = _make_public_contract_diagnostics(workdir, N_EXAMPLES)
-
     return OracleConfig(
         name="mmpretrain_resnet18",
         task=TASK,
@@ -191,6 +155,8 @@ def make_config(attempt: str) -> OracleConfig:
         expected=EXPECTED,
         tolerance=TOLERANCE,
         attempt=attempt,
+        expected_num_examples=N_EXAMPLES,
+        recompute_fn=_recompute,
         workdir=workdir,
         artifact_dir=artifact_dir,
         eval_script="eval_mmpretrain.py",
@@ -200,9 +166,7 @@ def make_config(attempt: str) -> OracleConfig:
         session_go_offline=True,
         copy_clean_source=_make_copy_clean_source(workdir),
         execute_eval=_make_execute_eval(),
-        public_contract_passes=lambda session: not contract_diagnostics(session),
         chance_level=10.0,  # CIFAR-10 top-1 (10 balanced classes)
-        verify_kwargs={"expected_num_examples": N_EXAMPLES, "recompute_fn": _recompute},
         public_result_protocol=PUBLIC_RESULT_PROTOCOL,
         public_execution_command="python eval_mmpretrain.py",
         search_extra_exclude={

@@ -46,6 +46,14 @@ Stack: Python, **LangGraph**, **MCP** (Model Context Protocol), OpenAI-compatibl
 function calling (provider-agnostic; runs on DeepSeek/any OpenAI-style endpoint),
 BM25 retrieval, Docker, `pytest`.
 
+### Recommended code-reading order
+
+1. [`agent/types.py`](agent/types.py) — the complete Oracle contract.
+2. [`evals/oracles/distilbert_sst2.py`](evals/oracles/distilbert_sst2.py) — one concrete task from workspace setup through hidden recomputation.
+3. [`agent/pipeline.py`](agent/pipeline.py) — LangGraph nodes, routes, and the repair loop.
+4. [`agent/roles.py`](agent/roles.py) and [`agent/loop.py`](agent/loop.py) — role tools and the shared function-calling loop.
+5. [`agent/failure.py`](agent/failure.py), [`agent/repair.py`](agent/repair.py), and [`verify/check.py`](verify/check.py) — diagnosis, patching, and final grading.
+
 ## Pipeline
 
 ```text
@@ -93,7 +101,7 @@ The agent context and provisioned workspace omit the hidden target metric. It mu
 
 Fail-closed cases include missing artifact, malformed JSONL/CSV, wrong sample count, aggregate-only output, non-recomputable predictions, and values outside tolerance. Public diagnostics can be fed back to Reviewer/Repair, but hidden expected values are not exposed to the agent workspace.
 
-**All current tasks use the recompute path** (`recompute_fn`): the verdict is a fresh metric computed from per-sample outputs against pinned gold. An older provenance heuristic (which only checked that the code *looked* like an eval, and was forgeable with a dead-code block) remains as a fallback for unmigrated tasks but is **not used by any task in this benchmark**.
+`recompute_fn` is the only grading path: every verdict is a fresh metric computed from per-sample outputs against pinned gold. There is no aggregate-score or code-shape fallback.
 
 ## Observability
 

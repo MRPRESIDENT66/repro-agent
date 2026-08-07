@@ -22,6 +22,22 @@ The formal worktree was not clean. The runner saved its exact binary patch besid
 the manifests; attribute results to the base commit plus diff hash, not to the
 base commit by itself.
 
+## Post-Freeze Held-Out Task
+
+| Field | Value |
+|---|---|
+| Frozen generic agent commit | `8fa152e` |
+| Frozen paths | `agent/`, `retrieval/`, `exec/`, `verify/` |
+| Task | Sentence-Transformers `all-mpnet-base-v2` on STS-B test |
+| Pipeline / repeats | `full`, N=5 |
+| Formal manifest | `logs/holdout_n5/manifest_20260807T104352Z.json` |
+| Result | 5/5 verifier passes; 5/5 without workflow error |
+| Excluded pilot | `manifest_20260807T103345Z.json`; Oracle CLI-output marker defect |
+
+The excluded pilot remains auditable but is not part of the reported E3 cell.
+The replacement batch uses distinct attempt names and records the exclusion
+reason and hashes of every evaluation-side adapter file.
+
 ## Benchmark Repositories
 
 | Repository | Commit SHA |
@@ -29,6 +45,7 @@ base commit by itself.
 | OpenOOD | `3c35632ee91b54b09d1f085d04f94744cece7d0b` |
 | mmpretrain | `ee7f2e88501f61aa95c742dd5f429f039935ee90` |
 | robustbench | `78fcc9e48a07a861268f295a777b975f25155964` |
+| sentence-transformers v5.7.0 (held out) | `b2a9529cf6312d2b2a8ffa2b64d82fabc1571bd8` |
 | RepDistiller (artifact-blocked) | `b84f547c5db6a35318d4671d7d5c4de74c822403` |
 
 ## Checkpoints
@@ -37,6 +54,7 @@ base commit by itself.
 |---|---|
 | mmpretrain ResNet-18 CIFAR-10 | official `resnet18_b16x8_cifar10_20210528-bd6371c8.pth`; SHA-256 prefix `bd6371c8f499` |
 | RobustBench `Carmon2019Unlabeled.pt` | SHA-256 `f3ea703e4e98d26947bced9580f63922e31423233bbe45eebff8c7d45b7eacfc` |
+| Sentence-Transformers `all-mpnet-base-v2` | Hugging Face revision `e8c3b32edf5434bc2275fc9bab85f82640a19130` |
 | DistilBERT and detectors models | HuggingFace snapshot cache; record the exact snapshot hash for future published runs |
 
 ## Local Docker Images Used For The Next Run

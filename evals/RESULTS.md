@@ -69,6 +69,40 @@ For the four ablation tasks this table uses the `full` rows from E2; detectors V
 | `full` | **17/20 (85%)** | **12/17 (71%)** | 4.20 | 2.10 | ¥0.245 |
 <!-- GENERATED_N5_END -->
 
+## E3: Post-Freeze Held-Out Repository N=5
+
+After the development-task runtime and prompts were committed as `8fa152e`, a
+new repository and metric were selected: Sentence-Transformers v5.7.0 with the
+pinned `all-mpnet-base-v2` checkpoint on the 1,379-pair STS-B test split. Only
+evaluation-side files were added: public task/workspace provisioning, private
+gold and Spearman recomputation, an asset-preparation script, a thin runner, and
+Oracle tests. The frozen `agent/`, `retrieval/`, `exec/`, and `verify/` paths were
+unchanged.
+
+The agent received sentence pairs without labels and wrote one cosine similarity
+per pair. The verifier independently recomputed Spearman correlation against
+private gold scores. All five runs produced the full artifact in one evaluation;
+no Repair round was needed.
+
+| Task | Condition | verified | no workflow error / verified | mean cmds | mean evals | mean cost |
+|---|---|---:|---:|---:|---:|---:|
+| Sentence-Transformers `all-mpnet-base-v2` / STS-B test | `full` | **5/5 (100%)** | **5/5 (100%)** | 2.00 | 1.00 | ¥0.200 |
+
+The pinned CPU reference was `0.8342216679`; every reportable run recomputed
+`0.8342216139`, well within the predeclared `0.001` tolerance. Configured token
+cost was ¥1.0015 total across the five runs.
+
+### Excluded Pilot Disclosure
+
+Manifest `logs/holdout_n5/manifest_20260807T103345Z.json` is excluded from E3.
+The first adapter wording exposed `predictions.json` as a literal generic code
+marker, so a valid program that honored the public `--output predictions.json`
+CLI via `args.output` was falsely rejected before execution. That was an Oracle
+adapter defect, not a model-evaluation failure. The protocol wording was fixed,
+a regression test was added, and all five attempts were rerun under new names in
+`manifest_20260807T104352Z.json`; no agent/runtime/prompt code changed. The pilot
+artifacts remain locally auditable and were not selected into the reported cell.
+
 ## Failure Analysis
 
 - **One-shot misses the hard tasks.** OpenOOD `solo` produced no recomputable
@@ -105,6 +139,11 @@ and verifier, but host MPS has weaker execution isolation than offline Docker.
 - Main manifest: `logs/n5/manifest_20260807T015201Z.json`
 - Coverage manifests: `logs/n5/manifest_20260807T052105Z.json`,
   `manifest_20260807T060206Z.json`, `manifest_20260807T061133Z.json`
+- Held-out manifest: `logs/holdout_n5/manifest_20260807T104352Z.json`
+- Held-out frozen agent commit: `8fa152e`; Sentence-Transformers source:
+  `b2a9529cf6312d2b2a8ffa2b64d82fabc1571bd8` (`v5.7.0`)
+- STS-B dataset revision: `ab7a5ac0e35aa22088bdcf23e7fd99b220e53308`;
+  all-mpnet-base-v2 revision: `e8c3b32edf5434bc2275fc9bab85f82640a19130`
 - OpenOOD backend: host MPS; mmpretrain: offline Docker/CPU; remaining tasks:
   clean local subprocess environments with pre-cached assets.
 
@@ -115,7 +154,7 @@ commit alone.
 ## Limits
 
 - N=5 is prototype evidence, not a significance-tested benchmark.
-- These are development tasks used while iterating the runtime, not a held-out
-  repository generalization set.
+- Six tasks were used while iterating the runtime. E3 adds one post-freeze
+  held-out repository, which is useful evidence but not a representative set.
 - Every new task still requires a hand-written public adapter and hidden verifier.
 - Full collaboration is a configurable mode, not a claim of universal dominance.

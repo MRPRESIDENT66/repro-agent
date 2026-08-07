@@ -9,8 +9,9 @@ writes and executes an evaluation program with **native tool calling**,
 **independent, fail-closed evaluation harness** that recomputes the metric from
 per-sample outputs — the agent never sees the target number.
 
-Scope is honest: this is prototype-scale N=5 evidence across six tasks, not a
-battle-tested universal runtime. See [Scope / Limitations](#scope--limitations).
+Scope is honest: this is prototype-scale N=5 evidence across six development
+tasks plus one post-freeze held-out repository, not a battle-tested universal
+runtime. See [Scope / Limitations](#scope--limitations).
 
 Orchestrated with **LangGraph** (a `StateGraph` of role nodes with a conditional
 repair loop); the retrieval, failure-classified repair, sandboxed execution, and
@@ -22,6 +23,7 @@ API. Selected tool capabilities are also exposed over **MCP** for external clien
 | Fresh full-pipeline coverage across 6 tasks | **27 verified passes / 30 runs** |
 | Four-task ablation, `solo` → `solo-repair` → `full` | **7/20 → 14/20 → 17/20 verified** |
 | Hardest task (OpenOOD), `solo` → `full` | **0/5 → 4/5 verified** |
+| Post-freeze held-out repo: Sentence-Transformers STS-B | **5/5 verified, 5/5 workflow-clean** |
 
 ![Architecture: blind inputs feed a generic role pipeline that emits per-sample predictions, which an independent verifier recomputes against pinned gold labels.](docs/architecture.svg)
 
@@ -119,8 +121,10 @@ python mcp_server.py   # stdio transport
 ## Experiment Results
 
 Current summarized results live in [evals/RESULTS.md](evals/RESULTS.md). The
-fresh evaluation contains 70 DeepSeek V4 Flash runs: a four-task, three-condition
-N=5 ablation plus two additional full-pipeline N=5 coverage cells.
+reportable evaluation contains 75 DeepSeek V4 Flash runs: 70 development-task
+runs plus a post-freeze Sentence-Transformers held-out full-pipeline N=5 cell.
+An earlier five-run holdout pilot is disclosed but excluded because the new
+Oracle adapter falsely rejected valid CLI output-path code.
 
 ## Pipeline Ablation
 
@@ -157,6 +161,13 @@ export LLM_THINKING=disabled
 python run_distilbert_multi_rag.py
 PIPELINE=solo-repair python run_openood_multi_rag.py
 PIPELINE=full python run_robustbench_multi_rag.py
+```
+
+Prepare and run the held-out Sentence-Transformers task:
+
+```bash
+.venv-oracle/bin/python scripts/prepare_sentence_transformers_stsb.py
+.venv/bin/python scripts/run_holdout_n5.py --batch holdout_v2_n5
 ```
 
 OpenOOD defaults to the offline Docker/CPU backend. On Apple Silicon, a faster
@@ -200,10 +211,11 @@ Stated plainly, so the claims don't outrun the evidence:
 
 - **Prototype-scale evaluation.** The main ablation covers four tasks × three
   conditions at N=5, and full-pipeline coverage spans six tasks at N=5. There are
-  no confidence intervals or held-out repository set; treat the numbers as
-  prototype evidence, not a benchmark verdict.
+  no confidence intervals. One post-freeze held-out repository adds direct
+  generalization evidence, but one task is not a representative held-out set;
+  treat the numbers as prototype evidence, not a benchmark verdict.
 - **Generality is in the agent layer, not end-to-end.** One task-agnostic agent
-  handles 5 different ML frameworks, but each new task needs a hand-written
+  handles 6 different ML code ecosystems, but each new task needs a hand-written
   adapter (task spec + execution command + sample contract + hidden gold +
   workspace provisioning). This is not zero-config reproduction of arbitrary repos.
 - **The failure classifier is rule-based.** It is an execution-grounded *regex/rule*

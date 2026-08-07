@@ -4,7 +4,7 @@
 
 Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任务的**盲测多智能体复现基准 + 运行时(blind multi-agent reproduction benchmark + runtime)**。一队角色分工的 LLM 智能体在盲测条件下复现已发布的 ML 结果:用 **native tool calling** 自主读 repo、写评测脚本、执行、**从真实执行失败中自我修复(self-correction)**,最终由一个**独立、fail-closed 的评测器(evaluation harness)**从逐样本 artifact 重算指标——智能体全程看不到目标数字。
 
-**定位要诚实**:这是 6 项任务上的 N=5 **原型规模证据**,不是经过大规模验证的通用 runtime。详见 [项目边界](#项目边界)。
+**定位要诚实**:这是 6 项开发任务加 1 个冻结后 held-out 仓库上的 N=5 **原型规模证据**,不是经过大规模验证的通用 runtime。详见 [项目边界](#项目边界)。
 
 编排用 **LangGraph**(一个由角色节点组成的 `StateGraph`,带条件式修复循环);检索、失败分类修复、隔离执行、盲测验证器都直接实现在 provider-agnostic 的 OpenAI 兼容 API 上。部分工具能力还通过 **MCP** 独立暴露给外部客户端。
 
@@ -13,6 +13,7 @@ Repro-Agent 是一个**研究原型(research prototype)**:面向代码仓库任�
 | 6 项任务的 fresh full-pipeline coverage | **30 次运行中 27 次通过独立验证** |
 | 4 任务消融：`solo` → `solo-repair` → `full` | **7/20 → 14/20 → 17/20 通过验证** |
 | 最难任务 OpenOOD：`solo` → `full` | **0/5 → 4/5 通过验证** |
+| 冻结后 held-out 仓库：Sentence-Transformers STS-B | **5/5 通过，5/5 无流程异常** |
 
 ![Architecture: blind inputs feed a generic role pipeline that emits per-sample predictions, which an independent verifier recomputes against pinned gold labels.](docs/architecture.svg)
 
@@ -137,8 +138,9 @@ python mcp_server.py   # stdio 传输
 ## 实验结果
 
 当前实验摘要放在 [evals/RESULTS.md](evals/RESULTS.md)。fresh evaluation
-共 70 次 DeepSeek V4 Flash 运行：4 任务 × 3 条件 × N=5 的主消融，外加
-2 个任务的 full-pipeline N=5 覆盖实验。
+共报告 75 次 DeepSeek V4 Flash 运行：70 次开发任务实验，外加冻结后
+Sentence-Transformers held-out full-pipeline N=5。另有一批5次的holdout pilot
+因新Oracle误拒绝合法的CLI输出路径代码而明确排除，不计入正式结果。
 
 ## Pipeline Conditions
 
@@ -197,6 +199,13 @@ PIPELINE=solo-repair python run_openood_multi_rag.py
 PIPELINE=full python run_robustbench_multi_rag.py
 ```
 
+准备并运行冻结后的 held-out Sentence-Transformers 任务：
+
+```bash
+.venv-oracle/bin/python scripts/prepare_sentence_transformers_stsb.py
+.venv/bin/python scripts/run_holdout_n5.py --batch holdout_v2_n5
+```
+
 OpenOOD 默认使用断网的 Docker/CPU 后端。Apple Silicon 可以对可信、人工检查过
 的仓库启用更快的宿主机 MPS 后端:
 
@@ -219,8 +228,8 @@ pytest -m integration  # 依赖 Docker daemon 的测试
 
 把话说在前面,免得 claim 超过证据:
 
-- **原型规模的评测。** 主消融覆盖 4 任务 × 3 条件 × N=5，full-pipeline coverage 覆盖 6 任务 × N=5；没有置信区间，也没有 held-out 仓库集合。这些数字是**原型证据**,不是基准定论。
-- **通用性在智能体层,不是端到端。** 一套任务无关的 agent 跨 5 个 ML 框架,但**每个新任务都要手写一个评测适配器**(任务描述 + 执行命令 + 样本契约 + 隐藏 gold + 工作区准备)。这不是"任意 repo 零配置复现"。
+- **原型规模的评测。** 主消融覆盖 4 任务 × 3 条件 × N=5，full-pipeline coverage 覆盖 6 任务 × N=5；另有 1 个冻结后 held-out 仓库 N=5，但单个仓库还不能代表完整 held-out 集合，也没有置信区间。这些数字是**原型证据**,不是基准定论。
+- **通用性在智能体层,不是端到端。** 一套任务无关的 agent 跨 6 个 ML 代码生态,但**每个新任务都要手写一个评测适配器**(任务描述 + 执行命令 + 样本契约 + 隐藏 gold + 工作区准备)。这不是"任意 repo 零配置复现"。
 - **失败分类器是规则式的。** 它是对 stdout/stderr/diagnostics 的 **execution-grounded 正则/规则**分类器,负责给 LLM 拼修复上下文——**不是"智能"自动诊断**。推理在 Repair 智能体里。
 - **检索未做规模化优化。** 每次检索都现扫仓库(`load_corpus` 遍历目录树),**无缓存、无增量索引**;超大仓库要先做工程优化才能上生产。
 - **是隔离,不是安全沙箱。** 这是面向协作式 agent 的实验完整性运行时。Verifier 拒绝不可验证输出,目标和 gold 按设计不进入 Agent 上下文；执行在隔离工作目录中运行,可选 Docker + 断网。宿主机 MPS 更快但隔离更弱,两种模式都**不保证抵御恶意代码**。

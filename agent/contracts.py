@@ -39,13 +39,13 @@ def validate_report(content: str) -> str:
     return content + "\n"
 
 
-def validate_review(content: str) -> str:
+def validate_audit(content: str) -> str:
     content = validate_report(content)
-    matches = re.findall(r"REVIEW_STATUS:\s*(PASS|REPAIR_REQUIRED)", content)
+    matches = re.findall(r"AUDIT_STATUS:\s*(PASS|REPAIR_REQUIRED)", content)
     if not matches:
-        raise ValueError("review must end with REVIEW_STATUS: PASS or REPAIR_REQUIRED")
+        raise ValueError("audit must end with AUDIT_STATUS: PASS or REPAIR_REQUIRED")
     body = re.sub(
-        r"[*`]*REVIEW_STATUS:\s*(?:PASS|REPAIR_REQUIRED)[*`]*\s*$",
+        r"[*`]*AUDIT_STATUS:\s*(?:PASS|REPAIR_REQUIRED)[*`]*\s*$",
         "",
         content.rstrip(),
     ).rstrip()
@@ -60,9 +60,9 @@ def validate_review(content: str) -> str:
                 missing.append(category)
         if missing:
             raise ValueError(
-                "PASS review lacks source-path evidence for: " + ", ".join(missing)
+                "PASS audit lacks source-path evidence for: " + ", ".join(missing)
             )
-    return f"{body}\n\nREVIEW_STATUS: {matches[-1]}\n"
+    return f"{body}\n\nAUDIT_STATUS: {matches[-1]}\n"
 
 
 def make_generic_code_validator(config: OracleConfig) -> Callable[[str], str]:
@@ -76,7 +76,7 @@ def make_generic_code_validator(config: OracleConfig) -> Callable[[str], str]:
     def validate(content: str) -> str:
         code = extract_python(content)
         try:
-            ast.parse(code)
+            tree = ast.parse(code)
         except SyntaxError as exc:
             raise ValueError(f"code is not syntactically valid: {exc}") from exc
         missing = [marker for marker in literal_markers if marker not in code]
@@ -84,6 +84,42 @@ def make_generic_code_validator(config: OracleConfig) -> Callable[[str], str]:
             raise ValueError(
                 "code does not produce the public result artifact described by the "
                 f"runtime contract (missing: {missing})"
+            )
+        has_lambda = any(isinstance(node, ast.Lambda) for node in ast.walk(tree))
+        has_worker_dataloader = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (
+                func.id
+                if isinstance(func, ast.Name)
+                else func.attr
+                if isinstance(func, ast.Attribute)
+                else ""
+            )
+            if name != "DataLoader":
+                continue
+            worker_values = [
+                keyword.value
+                for keyword in node.keywords
+                if keyword.arg == "num_workers"
+            ]
+            if len(node.args) > 5:
+                worker_values.append(node.args[5])
+            for value in worker_values:
+                try:
+                    workers = ast.literal_eval(value)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(workers, int) and workers > 0:
+                    has_worker_dataloader = True
+                    break
+        if has_lambda and has_worker_dataloader:
+            raise ValueError(
+                "code combines a lambda with DataLoader num_workers > 0; spawn-based "
+                "workers cannot pickle local lambdas. Use a module-level callable or "
+                "set num_workers=0 without reducing sample coverage."
             )
         return code
 

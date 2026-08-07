@@ -1,0 +1,105 @@
+name: openood_ebo
+
+workspace:
+  slug: openood_ebo_multi_rag
+
+repository:
+  path: repos/OpenOOD
+  commit: 3c35632ee91b54b09d1f085d04f94744cece7d0b
+
+assets:
+  - source: repos/OpenOOD
+    mount_as: .
+    exclude: [.git, .mps-site, __pycache__, data, results, run_nearood_ebo_cpu.py, nearood_ebo_cpu_results.json]
+  - source: repos/OpenOOD/data
+    mount_as: data
+    include:
+      - benchmark_imglist/cifar10
+      - images_classic/cifar10/test
+      - images_classic/cifar100/test
+      - images_classic/tin/val
+  - source: repos/OpenOOD/results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+    mount_as: results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+    include:
+      - s0/best.ckpt
+      - s0/config.yml
+      - s1/best.ckpt
+      - s1/config.yml
+      - s2/best.ckpt
+      - s2/config.yml
+
+dataset:
+  format: grouped-images
+  expected_samples: 50379
+
+task:
+  description: |
+    Reproduce the official EBO Near-OOD AUROC for CIFAR-10 using the official s0,
+    s1, and s2 CrossEntropy ResNet-18 checkpoints and both Near-OOD datasets,
+    CIFAR-100 and TinyImageNet. The fixed OpenOOD repository, data, and
+    checkpoints are present. Preserve repository preprocessing, score direction,
+    complete sample coverage, and aggregation semantics. Report percentage AUROC.
+
+output:
+  file: predictions.json
+  format: json
+  structure: grouped_scores
+  fields: {}
+  groups: [s0, s1, s2]
+  series: {id: 9000, cifar100: 9000, tin: 7793}
+  positive_series: [cifar100, tin]
+  negative_series: id
+  positive_label: OOD
+  negative_label: ID
+  protocol: |
+    Write `predictions.json` as per-sample EBO scores grouped by checkpoint:
+    `{"s0":{"id":[9000 scores],"cifar100":[9000 scores],"tin":[7793 scores]},
+    "s1":{...},"s2":{...}}`. Use the complete datasets and the EBO convention
+    where OOD scores are higher than ID. The verifier independently computes
+    each OOD-vs-ID AUROC, averages datasets within each run, then averages runs.
+    Printed metrics are ignored; do not hardcode scores.
+
+execution:
+  generated_script: eval_ebo.py
+  command: >-
+    python eval_ebo.py
+    --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+  timeout: 1800
+  runtime: docker
+  backend: docker
+  go_offline: true
+  python: /usr/local/bin/python
+  image: repro-openood:latest
+  memory: 6g
+  cpus: 6
+  profile_env: OPENOOD_EXECUTION_BACKEND
+  default_profile: docker
+  profiles:
+    docker:
+      task_suffix: "\n\nThe execution environment is CPU-only and offline."
+    mps:
+      runtime: local
+      backend: mps
+      go_offline: false
+      python: .venv-oracle/bin/python
+      command: >-
+        REPRO_DEVICE=mps python eval_ebo.py
+        --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
+      environment:
+        PYTHONPATH: "{root}/repos/OpenOOD/.mps-site"
+        PYTORCH_ENABLE_MPS_FALLBACK: "1"
+        REPRO_DEVICE: mps
+      required:
+        - .venv-oracle/bin/python
+        - repos/OpenOOD/.mps-site/numpy/__init__.py
+      task_suffix: "\n\nAll assets are local. Use Apple MPS acceleration for model and input tensors, with CPU fallback only when MPS is unavailable. Preserve full coverage."
+
+verification:
+  metric: near_ood_auroc
+  prediction_field: score
+  expected: 87.58
+  tolerance: 0.05
+  chance_level: 50
+
+privacy:
+  forbidden_names: [run_nearood_ebo_cpu.py, nearood_ebo_cpu_results.json]

@@ -43,3 +43,18 @@ def test_classifies_semantic_mismatch():
     )
 
     assert failure.kind == "semantic_mismatch"
+
+
+def test_classifies_multiprocessing_pickling_before_missing_artifact():
+    failure = classify_failure(
+        session=_Session(
+            stderr="AttributeError: Can't get local object 'build.<locals>.<lambda>'"
+        ),
+        diagnostics=[
+            "The required public result artifact is missing after execution "
+            "(missing: ['predictions.json'])."
+        ],
+    )
+
+    assert failure.kind == "multiprocessing_serialization"
+    assert "num_workers=0" in failure.next_action

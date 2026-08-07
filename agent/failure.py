@@ -33,7 +33,7 @@ def classify_failure(
 
     if workflow_error:
         missing_runtime_file = re.search(
-            r"handoff missing|navigator_report|review_report|"
+            r"handoff missing|navigator_report|audit_report|"
             r"eval_.*\.py.*No such file",
             text,
         )
@@ -88,6 +88,20 @@ def classify_failure(
             "Use path_list probes and repository loader source; do not substitute "
             "a generic dataset layout.",
             "path_list:<nearest existing parent>",
+        )
+    if re.search(
+        r"pickle error|pickl(?:e|ing)|can't get local object|cannot pickle|"
+        r"attempting to start a worker process",
+        text,
+        re.I,
+    ):
+        return Failure(
+            "multiprocessing_serialization",
+            "A multiprocessing worker cannot serialize a local function, lambda, "
+            "or another object captured by the data pipeline.",
+            "Make dataset transforms and worker callables module-level and picklable, "
+            "or set DataLoader num_workers=0 for the portable evaluation path. "
+            "Patch only worker/callable construction; preserve data coverage and order.",
         )
     if re.search(
         r"missing after execution|missing: .*predictions|"

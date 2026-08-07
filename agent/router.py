@@ -59,7 +59,8 @@ mapping, grouped aggregation, metric units, checkpoint coverage, and optional
 dependency imports. Audit requirements must be concrete falsifiable checks, not
 generic advice. For OOD/AUROC tasks, explicitly distinguish repository confidence
 direction from the public output convention and require proof of which group
-should receive larger submitted scores."""
+should receive larger submitted scores. Do not prescribe raw versus negated
+scores or assert a sign before observing repository and public-artifact evidence."""
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,33 @@ def _clip_item(text: str, limit: int = 300) -> str:
     return text[: limit - 3].rsplit(" ", 1)[0] + "..."
 
 
+def _remove_prescriptive_polarity_checks(
+    requirements: tuple[str, ...], *, score_direction_risk: bool
+) -> tuple[str, ...]:
+    """Keep Router checks falsifiable instead of letting it pre-solve score sign."""
+    if not score_direction_risk:
+        return requirements
+    prescriptive = (
+        "polarity",
+        "direction",
+        "higher",
+        "lower",
+        "sign convention",
+        "confidence",
+        "negat",
+        "raw energy",
+        "raw score",
+        "without inversion",
+        "no inversion",
+        "do not invert",
+    )
+    return tuple(
+        requirement
+        for requirement in requirements
+        if not any(term in requirement.lower() for term in prescriptive)
+    )
+
+
 def _rule_plan(config: OracleConfig, workdir: Path) -> dict:
     public_text = f"{config.name}\n{config.task}\n{config.public_result_protocol}".lower()
     matched = [term for term in _SEMANTIC_RISK_TERMS if term in public_text]
@@ -137,6 +165,8 @@ def _rule_plan(config: OracleConfig, workdir: Path) -> dict:
                 "Prove whether ID or OOD samples must receive larger submitted scores; "
                 "do not infer output polarity from a variable named confidence or energy.",
                 "Verify the order of per-dataset and per-checkpoint AUROC aggregation.",
+                "Trace the canonical evaluation preprocessor and verify its exact "
+                "ordered operations, sizes, interpolation, and normalization constants.",
             )
         )
     if any(term in matched for term in ("adversarial", "autoattack", "robust accuracy")):
@@ -239,6 +269,10 @@ def route_task(
     if not reasons:
         reasons.append("rule fallback: small, explicit public task")
 
+    llm_requirements = _remove_prescriptive_polarity_checks(
+        llm_requirements,
+        score_direction_risk="score_direction" in rules["risks"],
+    )
     decision = RouteDecision(
         use_navigator=bool(arguments.get("use_navigator", False)) or rules["force_navigator"],
         require_semantic_audit=(

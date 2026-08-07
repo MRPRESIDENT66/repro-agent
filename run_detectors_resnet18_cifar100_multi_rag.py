@@ -3,19 +3,12 @@
 import os
 
 from agent.pipeline import run_oracle
-from evals.oracles.detectors_timm import make_config
+from evals.catalog import make_config
 
 if __name__ == "__main__":
     run_oracle(
         make_config(
-            attempt=os.environ.get("DETECTORS_ATTEMPT", "001"),
-            model_name="resnet18_cifar100",
-            dataset_desc="the CIFAR-100 test set (uoft-cs/cifar100, split='test')",
-            num_examples=10000,
-            num_classes=100,
-            expected=79.26,
-            workspace_slug="detectors_resnet18_cifar100",
-            gold_labels="cifar100_test_fine_labels.json",
-        ),
-        pipeline=os.environ.get("PIPELINE", "full"),
+            "detectors_resnet18_cifar100",
+            os.environ.get("DETECTORS_ATTEMPT", "001"),
+        )
     )

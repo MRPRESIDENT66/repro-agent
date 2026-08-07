@@ -254,7 +254,7 @@ class _RoleTools:
         self.runtime_probe_recommended = (
             self.allow_runtime_probe
             and self.name.startswith("repair_")
-            and self.trigger == "execution_error_and_reviewer_finding"
+            and self.trigger == "execution_error_and_auditor_finding"
             and self.suggested_probe is not None
         )
 
@@ -425,7 +425,7 @@ def run_rag_role(
     has_execution_feedback = trigger in {
         "execution_result",
         "repair_execution_result",
-        "execution_error_and_reviewer_finding",
+        "execution_error_and_auditor_finding",
     }
     if not has_execution_feedback:
         action_nudge = (
@@ -468,7 +468,7 @@ def run_rag_role(
 
     synthesis_steps = synthesis_peak = 0
     if tools.queries and not tools.submitted:
-        synthesis_messages = [
+        synthesis_base = [
             {
                 "role": "system",
                 "content": (
@@ -491,6 +491,8 @@ def run_rag_role(
                 ),
             },
         ]
+        synthesis_messages = list(synthesis_base)
+        synthesis_log = list(synthesis_base)
         last_error: str | None = None
         last_candidate: str | None = None
         final_validator = synthesis_validator or validator
@@ -498,7 +500,8 @@ def run_rag_role(
             reply = synthesis_llm.chat(synthesis_messages)
             synthesis_steps += 1
             synthesis_peak = max(synthesis_peak, reply.prompt_tokens)
-            synthesis_messages.append({"role": "assistant", "content": reply.content})
+            assistant_message = {"role": "assistant", "content": reply.content}
+            synthesis_log.append(assistant_message)
             candidate = reply.content
             try:
                 validated = final_validator(candidate)
@@ -523,13 +526,21 @@ def run_rag_role(
                         " This is the SAME error as your previous attempt — locate the "
                         "exact construct the error names and change only that."
                     )
-                synthesis_messages.append({"role": "user", "content": correction})
+                correction += (
+                    " Start the next response directly with complete source code. "
+                    "Do not narrate, plan, request tools, or describe another search."
+                )
+                correction_message = {"role": "user", "content": correction}
+                synthesis_log.append(correction_message)
+                # Retry from clean evidence. Keeping an invalid prose/code response in
+                # context can make some providers repeat it verbatim indefinitely.
+                synthesis_messages = [*synthesis_base, correction_message]
                 continue
             atomic_write_text(output_path, validated)
             tools.save_submission(candidate)
             tools.submitted = True
             break
-        _save_messages(f"{name}_synthesis", synthesis_messages, workdir, artifact_dir)
+        _save_messages(f"{name}_synthesis", synthesis_log, workdir, artifact_dir)
 
     _save_role_transcript(name, result, workdir, artifact_dir)
     if not tools.queries:

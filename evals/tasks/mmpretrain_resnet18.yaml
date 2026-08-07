@@ -1,0 +1,68 @@
+name: mmpretrain_resnet18
+
+workspace:
+  slug: mmpretrain_resnet18_multi_rag
+
+repository:
+  path: repos/mmpretrain
+  commit: ee7f2e88501f61aa95c742dd5f429f039935ee90
+  exclude: [.git, __pycache__, "*.pyc"]
+
+model:
+  source: repos/mmpretrain_assets/ckpt.pth
+  mount_as: ckpt.pth
+
+dataset:
+  public_input: repos/mmpretrain_assets/cifar10
+  mount_as: data/cifar10
+  format: directory
+  expected_samples: 10000
+
+assets:
+  - source: repos/mmpretrain
+    mount_as: .
+    exclude: [.git, __pycache__, "*.pyc"]
+  - source: repos/mmpretrain_assets/ckpt.pth
+    mount_as: ckpt.pth
+  - source: repos/mmpretrain_assets/cifar10
+    mount_as: data/cifar10
+
+task:
+  description: |
+    Reproduce the published top-1 accuracy (in percent) of the mmpretrain
+    model-zoo ResNet-18 (b16x8, CIFAR-10) on the 10,000-image CIFAR-10 test set.
+    The repository is the working-directory root, the checkpoint is `ckpt.pth`,
+    and data is under `data/cifar10/`. The environment is CPU-only and offline.
+    Find the matching evaluation entry and config, run real inference, and keep
+    predictions in test order.
+
+output:
+  file: predictions.json
+  format: json
+  structure: values
+  fields:
+    prediction: {type: integer, minimum: 0, maximum: 9}
+
+execution:
+  generated_script: eval_mmpretrain.py
+  command: python eval_mmpretrain.py
+  timeout: 1800
+  runtime: docker
+  backend: docker-offline-cpu
+  go_offline: true
+  python: /usr/local/bin/python
+  image: repro-mmpretrain:latest
+  memory: 6g
+  cpus: 6
+
+verification:
+  metric: top1_accuracy
+  prediction_field: prediction
+  hidden_gold: evals/oracles/gold/cifar10_test_labels.json
+  scale: 100
+  expected: 94.82
+  tolerance: 0.10
+  chance_level: 10
+
+privacy:
+  scrub_globs: ["**/*.md", "**/*.yml", "**/*.json"]

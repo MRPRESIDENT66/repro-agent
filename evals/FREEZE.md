@@ -22,6 +22,11 @@ The formal worktree was not clean. The runner saved its exact binary patch besid
 the manifests; attribute results to the base commit plus diff hash, not to the
 base commit by itself.
 
+The later `legacy-pipelines-v1` tag points to the last committed source tree that
+still exposes `solo`, `solo-repair`, `full`, and `adaptive`. It is a convenient
+code archive, not a replacement for the formal base-commit + diff-hash identity
+above.
+
 ## Post-Freeze Held-Out Task
 
 | Field | Value |

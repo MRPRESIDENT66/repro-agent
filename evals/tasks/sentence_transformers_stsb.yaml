@@ -1,5 +1,9 @@
 name: sentence_transformers_stsb
 
+workspace:
+  slug: sentence_transformers_stsb
+
+
 repository:
   path: repos/sentence-transformers
   version: v5.7.0
@@ -31,6 +35,7 @@ task:
 output:
   file: predictions.json
   format: json
+  structure: records
   allow_extra_fields: false
   fields:
     id:

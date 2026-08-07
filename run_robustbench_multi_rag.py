@@ -3,10 +3,9 @@
 import os
 
 from agent.pipeline import run_oracle
-from evals.oracles.robustbench_carmon import make_config
+from evals.catalog import make_config
 
 if __name__ == "__main__":
     run_oracle(
-        make_config(os.environ.get("ROBUSTBENCH_ATTEMPT", "001")),
-        pipeline=os.environ.get("PIPELINE", "full"),
+        make_config("robustbench_carmon", os.environ.get("ROBUSTBENCH_ATTEMPT", "001"))
     )

@@ -1,72 +1,59 @@
 # Repro-Agent 源码阅读入口
 
-不要从头读完整仓库。先沿着一次真实运行往下看。
+现在项目只有一条运行路径，不需要先理解历史 `solo/full` 实验代码。
 
 ## 一次运行怎么走
 
 ```text
 run_xxx.py
-  -> YAML Manifest：标准任务的公开参数和 Oracle 私有判卷参数
-  -> make_oracle_config()：自动生成 OracleConfig
-  -> run_oracle()：启动流水线，最后调用独立 verifier
-  -> ReproductionPipeline.run()：运行 LangGraph
-  -> _node_navigate()：Navigator 查仓库并提交报告
-  -> _node_reproduce()：Reproducer 查仓库并生成 eval.py
-  -> _node_critique()：Critic 检查并改写 eval.py
-  -> _node_execute()：系统真正执行 eval.py
-       -> _review()：full 模式下，Reviewer 检查代码和执行结果
-  -> _node_repair()：失败时，Repair 修改并再次执行
-  -> _decide()：通过、禁止修复或耗尽预算时结束
-  -> verify_run()：使用隐藏目标和 gold 独立判卷
+  -> catalog.make_config(task, attempt)
+  -> YAML Manifest + 可选 Hook
+  -> OracleConfig
+  -> run_oracle()
+  -> Router
+       -> 简单任务：Reproducer
+       -> 复杂任务：Navigator -> Reproducer
+  -> Execute -> Public Contract Check
+       -> 明确错误：Repair -> Execute
+       -> 语义风险：Auditor -> Repair 或结束
+  -> verify_run()：最后使用私有 gold 判卷一次
 ```
-
-`solo` 只走 Reproducer 和一次 Execute。
-
-`solo-repair` 在失败后进入 Repair，但没有 Navigator、Critic、Reviewer。
-
-`full` 使用全部角色，并在每次执行后调用 Reviewer。
 
 ## 建议阅读顺序
 
-1. `evals/tasks/sentence_transformers_stsb.yaml`：标准任务需要填写什么。
-2. `evals/manifest.py`：Manifest 如何生成 `OracleConfig`。
-3. `agent/pipeline.py`：只看 `_node_*`、`_decide()` 和 `_build_graph()`。
-4. `agent/roles.py`：看 `_RoleTools` 的三个 LLM 工具方法。
-5. `agent/loop.py`：看 LLM 如何逐轮选择并调用一个工具。
-6. `agent/repair.py`：看 patch-first 如何校验和应用补丁。
-7. `verify/check.py`：最后再看独立验证器。
+1. `evals/tasks/distilbert_sst2.yaml`：最简单的标量预测任务。
+2. `evals/tasks/openood_ebo.yaml`：不用 hook 声明复杂资源、双后端和分组指标。
+3. `evals/catalog.py`：任务名怎样映射到 manifest 和 hook。
+4. `evals/manifest.py`：怎样生成 `OracleConfig`。
+5. `agent/pipeline.py`：只看 `_node_*`、`_decide()`、`_build_graph()`。
+6. `agent/roles.py`：LLM 可以调用哪些工具。
+7. `agent/repair.py`：patch-first 怎样应用补丁。
+8. `verify/check.py`：为什么最终判卷与 Agent 隔离。
 
-`agent/artifacts.py` 只负责保存结果和日志，第一次学习可以跳过。
-
-## 角色工具只看这三个方法
+## 三类 LLM 工具
 
 ```text
-_RoleTools.search_repository()  搜索仓库并返回相关代码片段
-_RoleTools.probe_runtime()       受限检查包、函数参数、路径或 CLI
-_RoleTools.submit_artifact()     提交报告、代码、审查或补丁
+search_repo       搜索文件、符号和相关代码片段
+runtime_probe     检查 import、函数参数、路径或 CLI
+submit_xxx        提交路线、handoff、代码、审查或 patch
 ```
 
-`run_rag_role()` 负责把这三个方法绑定给当前 LLM。
+`run_rag_role()` 把合适的工具绑定给当前角色；`run_agent()` 循环执行 LLM
+选择的工具，直到角色提交结果或耗尽预算。
 
-`run_agent()` 只做一个循环：调用 LLM、执行一个工具、把工具结果放回消息，直到提交成功或耗尽步数。
+## State 和磁盘
 
-## 需要认识的 Python 语法
+LangGraph State 是普通字典，保存轮次、失败类型、是否通过公开 contract、
+以及报告路径。完整 `eval.py`、执行日志、Navigator handoff 和 Auditor 报告
+保存在 workdir，避免把大文本在每个节点之间重复复制。
 
-- `self.xxx`：当前对象保存的数据或方法。
-- `@dataclass`：自动生成初始化函数的数据类。
-- `TypedDict`：给字典标注固定字段；LangGraph State 仍然是普通字典。
-- `Callable[[str], str]`：接收字符串并返回字符串的函数。
-- `str | None`：值可以是字符串，也可以没有值。
-- 函数参数中的单独 `*`：后面的参数必须写名字，避免传错位置。
-- `@property`：调用时像字段，例如 `policy.full_team`，实际会执行一个方法。
-- `make_xxx_validator()`：先根据当前任务生成一个校验函数，后面重复使用。
-
-## 第一次学习先忽略
+## 第一次先忽略
 
 - token 和成本统计；
-- transcript、trace、replay 文件保存；
+- transcript、RAG trace、命令 replay；
 - BM25 排序细节；
-- Oracle 内具体数据集和 checkpoint 下载逻辑；
+- 各 ML 仓库的 checkpoint 下载过程；
 - `ScriptedLLM` 测试替身。
 
-先能口述“配置任务 -> 角色查仓库和交付 -> 系统执行 -> 失败修复 -> verifier 独立判卷”，再进入这些细节。
+先能口述“manifest 出题 -> Router 按需分工 -> 真实执行 -> 失败修复 -> 私有
+verifier 判卷”，再深入每个模块。

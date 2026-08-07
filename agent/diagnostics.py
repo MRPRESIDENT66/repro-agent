@@ -74,6 +74,10 @@ def make_generic_contract_diagnostics(config: OracleConfig):
         return type(value).__name__
 
     def diagnostics(session: Any) -> list[str]:
+        if config.public_diagnostics_fn is not None:
+            custom = config.public_diagnostics_fn(config.workdir)
+            if custom:
+                return custom
         if config.public_check_fn(config.workdir):
             return []
         missing = [

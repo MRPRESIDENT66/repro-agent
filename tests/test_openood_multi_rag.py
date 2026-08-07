@@ -9,35 +9,44 @@ import pytest
 from agent.llm import Reply, ScriptedLLM, ToolCall
 from agent.contracts import (
     extract_python as _extract_python,
-    validate_review as _validate_review,
+    validate_audit as _validate_audit,
 )
 from agent.repair import apply_code_patch as _apply_code_patch
 from agent.roles import RoleDeps, missing_path_hints, run_rag_role
 from agent.runtime_probe import runtime_probe_command as _runtime_probe_command
-from evals.oracles.openood_ebo import (
-    _ID_COUNT,
-    _OOD,
-    _RUNS,
-    _recompute,
-    make_config,
-)
+from evals.catalog import make_config as make_task_config, manifest_path
+from evals.manifest import load_manifest
 from exec.session import Session
+
+MANIFEST = load_manifest(manifest_path("openood_ebo"))
+GROUPED = MANIFEST.grouped_scores
+assert GROUPED is not None
+RUNS = GROUPED.groups
+ID_COUNT = GROUPED.series[GROUPED.negative_series]
+OOD_COUNTS = {
+    name: GROUPED.series[name]
+    for name in GROUPED.positive_series
+}
+
+
+def _config():
+    return make_task_config("openood_ebo", "contract-test")
 
 
 def _write_scores(
     workdir: Path,
     *,
-    id_count: int = _ID_COUNT,
+    id_count: int = ID_COUNT,
     ood_counts: dict[str, int] | None = None,
     ood_score: float = 1.0,
 ) -> None:
-    ood_counts = ood_counts or _OOD
+    ood_counts = ood_counts or OOD_COUNTS
     data = {
         run: {
             "id": [0.0] * id_count,
             **{name: [ood_score] * count for name, count in ood_counts.items()},
         }
-        for run in _RUNS
+        for run in RUNS
     }
     (workdir / "predictions.json").write_text(json.dumps(data))
 
@@ -55,7 +64,7 @@ json.dump({}, open("predictions.json", "w"))
 def test_openood_mps_config_is_explicit_and_not_docker_offline(monkeypatch) -> None:
     monkeypatch.setenv("OPENOOD_EXECUTION_BACKEND", "mps")
 
-    config = make_config("mps_config_test")
+    config = make_task_config("openood_ebo", "mps_config_test")
 
     assert config.execution_backend == "mps"
     assert config.session_go_offline is False
@@ -67,7 +76,7 @@ def test_openood_rejects_unknown_execution_backend(monkeypatch) -> None:
     monkeypatch.setenv("OPENOOD_EXECUTION_BACKEND", "cuda-ish")
 
     with pytest.raises(ValueError, match="docker.*mps"):
-        make_config("bad_backend_test")
+        make_task_config("openood_ebo", "bad_backend_test")
 
 
 # ---------------------------------------------------------------------------
@@ -77,19 +86,33 @@ def test_openood_rejects_unknown_execution_backend(monkeypatch) -> None:
 def test_public_contract_rejects_incomplete_id_scores(tmp_path: Path) -> None:
     _write_scores(tmp_path, id_count=2)
 
-    assert _recompute(tmp_path) is None
+    assert _config().recompute_fn(tmp_path) is None
 
 
 def test_public_contract_accepts_complete_score_coverage(tmp_path: Path) -> None:
     _write_scores(tmp_path)
 
-    assert _recompute(tmp_path) == (100.0, 50379)
+    config = _config()
+    assert config.recompute_fn(tmp_path) == (100.0, 50379)
+    assert config.public_check_fn(tmp_path) is True
+
+
+def test_public_contract_rejects_inverted_score_direction(tmp_path: Path) -> None:
+    _write_scores(tmp_path, ood_score=-1.0)
+
+    config = _config()
+    issues = config.public_diagnostics_fn(tmp_path)
+
+    assert config.public_check_fn(tmp_path) is False
+    assert len(issues) == 6
+    assert all("requires OOD scores HIGHER than ID" in issue for issue in issues)
+    assert all("87.58" not in issue for issue in issues)
 
 
 def test_pass_review_requires_source_evidence_for_semantic_pipeline() -> None:
     unsupported = "Plausible review without citations. " + ("x" * 310)
     with pytest.raises(ValueError, match="preprocessing"):
-        _validate_review(unsupported + "\nREVIEW_STATUS: PASS")
+        _validate_audit(unsupported + "\nAUDIT_STATUS: PASS")
 
     grounded = """Source-grounded audit of the complete evaluation path.
 - `model`: `repo/model.py:12` defines the constructor and checkpoint load.
@@ -97,10 +120,10 @@ def test_pass_review_requires_source_evidence_for_semantic_pipeline() -> None:
 - `preprocessing`: `repo/preprocess.py:8` defines ordered transforms and constants.
 - `metric`: `repo/metric.py:20` defines score direction and aggregation.
 The execution log confirms that the measured artifact follows those definitions.
-REVIEW_STATUS: PASS
+AUDIT_STATUS: PASS
 """
 
-    assert _validate_review(grounded).endswith("REVIEW_STATUS: PASS\n")
+    assert _validate_audit(grounded).endswith("AUDIT_STATUS: PASS\n")
 
 
 # ---------------------------------------------------------------------------
@@ -115,10 +138,10 @@ def test_dynamic_rag_query_is_generated_from_error_context(
     artifacts = tmp_path / "artifacts"
     (workspace / "config.yml").write_text("data_root: data/images_classic\n")
     query = "resolve FileNotFoundError benchmark data path"
-    report = "Grounded path audit. " + ("x" * 310) + "\nREVIEW_STATUS: REPAIR_REQUIRED"
+    report = "Grounded path audit. " + ("x" * 310) + "\nAUDIT_STATUS: REPAIR_REQUIRED"
     role_llm = ScriptedLLM([
         Reply("", [ToolCall("q1", "search_repo", {"query": query})]),
-        Reply("", [ToolCall("s1", "submit_review", {"content": report})]),
+        Reply("", [ToolCall("s1", "submit_audit", {"content": report})]),
     ])
     llms = iter([role_llm, ScriptedLLM([]), ScriptedLLM([])])
     deps = RoleDeps(
@@ -131,16 +154,16 @@ def test_dynamic_rag_query_is_generated_from_error_context(
     )
 
     role, rag = run_rag_role(
-        name="reviewer_test",
+        name="auditor_test",
         workdir=workspace,
         artifact_dir=artifacts,
         session=Session(workspace),
         instruction="Query the concrete execution error, then submit the review.",
         context="Execution failed: FileNotFoundError for benchmark data.",
         output_path=workspace / "review.md",
-        submit_name="submit_review",
+        submit_name="submit_audit",
         submit_description="Submit review.",
-        validator=_validate_review,
+        validator=_validate_audit,
         trigger="execution_error",
         max_steps=3,
         deps=deps,
@@ -148,8 +171,8 @@ def test_dynamic_rag_query_is_generated_from_error_context(
 
     assert rag["dynamic"] is True
     assert rag["queries"] == [query]
-    assert role["tool_counts"] == {"search_repo": 1, "submit_review": 1}
-    trace = (artifacts / "reviewer_test_rag_trace.md").read_text()
+    assert role["tool_counts"] == {"search_repo": 1, "submit_audit": 1}
+    trace = (artifacts / "auditor_test_rag_trace.md").read_text()
     assert query in trace
     assert "data_root: data/images_classic" in trace
 

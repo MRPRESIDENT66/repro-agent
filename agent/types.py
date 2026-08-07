@@ -40,6 +40,11 @@ class OracleConfig:
     # from the verifier-recomputed value, never the hidden target.
     chance_level: float | None = None
 
+    # Optional task-specific diagnostics derived only from public artifacts and
+    # public protocol invariants. These may guide repair but must not use hidden
+    # labels, expected metrics, or private verifier output.
+    public_diagnostics_fn: Callable[[Path], list[str]] | None = None
+
     # File names excluded from search (oracle-generated files, e.g. "eval_ebo.py")
     search_extra_exclude: set[str] = field(default_factory=set)
 

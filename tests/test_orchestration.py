@@ -1,8 +1,8 @@
-"""Orchestration tests for the four pipeline conditions.
+"""Deterministic tests for the adaptive orchestration graph.
 
 Verifies deterministically, without real LLM calls, that the conditions share
 one execution budget, stop on a contract pass, and route the
-right roles (retry vs repair vs reviewer). A scripted auto-responder drives every
+right roles (route, navigate, audit, and repair). A scripted auto-responder drives every
 role; a controllable `execute_eval` stub decides each execution's success.
 """
 
@@ -22,7 +22,7 @@ from agent.contracts import (
 from agent.diagnostics import make_generic_contract_diagnostics as _make_generic_contract_diagnostics
 from agent.generic_prompts import GENERIC_PROMPTS
 from agent.llm import Reply, ScriptedLLM, ToolCall, Usage
-from agent.pipeline import ReproductionPipeline, PipelinePolicy, run_oracle
+from agent.pipeline import ReproductionPipeline, run_oracle
 from agent.types import OracleConfig
 from agent.repair import (
     failed_import_packages as _failed_import_packages,
@@ -74,14 +74,14 @@ class _AutoLLM:
                         )
                     ],
                 )
-            if "review" in submit:
+            if submit == "submit_audit":
                 content = """Source-grounded audit of the complete evaluation path.
 - `model`: `repo/model.py:12` defines model construction and checkpoint loading.
 - `data`: `repo/data.py:30` defines the requested test split and sample order.
 - `preprocessing`: `repo/preprocess.py:8` defines transforms and normalization.
 - `metric`: `repo/metric.py:20` defines the metric and aggregation semantics.
 The execution artifact follows these definitions and the public output contract.
-REVIEW_STATUS: PASS
+AUDIT_STATUS: PASS
 """
             elif submit == "submit_handoff":
                 content = (
@@ -117,7 +117,7 @@ REVIEW_STATUS: PASS
                     + repair_line
                 )
             return Reply("", [ToolCall("s", submit, {"content": content})])
-        return Reply("synthesis fallback\nREVIEW_STATUS: PASS\n")
+        return Reply("synthesis fallback\nAUDIT_STATUS: PASS\n")
 
     def complete(self, messages) -> str:
         return self.chat(messages).content
@@ -207,48 +207,29 @@ def test_public_artifact_names_accepts_quoted_and_plain_filenames():
     assert public_artifact_names(protocol) == ["metrics.csv", "predictions.json"]
 
 
-def test_solo_is_one_shot(tmp_path, monkeypatch):
-    _patch(monkeypatch)
-    cfg = _make_config(tmp_path, outcomes=[False, False, False])
-    run_oracle(cfg, pipeline="solo")
-    res = _result(cfg)
-    assert res["eval_executions"] == 1
-    assert not any(
-        k.startswith(("repair_", "reviewer_")) for k in res["roles"]
-    )
-    assert "navigator" not in res["roles"]
-    assert "critic" not in res["roles"]
-
-
 def test_budget_is_shared_and_capped_at_five(tmp_path, monkeypatch):
     _patch(monkeypatch)
-    # A task that never passes: every looped condition must stop at the budget.
-    for pipeline in ("solo-repair", "full", "adaptive"):
-        cfg = _make_config(tmp_path, outcomes=[False] * 10)
-        run_oracle(cfg, pipeline=pipeline)
-        res = _result(cfg)
-        assert res["max_executions"] == 5
-        assert res["eval_executions"] == 5, f"{pipeline} must consume the full budget"
+    cfg = _make_config(tmp_path, outcomes=[False] * 10)
+    run_oracle(cfg)
+    res = _result(cfg)
+    assert res["max_executions"] == 5
+    assert res["eval_executions"] == 5
 
 
 def test_loop_stops_on_contract_pass(tmp_path, monkeypatch):
     _patch(monkeypatch)
-    # Fail, fail, then pass → exactly 3 executions, not the full budget.
-    for pipeline in ("solo-repair", "full", "adaptive"):
-        cfg = _make_config(tmp_path, outcomes=[False, False, True, True])
-        run_oracle(cfg, pipeline=pipeline)
-        res = _result(cfg)
-        # The loop stops as soon as the deterministic contract passes (3rd exec),
-        # not at the full repair budget.
-        assert res["eval_executions"] == 3, f"{pipeline} should stop on the pass"
-        assert res["public_evidence_found"] is True
+    cfg = _make_config(tmp_path, outcomes=[False, False, True, True])
+    run_oracle(cfg)
+    res = _result(cfg)
+    assert res["eval_executions"] == 3
+    assert res["public_evidence_found"] is True
 
 
 def test_langgraph_state_keeps_routing_metadata_but_not_large_artifacts(tmp_path, monkeypatch):
     _patch(monkeypatch)
     cfg = _make_config(tmp_path, outcomes=[False, True])
 
-    pipe = ReproductionPipeline(cfg, PipelinePolicy.from_name("solo-repair")).run()
+    pipe = ReproductionPipeline(cfg).run()
 
     assert pipe.run_state["round"] == 1
     assert pipe.run_state["n_exec"] == 2
@@ -256,32 +237,6 @@ def test_langgraph_state_keeps_routing_metadata_but_not_large_artifacts(tmp_path
     assert pipe.run_state["failure_kind"] is not None
     assert pipe.run_state["eval_script_path"] == "eval.py"
     assert "execution_log" not in pipe.run_state
-
-
-def test_repair_vs_full_route_distinct_roles(tmp_path, monkeypatch):
-    _patch(monkeypatch)
-    outcomes = [False, False, True]
-
-    cfg_repair = _make_config(tmp_path, outcomes=list(outcomes))
-    run_oracle(cfg_repair, pipeline="solo-repair")
-    roles = _result(cfg_repair)["roles"]
-    assert any(k.startswith("repair_") for k in roles)       # feedback repair
-    assert not any(k.startswith("reviewer_") for k in roles)  # no reviewer in solo-repair
-    assert "critic" not in roles and "navigator" not in roles
-
-    cfg_full = _make_config(tmp_path, outcomes=list(outcomes))
-    run_oracle(cfg_full, pipeline="full")
-    roles = _result(cfg_full)["roles"]
-    assert any(k.startswith("repair_") for k in roles)
-    assert any(k.startswith("reviewer_") for k in roles)      # reviewer participates
-    assert "navigator" in roles and "critic" in roles
-
-
-def test_unknown_pipeline_rejected(tmp_path, monkeypatch):
-    _patch(monkeypatch)
-    cfg = _make_config(tmp_path, outcomes=[True])
-    with pytest.raises(ValueError, match="unknown pipeline"):
-        run_oracle(cfg, pipeline="turbo")
 
 
 def test_generic_task_context_exposes_artifact_contract_not_private_target(tmp_path):
@@ -326,6 +281,35 @@ def test_generic_code_validator_checks_public_interface_only(tmp_path):
     assert "tools/test.py" not in str(exc.value)
 
 
+def test_generic_code_validator_rejects_lambda_with_worker_processes(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[True])
+    cfg.public_result_protocol = "Write `predictions.json`: a JSON list."
+    validate = _make_generic_code_validator(cfg)
+    code = """
+from torch.utils.data import DataLoader
+transform = lambda value: value
+loader = DataLoader([], num_workers=2)
+open('predictions.json', 'w').write('[]')
+"""
+
+    with pytest.raises(ValueError, match="cannot pickle local lambdas"):
+        validate(code)
+
+
+def test_generic_code_validator_allows_lambda_without_worker_processes(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[True])
+    cfg.public_result_protocol = "Write `predictions.json`: a JSON list."
+    validate = _make_generic_code_validator(cfg)
+    code = """
+from torch.utils.data import DataLoader
+transform = lambda value: value
+loader = DataLoader([], num_workers=0)
+open('predictions.json', 'w').write('[]')
+"""
+
+    assert "num_workers=0" in validate(code)
+
+
 def test_generic_contract_diagnostics_report_shape_not_solution_hints(tmp_path):
     cfg = _make_config(tmp_path, outcomes=[False])
     cfg.public_result_protocol = (
@@ -360,11 +344,24 @@ def test_generic_contract_diagnostics_expose_shape_without_private_metric(tmp_pa
     assert str(cfg.tolerance) not in issue
 
 
+def test_generic_contract_diagnostics_prefer_public_semantic_invariant(tmp_path):
+    cfg = _make_config(tmp_path, outcomes=[False])
+    cfg.public_diagnostics_fn = lambda _workdir: [
+        "Semantically invalid public score direction: OOD must be higher than ID."
+    ]
+    diagnostics = _make_generic_contract_diagnostics(cfg)
+
+    issue = diagnostics(Session(cfg.workdir))[0]
+
+    assert "OOD must be higher" in issue
+    assert str(cfg.expected) not in issue
+
+
 def test_adaptive_simple_task_skips_optional_agents(tmp_path, monkeypatch):
     _patch(monkeypatch)
     cfg = _make_config(tmp_path, outcomes=[True])
 
-    run_oracle(cfg, pipeline="adaptive")
+    run_oracle(cfg)
 
     result = _result(cfg)
     assert set(result["roles"]) == {"router", "reproducer"}
@@ -379,28 +376,70 @@ def test_adaptive_semantic_task_uses_navigator_and_auditor(tmp_path, monkeypatch
     cfg = _make_config(tmp_path, outcomes=[True])
     cfg.task = "Reproduce out-of-distribution AUROC with the documented score direction."
 
-    run_oracle(cfg, pipeline="adaptive")
+    run_oracle(cfg)
 
     roles = _result(cfg)["roles"]
     assert "navigator" in roles
     assert "auditor_0" in roles
     assert "router" in roles
-    assert "critic" not in roles
     assert not any(name.startswith("repair_") for name in roles)
-    auditor_transcript = (
-        cfg.artifact_dir.parent
-        / f"{cfg.artifact_dir.name}__adaptive"
-        / "auditor_0_transcript.jsonl"
-    ).read_text()
+    auditor_transcript = (cfg.artifact_dir / "auditor_0_transcript.jsonl").read_text()
     assert "Mandatory audit requirements" in auditor_transcript
     assert "which population receives larger scores" in auditor_transcript
+
+
+def test_adaptive_router_drops_prescriptive_score_sign_requirements(
+    tmp_path, monkeypatch
+):
+    cfg = _make_config(tmp_path, outcomes=[True])
+    cfg.task = "Reproduce out-of-distribution AUROC with energy scores."
+    calls = {"count": 0}
+
+    def factory(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return ScriptedLLM(
+                [
+                    Reply(
+                        "",
+                        [
+                            ToolCall(
+                                "route",
+                                "submit_route",
+                                {
+                                    "use_navigator": True,
+                                    "require_auditor": True,
+                                    "reasons": ["score direction risk"],
+                                    "risk_flags": ["score_direction"],
+                                    "audit_requirements": [
+                                        "Write raw energy and apply no negation.",
+                                        "Use the same polarity as repository AUROC, "
+                                        "not the public direction.",
+                                    ],
+                                },
+                            )
+                        ],
+                    )
+                ]
+            )
+        return _AutoLLM()
+
+    monkeypatch.setattr(pipeline, "ChatLLM", factory)
+    monkeypatch.setattr(pipeline, "search_repo", lambda *a, **k: "Most relevant files:\n")
+
+    run_oracle(cfg)
+
+    requirements = _result(cfg)["routing"]["audit_requirements"]
+    assert any("whether ID or OOD" in item for item in requirements)
+    assert all("negation" not in item for item in requirements)
+    assert all("same polarity" not in item for item in requirements)
 
 
 def test_adaptive_clear_failure_repairs_before_auditing(tmp_path, monkeypatch):
     _patch(monkeypatch)
     cfg = _make_config(tmp_path, outcomes=[False, True])
 
-    run_oracle(cfg, pipeline="adaptive")
+    run_oracle(cfg)
 
     roles = _result(cfg)["roles"]
     assert "repair_1" in roles
@@ -420,7 +459,7 @@ def test_adaptive_router_uses_rule_fallback_on_invalid_llm_output(tmp_path, monk
     monkeypatch.setattr(pipeline, "ChatLLM", factory)
     monkeypatch.setattr(pipeline, "search_repo", lambda *a, **k: "Most relevant files:\n")
 
-    run_oracle(cfg, pipeline="adaptive")
+    run_oracle(cfg)
 
     result = _result(cfg)
     assert result["verdict"]["match"] is True
@@ -440,7 +479,7 @@ def test_repair_loop_never_calls_private_recompute(tmp_path, monkeypatch):
         return original(path)
 
     cfg.recompute_fn = counted_recompute
-    run_oracle(cfg, pipeline="adaptive")
+    run_oracle(cfg)
 
     assert private_calls["count"] == 1
 
@@ -486,7 +525,7 @@ def test_generic_repair_uses_shared_full_file_path(tmp_path, monkeypatch):
         "Write `predictions.json`: a JSON list of measured predictions."
     )
 
-    run_oracle(cfg, pipeline="solo-repair")
+    run_oracle(cfg)
 
     result = _result(cfg)
     assert result["workflow_error"] is None
@@ -495,16 +534,17 @@ def test_generic_repair_uses_shared_full_file_path(tmp_path, monkeypatch):
     assert result["roles"]["repair_1"]["tool_counts"].get("submit_patch") == 1
 
 
-def test_execution_count_survives_reviewer_exception(tmp_path, monkeypatch):
+def test_execution_count_survives_auditor_exception(tmp_path, monkeypatch):
     _patch(monkeypatch)
     cfg = _make_config(tmp_path, outcomes=[True])
+    cfg.task = "Reproduce out-of-distribution AUROC with documented score direction."
 
     def fail_after_execution(*_args, **_kwargs):
         raise RuntimeError("review synthesis failed")
 
-    monkeypatch.setattr(ReproductionPipeline, "_review", fail_after_execution)
+    monkeypatch.setattr(ReproductionPipeline, "_audit", fail_after_execution)
 
-    run_oracle(cfg, pipeline="full")
+    run_oracle(cfg)
 
     result = _result(cfg)
     assert result["verdict"]["actual"] == 50.0
@@ -513,22 +553,23 @@ def test_execution_count_survives_reviewer_exception(tmp_path, monkeypatch):
     assert result["collaboration_pass"] is False
 
 
-def test_full_reviewer_can_request_repair_without_private_verifier(tmp_path, monkeypatch):
+def test_auditor_can_request_repair_without_private_verifier(tmp_path, monkeypatch):
     _patch(monkeypatch)
     cfg = _make_config(tmp_path, outcomes=[True, True])
+    cfg.task = "Reproduce out-of-distribution AUROC with documented score direction."
     calls = {"count": 0}
 
     def request_one_repair(self, *_args, **_kwargs):
         calls["count"] += 1
         status = "REPAIR_REQUIRED" if calls["count"] == 1 else "PASS"
-        (self.workdir / "review_report.md").write_text(
-            ("source-grounded audit " * 20) + f"\nREVIEW_STATUS: {status}\n"
+        (self.workdir / "audit_report.md").write_text(
+            ("source-grounded audit " * 20) + f"\nAUDIT_STATUS: {status}\n"
         )
         return status == "REPAIR_REQUIRED"
 
-    monkeypatch.setattr(ReproductionPipeline, "_review", request_one_repair)
+    monkeypatch.setattr(ReproductionPipeline, "_audit", request_one_repair)
 
-    run_oracle(cfg, pipeline="full")
+    run_oracle(cfg)
 
     result = _result(cfg)
     assert result["eval_executions"] == 2
@@ -541,8 +582,9 @@ def test_generic_context_and_runtime_probe_are_always_enabled(tmp_path, monkeypa
     cfg.public_result_protocol = (
         "Write `predictions.json`: a JSON list of exactly 10 measured predictions."
     )
+    cfg.task = "Reproduce out-of-distribution AUROC with documented score direction."
 
-    run_oracle(cfg, pipeline="full")
+    run_oracle(cfg)
 
     result = _result(cfg)
     assert result["runtime_probe_enabled"] is True

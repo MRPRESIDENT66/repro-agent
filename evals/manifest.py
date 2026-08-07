@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -14,6 +13,23 @@ from typing import Any, Callable
 import yaml
 
 from agent.types import OracleConfig
+from evals.assets import AssetSpec, check_assets, parse_assets, provision_assets
+from evals.execution import (
+    ExecutionProfile,
+    check_profile,
+    execute as execute_profile,
+    make_session as make_profile_session,
+    parse_execution,
+    select_profile,
+)
+from evals.grouped_scores import (
+    GroupedScoresSpec,
+    direction_diagnostics,
+    grouped_auroc,
+    load_grouped_scores,
+    parse_grouped_scores,
+)
+from evals.metrics import METRICS
 from exec.session import RunResult, Session
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,40 +47,67 @@ class FieldSpec:
 @dataclass(frozen=True)
 class TaskManifest:
     name: str
-    repository_path: str
-    repository_commit: str
+    hook: str | None
+    workspace_slug: str
+    artifact_slug: str
+    assets: tuple[AssetSpec, ...]
+    repository_path: str | None
+    repository_commit: str | None
     repository_version: str | None
     repository_exclude: tuple[str, ...]
-    model_source: str
-    model_mount: str
+    model_source: str | None
+    model_mount: str | None
     model_required: tuple[str, ...]
-    dataset_source: str
-    dataset_mount: str
+    dataset_source: str | None
+    dataset_mount: str | None
     dataset_format: str
     dataset_public_fields: tuple[str, ...]
     expected_samples: int
     task_description: str
     output_file: str
     output_format: str
+    output_structure: str
+    output_protocol: str | None
+    grouped_scores: GroupedScoresSpec | None
     output_fields: dict[str, FieldSpec]
     allow_extra_fields: bool
-    generated_script: str
-    execution_command: str
-    execution_timeout: int
-    syntax_check: bool
-    python_path: str
-    environment: dict[str, str]
-    session_type: str
-    execution_backend: str
+    execution_profile: ExecutionProfile
+    execution_profile_env: str | None
+    execution_default_profile: str | None
+    execution_profiles: dict[str, ExecutionProfile]
     metric: str
     prediction_field: str
-    hidden_gold: str
+    hidden_gold: str | None
+    gold_limit: int | None
+    metric_scale: float
     expected: float
     tolerance: float
     chance_level: float | None
+    privacy_forbidden_names: tuple[str, ...]
+    privacy_scrub_globs: tuple[str, ...]
 
     @property
     def public_result_protocol(self) -> str:
+        if self.output_protocol:
+            return self.output_protocol.strip()
+        if self.output_structure in {"custom", "grouped_scores"}:
+            raise ValueError(
+                f"{self.output_structure} output structure requires output.protocol"
+            )
+        if self.output_structure == "values":
+            spec = self.output_fields[self.prediction_field]
+            details = [spec.kind]
+            if spec.minimum is not None or spec.maximum is not None:
+                details.append(f"range [{spec.minimum}, {spec.maximum}]")
+            if spec.description:
+                details.append(spec.description)
+            return (
+                f"The eval must WRITE `{self.output_file}` as a JSON list of exactly "
+                f"{self.expected_samples} values in input order. Every value must be "
+                f"a {'; '.join(details)}. Values must come from real evaluation. The "
+                "verifier ignores printed aggregate metrics and recomputes the metric "
+                "from this file and private gold labels."
+            )
         fields = []
         for name, spec in self.output_fields.items():
             details = [spec.kind]
@@ -87,6 +130,11 @@ class TaskManifest:
 
 ProvisionHook = Callable[[TaskManifest, Path], None]
 VerifierHook = Callable[[TaskManifest, Path], tuple[float, int] | None]
+SessionHook = Callable[[TaskManifest, Path], Any]
+ExecuteHook = Callable[[TaskManifest, Any], RunResult]
+PublicCheckHook = Callable[[TaskManifest, Path], bool]
+PublicDiagnosticsHook = Callable[[TaskManifest, Path], list[str]]
+BlindCheckHook = Callable[[TaskManifest, Path], None]
 
 
 @dataclass(frozen=True)
@@ -94,6 +142,12 @@ class OracleHooks:
     """Optional task code for behavior that a standard manifest cannot express."""
 
     provision: ProvisionHook | None = None
+    provision_override: ProvisionHook | None = None
+    session: SessionHook | None = None
+    execute: ExecuteHook | None = None
+    public_check: PublicCheckHook | None = None
+    public_diagnostics: PublicDiagnosticsHook | None = None
+    blind_check: BlindCheckHook | None = None
     verifier: VerifierHook | None = None
 
 
@@ -143,51 +197,83 @@ def load_manifest(path: str | Path) -> TaskManifest:
     if not isinstance(raw, dict):
         raise ValueError("task manifest must contain a mapping")
 
-    repository = _section(raw, "repository")
-    model = _section(raw, "model")
+    repository = raw.get("repository", {})
+    model = raw.get("model", {})
+    workspace = raw.get("workspace", {})
+    if not isinstance(repository, dict) or not isinstance(model, dict):
+        raise ValueError("repository and model sections must be mappings")
+    if not isinstance(workspace, dict):
+        raise ValueError("workspace section must be a mapping")
     dataset = _section(raw, "dataset")
     task = _section(raw, "task")
     output = _section(raw, "output")
     execution = _section(raw, "execution")
     verification = _section(raw, "verification")
     fields = _required(output, "fields", dict)
+    base_profile, profile_env, default_profile, profiles = parse_execution(execution)
+    privacy = raw.get("privacy", {})
+    if not isinstance(privacy, dict):
+        raise ValueError("privacy section must be a mapping")
 
+    name = _required(raw, "name", str)
+    workspace_slug = str(workspace.get("slug", name))
     manifest = TaskManifest(
-        name=_required(raw, "name", str),
-        repository_path=_required(repository, "path", str),
-        repository_commit=_required(repository, "commit", str),
+        name=name,
+        hook=str(raw["hook"]) if raw.get("hook") is not None else None,
+        workspace_slug=workspace_slug,
+        artifact_slug=str(workspace.get("artifact_slug", workspace_slug)),
+        assets=parse_assets(raw.get("assets")),
+        repository_path=str(repository["path"]) if repository.get("path") else None,
+        repository_commit=str(repository["commit"]) if repository.get("commit") else None,
         repository_version=repository.get("version"),
         repository_exclude=tuple(repository.get("exclude", (".git", "__pycache__", "*.pyc"))),
-        model_source=_required(model, "source", str),
-        model_mount=_required(model, "mount_as", str),
+        model_source=str(model["source"]) if model.get("source") else None,
+        model_mount=str(model["mount_as"]) if model.get("mount_as") else None,
         model_required=tuple(model.get("required", ())),
-        dataset_source=_required(dataset, "public_input", str),
-        dataset_mount=_required(dataset, "mount_as", str),
-        dataset_format=str(dataset.get("format", "jsonl")),
+        dataset_source=str(dataset["public_input"]) if dataset.get("public_input") else None,
+        dataset_mount=str(dataset["mount_as"]) if dataset.get("mount_as") else None,
+        dataset_format=str(dataset.get("format", "none")),
         dataset_public_fields=tuple(dataset.get("public_fields", ())),
         expected_samples=_required(dataset, "expected_samples", int),
         task_description=_required(task, "description", str).strip(),
         output_file=_required(output, "file", str),
         output_format=_required(output, "format", str),
+        output_structure=str(output.get("structure", "records")),
+        output_protocol=(
+            str(output["protocol"]) if output.get("protocol") is not None else None
+        ),
+        grouped_scores=parse_grouped_scores(output),
         output_fields={name: _field_spec(name, spec) for name, spec in fields.items()},
         allow_extra_fields=bool(output.get("allow_extra_fields", False)),
-        generated_script=_required(execution, "generated_script", str),
-        execution_command=_required(execution, "command", str),
-        execution_timeout=_required(execution, "timeout", int),
-        syntax_check=bool(execution.get("syntax_check", True)),
-        python_path=_required(execution, "python", str),
-        environment={str(k): str(v) for k, v in execution.get("environment", {}).items()},
-        session_type=str(execution.get("runtime", "local")),
-        execution_backend=str(execution.get("backend", "local")),
+        execution_profile=base_profile,
+        execution_profile_env=profile_env,
+        execution_default_profile=default_profile,
+        execution_profiles=profiles,
         metric=_required(verification, "metric", str),
         prediction_field=_required(verification, "prediction_field", str),
-        hidden_gold=_required(verification, "hidden_gold", str),
+        hidden_gold=(
+            str(verification["hidden_gold"])
+            if verification.get("hidden_gold")
+            else None
+        ),
+        gold_limit=(
+            int(verification["gold_limit"])
+            if verification.get("gold_limit") is not None
+            else None
+        ),
+        metric_scale=float(verification.get("scale", 1.0)),
         expected=float(_required(verification, "expected", (int, float))),
         tolerance=float(_required(verification, "tolerance", (int, float))),
         chance_level=(
             float(verification["chance_level"])
             if verification.get("chance_level") is not None
             else None
+        ),
+        privacy_forbidden_names=tuple(
+            str(value) for value in privacy.get("forbidden_names", ())
+        ),
+        privacy_scrub_globs=tuple(
+            str(value) for value in privacy.get("scrub_globs", ())
         ),
     )
     _validate_manifest(manifest)
@@ -199,23 +285,44 @@ def _validate_manifest(manifest: TaskManifest) -> None:
         raise ValueError("expected_samples must be positive")
     if manifest.output_format != "json":
         raise ValueError("the generic manifest runtime currently supports JSON output")
-    if manifest.dataset_format != "jsonl":
-        raise ValueError("the generic manifest runtime currently supports JSONL input")
-    if manifest.session_type != "local":
-        raise ValueError("non-local execution requires a custom Oracle adapter")
-    if manifest.prediction_field not in manifest.output_fields:
+    if manifest.output_structure not in {
+        "records",
+        "values",
+        "grouped_scores",
+        "custom",
+    }:
+        raise ValueError(
+            "output.structure must be records, values, grouped_scores, or custom"
+        )
+    if (
+        manifest.output_structure in {"custom", "grouped_scores"}
+        and not manifest.output_protocol
+    ):
+        raise ValueError(
+            f"{manifest.output_structure} output structure requires output.protocol"
+        )
+    if (
+        manifest.output_structure in {"records", "values"}
+        and manifest.prediction_field not in manifest.output_fields
+    ):
         raise ValueError("prediction_field must appear in output.fields")
-    prediction_spec = manifest.output_fields[manifest.prediction_field]
-    if prediction_spec.kind not in {"integer", "number"}:
-        raise ValueError("prediction_field must be numeric")
+    if manifest.output_structure in {"records", "values"}:
+        prediction_spec = manifest.output_fields[manifest.prediction_field]
+        if prediction_spec.kind not in {"integer", "number"}:
+            raise ValueError("prediction_field must be numeric")
     if manifest.tolerance < 0:
         raise ValueError("verification tolerance cannot be negative")
-    for label, path in (
+    if manifest.gold_limit is not None and manifest.gold_limit <= 0:
+        raise ValueError("verification.gold_limit must be positive")
+    paths = (
         ("dataset.mount_as", manifest.dataset_mount),
         ("model.mount_as", manifest.model_mount),
         ("output.file", manifest.output_file),
-        ("execution.generated_script", manifest.generated_script),
-    ):
+        ("execution.generated_script", manifest.execution_profile.generated_script),
+    )
+    for label, path in paths:
+        if path is None:
+            continue
         workspace_path = Path(path)
         if workspace_path.is_absolute() or ".." in workspace_path.parts:
             raise ValueError(f"{label} must stay inside the workspace")
@@ -231,6 +338,21 @@ def _resolve(root: Path, raw: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
+def matches_glob(path: Path, pattern: str) -> bool:
+    """Match recursive globs against both root files and nested files."""
+    return path.match(pattern) or (
+        pattern.startswith("**/") and path.match(pattern.removeprefix("**/"))
+    )
+
+
+def _target_markers(manifest: TaskManifest) -> set[str]:
+    return {
+        str(manifest.expected),
+        f"{manifest.expected:.9f}",
+        f"{100 * manifest.expected:.6f}",
+    }
+
+
 def _repository_head(repository: Path) -> str:
     try:
         return subprocess.run(
@@ -241,91 +363,6 @@ def _repository_head(repository: Path) -> str:
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError) as exc:
         raise RuntimeError(f"cannot inspect repository commit: {repository}") from exc
-
-
-def _average_ranks(values: list[float]) -> list[float]:
-    order = sorted(range(len(values)), key=values.__getitem__)
-    ranks = [0.0] * len(values)
-    start = 0
-    while start < len(order):
-        end = start + 1
-        while end < len(order) and values[order[end]] == values[order[start]]:
-            end += 1
-        rank = (start + 1 + end) / 2.0
-        for position in range(start, end):
-            ranks[order[position]] = rank
-        start = end
-    return ranks
-
-
-def spearman(gold: list[float], predictions: list[float]) -> float:
-    """Dependency-free Spearman correlation with average ranks for ties."""
-    if len(gold) != len(predictions) or len(gold) < 2:
-        raise ValueError("Spearman inputs must have the same non-trivial length")
-    left = _average_ranks(gold)
-    right = _average_ranks(predictions)
-    left_mean = math.fsum(left) / len(left)
-    right_mean = math.fsum(right) / len(right)
-    numerator = math.fsum(
-        (x - left_mean) * (y - right_mean) for x, y in zip(left, right)
-    )
-    left_norm = math.sqrt(math.fsum((value - left_mean) ** 2 for value in left))
-    right_norm = math.sqrt(math.fsum((value - right_mean) ** 2 for value in right))
-    if left_norm == 0.0 or right_norm == 0.0:
-        raise ValueError("Spearman input is constant")
-    return numerator / (left_norm * right_norm)
-
-
-def pearson(gold: list[float], predictions: list[float]) -> float:
-    if len(gold) != len(predictions) or len(gold) < 2:
-        raise ValueError("Pearson inputs must have the same non-trivial length")
-    gold_mean = math.fsum(gold) / len(gold)
-    prediction_mean = math.fsum(predictions) / len(predictions)
-    numerator = math.fsum(
-        (x - gold_mean) * (y - prediction_mean)
-        for x, y in zip(gold, predictions)
-    )
-    gold_norm = math.sqrt(math.fsum((value - gold_mean) ** 2 for value in gold))
-    prediction_norm = math.sqrt(
-        math.fsum((value - prediction_mean) ** 2 for value in predictions)
-    )
-    if gold_norm == 0.0 or prediction_norm == 0.0:
-        raise ValueError("Pearson input is constant")
-    return numerator / (gold_norm * prediction_norm)
-
-
-def accuracy(gold: list[float], predictions: list[float]) -> float:
-    if len(gold) != len(predictions) or not gold:
-        raise ValueError("accuracy inputs must have the same non-zero length")
-    return sum(expected == actual for expected, actual in zip(gold, predictions)) / len(gold)
-
-
-def auroc(gold: list[float], predictions: list[float]) -> float:
-    """Binary AUROC where larger prediction scores indicate the positive class."""
-    if len(gold) != len(predictions) or len(gold) < 2:
-        raise ValueError("AUROC inputs must have the same non-trivial length")
-    if any(label not in (0.0, 1.0) for label in gold):
-        raise ValueError("AUROC gold labels must be binary")
-    positives = sum(label == 1.0 for label in gold)
-    negatives = len(gold) - positives
-    if positives == 0 or negatives == 0:
-        raise ValueError("AUROC requires both classes")
-    ranks = _average_ranks(predictions)
-    positive_rank_sum = math.fsum(
-        rank for rank, label in zip(ranks, gold) if label == 1.0
-    )
-    return (
-        positive_rank_sum - positives * (positives + 1) / 2.0
-    ) / (positives * negatives)
-
-
-MetricFn = Callable[[list[float], list[float]], float]
-METRICS: dict[str, MetricFn] = {
-    "accuracy": accuracy,
-    "auroc": auroc,
-    "pearson": pearson,
-    "spearman": spearman,
-}
 
 
 def _valid_field(value: Any, spec: FieldSpec, expected_index: int) -> bool:
@@ -363,6 +400,17 @@ def _prediction_values(manifest: TaskManifest, workdir: Path) -> list[float] | N
     if not isinstance(rows, list) or len(rows) != manifest.expected_samples:
         return None
 
+    if manifest.output_structure == "custom":
+        return None
+    if manifest.output_structure == "values":
+        spec = manifest.output_fields[manifest.prediction_field]
+        if any(
+            not _valid_field(value, spec, index)
+            for index, value in enumerate(rows)
+        ):
+            return None
+        return [float(value) for value in rows]
+
     expected_fields = set(manifest.output_fields)
     predictions: list[float] = []
     for index, row in enumerate(rows):
@@ -395,27 +443,55 @@ class ManifestRuntime:
         self.manifest = manifest
         self.root = root
         self.hooks = hooks
-        self.workdir = root / "workspaces" / manifest.name / attempt
-        self.artifact_dir = root / "evals" / "runs" / f"{manifest.name}_{attempt}"
+        self.profile = select_profile(
+            manifest.execution_profile,
+            manifest.execution_profile_env,
+            manifest.execution_default_profile,
+            manifest.execution_profiles,
+        )
+        self.workdir = root / "workspaces" / manifest.workspace_slug / attempt
+        self.artifact_dir = (
+            root / "evals" / "runs" / f"{manifest.artifact_slug}_{attempt}"
+        )
 
     def _check_assets(self) -> None:
         manifest = self.manifest
-        repository = _resolve(self.root, manifest.repository_path)
-        dataset = _resolve(self.root, manifest.dataset_source)
-        model = _resolve(self.root, manifest.model_source)
-        gold = _resolve(self.root, manifest.hidden_gold)
+        check_assets(self.root, manifest.assets)
+        check_profile(self.root, self.profile)
+        repository = (
+            _resolve(self.root, manifest.repository_path)
+            if manifest.repository_path
+            else None
+        )
+        dataset = (
+            _resolve(self.root, manifest.dataset_source)
+            if manifest.dataset_source
+            else None
+        )
+        model = (
+            _resolve(self.root, manifest.model_source)
+            if manifest.model_source
+            else None
+        )
+        gold = (
+            _resolve(self.root, manifest.hidden_gold)
+            if manifest.hidden_gold
+            else None
+        )
         missing = [
             str(path)
             for path in (repository, dataset, model, gold)
-            if not path.exists()
+            if path is not None and not path.exists()
         ]
         missing.extend(
             str(model / filename)
             for filename in manifest.model_required
-            if not (model / filename).exists()
+            if model is not None and not (model / filename).exists()
         )
         if missing:
             raise RuntimeError("missing manifest assets: " + ", ".join(missing))
+        if repository is None or manifest.repository_commit is None:
+            return
         actual_commit = _repository_head(repository)
         if actual_commit != manifest.repository_commit:
             raise RuntimeError(
@@ -425,6 +501,8 @@ class ManifestRuntime:
 
     def _check_public_dataset(self) -> None:
         manifest = self.manifest
+        if manifest.dataset_source is None or manifest.dataset_format != "jsonl":
+            return
         path = _resolve(self.root, manifest.dataset_source)
         lines = path.read_text(errors="replace").splitlines()
         if len(lines) != manifest.expected_samples:
@@ -444,26 +522,80 @@ class ManifestRuntime:
         self._check_assets()
         self._check_public_dataset()
         manifest = self.manifest
-        repository = _resolve(self.root, manifest.repository_path)
-        dataset = _resolve(self.root, manifest.dataset_source)
-        model = _resolve(self.root, manifest.model_source)
+        if self.hooks.provision_override is not None:
+            self.hooks.provision_override(manifest, self.workdir)
+            self._scrub_private_targets()
+            self._write_provenance()
+            return
+        if manifest.assets:
+            provision_assets(self.root, self.workdir, manifest.assets)
+            (self.workdir / ".home").mkdir(exist_ok=True)
+            if self.hooks.provision is not None:
+                self.hooks.provision(manifest, self.workdir)
+            self._scrub_private_targets()
+            self._write_provenance()
+            return
+        repository = (
+            _resolve(self.root, manifest.repository_path)
+            if manifest.repository_path
+            else None
+        )
+        dataset = (
+            _resolve(self.root, manifest.dataset_source)
+            if manifest.dataset_source
+            else None
+        )
+        model = (
+            _resolve(self.root, manifest.model_source)
+            if manifest.model_source
+            else None
+        )
 
         shutil.rmtree(self.workdir, ignore_errors=True)
-        shutil.copytree(
-            repository,
-            self.workdir,
-            ignore=shutil.ignore_patterns(*manifest.repository_exclude),
-        )
-        dataset_mount = self.workdir / manifest.dataset_mount
-        dataset_mount.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(dataset, dataset_mount)
-        model_mount = self.workdir / manifest.model_mount
-        model_mount.parent.mkdir(parents=True, exist_ok=True)
-        model_mount.symlink_to(model, target_is_directory=True)
+        if repository is not None:
+            shutil.copytree(
+                repository,
+                self.workdir,
+                ignore=shutil.ignore_patterns(*manifest.repository_exclude),
+            )
+        else:
+            self.workdir.mkdir(parents=True)
+        if dataset is not None and manifest.dataset_mount is not None:
+            dataset_mount = self.workdir / manifest.dataset_mount
+            dataset_mount.parent.mkdir(parents=True, exist_ok=True)
+            if dataset.is_dir():
+                shutil.copytree(dataset, dataset_mount)
+            else:
+                shutil.copy2(dataset, dataset_mount)
+        if model is not None and manifest.model_mount is not None:
+            model_mount = self.workdir / manifest.model_mount
+            model_mount.parent.mkdir(parents=True, exist_ok=True)
+            model_mount.symlink_to(model, target_is_directory=model.is_dir())
         (self.workdir / ".home").mkdir()
         if self.hooks.provision is not None:
             self.hooks.provision(manifest, self.workdir)
 
+        self._scrub_private_targets()
+        self._write_provenance()
+
+    def _scrub_private_targets(self) -> None:
+        patterns = self.manifest.privacy_scrub_globs
+        if not patterns:
+            return
+        markers = _target_markers(self.manifest)
+        for path in self.workdir.rglob("*"):
+            if not path.is_file() or path.is_symlink():
+                continue
+            relative = path.relative_to(self.workdir)
+            if not any(matches_glob(relative, pattern) for pattern in patterns):
+                continue
+            text = path.read_text(errors="replace")
+            for marker in markers:
+                text = text.replace(marker, "[scrubbed]")
+            path.write_text(text)
+
+    def _write_provenance(self) -> None:
+        manifest = self.manifest
         provenance = {
             "name": manifest.name,
             "repository_commit": manifest.repository_commit,
@@ -475,63 +607,89 @@ class ManifestRuntime:
         )
 
     def assert_blind(self) -> None:
-        gold = _resolve(self.root, self.manifest.hidden_gold).resolve()
-        target_markers = (
-            f"{self.manifest.expected:.9f}",
-            f"{100 * self.manifest.expected:.6f}",
+        if self.hooks.blind_check is not None:
+            self.hooks.blind_check(self.manifest, self.workdir)
+        gold = (
+            _resolve(self.root, self.manifest.hidden_gold).resolve()
+            if self.manifest.hidden_gold
+            else None
         )
+        forbidden = set(self.manifest.privacy_forbidden_names)
+        present = {path.name for path in self.workdir.rglob("*") if path.is_file()}
+        leaked = forbidden & present
+        if leaked:
+            raise RuntimeError(f"private files leaked into blind workspace: {leaked}")
+        target_markers = _target_markers(self.manifest)
         for path in self.workdir.rglob("*"):
             if not path.is_file() or path.is_symlink():
                 continue
-            if path.resolve() == gold:
+            if gold is not None and path.resolve() == gold:
                 raise RuntimeError(f"private gold leaked into blind workspace: {path}")
-            if path.suffix.lower() not in {".py", ".md", ".txt", ".json", ".rst"}:
+            if path.suffix.lower() not in {
+                ".py", ".md", ".txt", ".json", ".rst", ".yaml", ".yml",
+                ".csv", ".sh",
+            }:
                 continue
             text = path.read_text(errors="replace")
             if any(marker in text for marker in target_markers):
                 raise RuntimeError(f"private target leaked into blind workspace: {path}")
 
     def make_session(self) -> Session:
-        manifest = self.manifest
-        environment = {
-            key: value.replace("{workdir}", str(self.workdir))
-            for key, value in manifest.environment.items()
-        }
-        return Session(
-            self.workdir,
-            venv_python=_resolve(self.root, manifest.python_path),
-            default_timeout=manifest.execution_timeout,
-            extra_env=environment,
-        )
+        if self.hooks.session is not None:
+            return self.hooks.session(self.manifest, self.workdir)
+        return make_profile_session(self.profile, self.root, self.workdir)
 
     def execute(self, session: Session) -> RunResult:
-        manifest = self.manifest
-        if manifest.syntax_check:
-            script = shlex.quote(manifest.generated_script)
-            syntax = session.shell(f"python -m py_compile {script}", timeout=60)
-            if not syntax.ok:
-                return syntax
-        return session.shell(
-            manifest.execution_command,
-            timeout=manifest.execution_timeout,
-        )
+        if self.hooks.execute is not None:
+            return self.hooks.execute(self.manifest, session)
+        return execute_profile(self.profile, session)
 
     def public_check(self, workdir: Path) -> bool:
         """Validate only the declared output schema; never load hidden gold."""
+        if self.hooks.public_check is not None:
+            return self.hooks.public_check(self.manifest, workdir)
+        if self.manifest.grouped_scores is not None:
+            path = workdir / self.manifest.output_file
+            return (
+                load_grouped_scores(self.manifest.grouped_scores, path) is not None
+                and not direction_diagnostics(self.manifest.grouped_scores, path)
+            )
         return _prediction_values(self.manifest, workdir) is not None
+
+    def public_diagnostics(self, workdir: Path) -> list[str]:
+        if self.hooks.public_diagnostics is None:
+            if self.manifest.grouped_scores is None:
+                return []
+            return direction_diagnostics(
+                self.manifest.grouped_scores,
+                workdir / self.manifest.output_file,
+            )
+        return self.hooks.public_diagnostics(self.manifest, workdir)
 
     def recompute(self, workdir: Path) -> tuple[float, int] | None:
         if self.hooks.verifier is not None:
             return self.hooks.verifier(self.manifest, workdir)
+        if self.manifest.metric in {"grouped_auroc", "near_ood_auroc"}:
+            if self.manifest.grouped_scores is None:
+                return None
+            return grouped_auroc(
+                self.manifest.grouped_scores,
+                workdir / self.manifest.output_file,
+            )
         predictions = _prediction_values(self.manifest, workdir)
-        if predictions is None:
+        if predictions is None or self.manifest.hidden_gold is None:
             return None
         try:
             gold_path = _resolve(self.root, self.manifest.hidden_gold)
             gold = [float(value) for value in json.loads(gold_path.read_text())]
+            if self.manifest.gold_limit is not None:
+                gold = gold[: self.manifest.gold_limit]
             if len(gold) != self.manifest.expected_samples:
                 return None
-            score = METRICS[self.manifest.metric](gold, predictions)
+            score = (
+                METRICS[self.manifest.metric](gold, predictions)
+                * self.manifest.metric_scale
+            )
         except (OSError, TypeError, ValueError):
             return None
         return score, self.manifest.expected_samples
@@ -547,22 +705,26 @@ def make_oracle_config(
     """Create the existing pipeline contract from a declarative task manifest."""
     manifest = load_manifest(manifest_path)
     hooks = hooks or OracleHooks()
-    if manifest.metric not in METRICS and hooks.verifier is None:
+    if (
+        manifest.metric not in METRICS
+        and manifest.metric not in {"grouped_auroc", "near_ood_auroc"}
+        and hooks.verifier is None
+    ):
         raise ValueError(
             f"unknown metric {manifest.metric!r}; use one of {tuple(METRICS)} "
             "or provide a verifier hook"
         )
     runtime = ManifestRuntime(manifest, root.resolve(), attempt, hooks)
     search_exclude = {
-        manifest.generated_script,
+        runtime.profile.generated_script,
         manifest.output_file,
         "navigator_report.md",
-        "review_report.md",
+        "audit_report.md",
         "reproducer_public_log.txt",
     }
     return OracleConfig(
         name=manifest.name,
-        task=manifest.task_description,
+        task=manifest.task_description + runtime.profile.task_suffix,
         metric=manifest.metric,
         expected=manifest.expected,
         tolerance=manifest.tolerance,
@@ -570,15 +732,21 @@ def make_oracle_config(
         expected_num_examples=manifest.expected_samples,
         recompute_fn=runtime.recompute,
         public_check_fn=runtime.public_check,
+        public_diagnostics_fn=(
+            runtime.public_diagnostics
+            if hooks.public_diagnostics is not None or manifest.grouped_scores is not None
+            else None
+        ),
         public_result_protocol=manifest.public_result_protocol,
-        public_execution_command=manifest.execution_command,
+        public_execution_command=runtime.profile.command,
         workdir=runtime.workdir,
         artifact_dir=runtime.artifact_dir,
-        eval_script=manifest.generated_script,
+        eval_script=runtime.profile.generated_script,
         make_session=runtime.make_session,
         copy_clean_source=runtime.provision,
         execute_eval=runtime.execute,
-        execution_backend=manifest.execution_backend,
+        session_go_offline=runtime.profile.go_offline,
+        execution_backend=runtime.profile.backend,
         chance_level=manifest.chance_level,
         search_extra_exclude=search_exclude,
         assert_blind_workspace=runtime.assert_blind,

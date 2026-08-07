@@ -14,7 +14,7 @@ from agent.types import OracleConfig
 HANDOFF_FILES = (
     "route_plan.json",
     "navigator_report.md",
-    "review_report.md",
+    "audit_report.md",
     "reproducer_public_log.txt",
 )
 RETRIEVAL_RANKER = "exact_path_symbol_plus_bm25_llm"

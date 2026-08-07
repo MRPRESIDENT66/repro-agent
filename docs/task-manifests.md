@@ -1,82 +1,81 @@
-# Declarative Oracle Manifests
+# Task Manifests
 
-Standard evaluation tasks can be added without implementing a complete Python
-Oracle adapter. An Oracle-side YAML manifest is loaded by `evals/manifest.py`, which
-creates the same `OracleConfig` consumed by the existing agent pipeline.
+Every benchmark task enters through an Oracle-side YAML file in `evals/tasks/`.
+`evals.catalog.make_config(task, attempt)` loads the manifest, resolves its
+optional named hook, and creates the `OracleConfig` consumed by the adaptive
+pipeline.
 
 ```text
-Oracle-side YAML manifest
-        |
-        v
-make_oracle_config()
-        |
-        +-- public task, command, and output contract --> Agent
-        +-- hidden gold, expected value, tolerance ----> verifier only
-        |
-        v
-existing ReproductionPipeline
+YAML manifest -> catalog -> ManifestRuntime -> OracleConfig -> adaptive pipeline
+                       \-> optional Oracle-side hook
 ```
 
-The migrated STS-B example is
-[`evals/tasks/sentence_transformers_stsb.yaml`](../evals/tasks/sentence_transformers_stsb.yaml).
-Its Python wrapper only preserves the existing `make_config(attempt)` import.
+## What Belongs in YAML
 
-## Standard Profile
+- task identity and public description;
+- pinned repository, model, dataset, and selectively copied or linked assets;
+- generated script name, command, environment, backend profiles, and timeout;
+- output file, structure, fields, ranges, and sample count;
+- private metric, gold path, expected value, tolerance, and chance floor.
 
-The generic runtime currently supports:
+The manifest remains outside the blind workspace. Agent context receives only
+the public description, command, and output protocol. Private verification
+fields stay in `OracleConfig` and are used after the agent workflow.
 
-- a pinned Git repository copied into a clean workspace;
-- one public JSONL input copied into the workspace;
-- one model directory mounted with a symbolic link;
-- a local, secret-scrubbed `Session` with declared environment variables;
-- JSON output containing a fixed-size list of objects;
-- exact fields, primitive types, sequential IDs, numeric ranges, and sample count;
-- `accuracy`, `auroc`, `pearson`, and `spearman` metric recomputation;
-- repository commit and required-asset checks;
-- fail-closed target/gold isolation and normal audit artifacts.
+## Reusable Capabilities
 
-The manifest itself remains Oracle-side and is never copied into the agent's
-workspace. Only `task.description`, the execution command, and the generated
-output contract enter the LLM context.
+`assets` provisions files or directories with `copy` or `symlink`. An optional
+`include` list selects only required checkpoint/data subtrees, while `exclude`
+keeps generated or private files out. `mount_as: .` merges a repository into the
+workspace root.
 
-`accuracy` and `auroc` return fractions in `[0, 1]`; correlations use their
-standard `[-1, 1]` scale. The private `verification.expected` value must use the
-same scale.
+`execution` defines the generated script, command, timeout, Python environment,
+and a local or Docker runtime. Optional named `profiles` inherit those defaults
+and can be selected by `profile_env`; OpenOOD uses this to share one task
+definition between the isolated Docker backend and trusted host MPS backend.
 
-## Optional Hooks
+`privacy.scrub_globs` removes the private target from matching public text after
+provisioning. The blind-workspace check still scans the result and fails closed
+if a target or hidden file remains.
 
-Tasks with unusual setup or grading can reuse the standard path and add a small
-explicit hook:
+## Output Structures
 
-```python
-from evals.manifest import OracleHooks, make_oracle_config
+- `records`: a JSON list of objects, such as STS-B `{id, similarity}` rows;
+- `values`: a JSON list of scalar predictions for classification tasks;
+- `grouped_scores`: named groups of fixed-length score series;
+- `custom`: a task-defined shape validated by a `public_check` hook.
 
+Generic metrics include `accuracy`, `top1_accuracy`, `auroc`, `pearson`, and
+`spearman`. Grouped scores support mean AUROC across positive series and groups,
+plus public score-direction diagnostics. `verification.scale` converts a
+fraction to percentage, and `gold_limit` selects a declared private-label prefix.
 
-def provision(manifest, workdir):
-    # Add task-specific links, generated configs, or converted public assets.
-    ...
+## Hooks
 
+Hooks live in `evals/hooks/` and are selected by the manifest's top-level `hook`
+name. Available extension points are deliberately small:
 
-def verifier(manifest, workdir):
-    # Recompute a task-specific aggregate from verifier-visible artifacts.
-    return score, num_examples
+- `provision` or `provision_override`;
+- `session` and `execute`;
+- `public_check` and `public_diagnostics`;
+- `blind_check`;
+- `verifier`.
 
+Use a hook only for behavior that is genuinely task-specific. OpenOOD,
+mmpretrain, RobustBench, and STS-B now use no hook; DistilBERT and detectors keep
+small hooks for dynamic or filtered model-card creation. Hooks are deterministic
+Oracle code, not LLM tools.
 
-def make_config(attempt):
-    return make_oracle_config(
-        MANIFEST,
-        attempt,
-        hooks=OracleHooks(provision=provision, verifier=verifier),
-    )
-```
+## Current Coverage
 
-Hooks run on the Oracle side. They are not LLM tools and are not visible to the
-agent. A provisioning hook extends common workspace setup; a verifier hook
-replaces the registered metric recomputation.
+All shipped runners are manifest-backed: STS-B, DistilBERT, two detectors tasks,
+mmpretrain, RobustBench, and OpenOOD. The tiny modules in `evals/oracles/` are
+compatibility imports only; task logic lives in YAML plus optional hooks.
 
-## Limits
+## Design Limit
 
-Docker sessions, multiple model/data mounts, nested task-specific output shapes,
-and complex grouped metrics are not forced into the standard profile. They can
-use hooks or retain a custom adapter. The goal is to remove repeated glue from
-ordinary tasks, not to encode arbitrary Python programs in YAML.
+Manifest-first does not mean arbitrary-repository zero-config. New standard
+tasks should require only YAML. A genuinely new shared backend, output family,
+or metric belongs in a focused reusable module; one-off source discovery or
+preprocessing belongs in a short hook rather than turning YAML into a general-
+purpose programming language.

@@ -10,12 +10,9 @@ from evals import manifest as framework
 from evals.manifest import (
     ManifestRuntime,
     OracleHooks,
-    accuracy,
-    auroc,
     load_manifest,
-    pearson,
-    spearman,
 )
+from evals.metrics import accuracy, auroc, pearson, spearman
 from evals.oracles import sentence_transformers_stsb as oracle
 
 

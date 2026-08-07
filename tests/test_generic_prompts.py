@@ -9,8 +9,7 @@ def test_generic_prompts_are_repository_agnostic() -> None:
         (
             GENERIC_PROMPTS.navigator,
             GENERIC_PROMPTS.reproducer,
-            GENERIC_PROMPTS.critic,
-            GENERIC_PROMPTS.reviewer,
+            GENERIC_PROMPTS.auditor,
             GENERIC_PROMPTS.repair,
         )
     ).lower()
@@ -37,8 +36,7 @@ def test_generic_prompts_require_evidence_and_real_execution() -> None:
         (
             GENERIC_PROMPTS.navigator,
             GENERIC_PROMPTS.reproducer,
-            GENERIC_PROMPTS.critic,
-            GENERIC_PROMPTS.reviewer,
+            GENERIC_PROMPTS.auditor,
             GENERIC_PROMPTS.repair,
         )
     ).lower()

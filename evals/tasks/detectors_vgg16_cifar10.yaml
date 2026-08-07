@@ -1,0 +1,46 @@
+name: detectors_vgg16_cifar10
+hook: detectors
+
+workspace:
+  slug: detectors_vgg16_cifar10_multi_rag
+
+model:
+  source: evals/oracles/detectors_cards/vgg16_bn_cifar10.md
+
+dataset:
+  format: cache
+  expected_samples: 10000
+
+task:
+  description: |
+    Reproduce the published top-1 accuracy (in percent) of pretrained
+    `vgg16_bn_cifar10` on the CIFAR-10 test split (10,000 examples). A model card
+    is provided. Model weights and dataset are pre-cached. The environment is
+    CPU-only and offline. Load the model through timm with its trained weights
+    and expected preprocessing, then evaluate the complete test set.
+
+output:
+  file: predictions.json
+  format: json
+  structure: values
+  fields:
+    prediction: {type: integer, minimum: 0, maximum: 9}
+
+execution:
+  generated_script: eval_detectors.py
+  command: >-
+    HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    python eval_detectors.py
+  timeout: 1200
+  runtime: local
+  backend: local-offline-cpu
+  python: .venv-oracle/bin/python
+
+verification:
+  metric: top1_accuracy
+  prediction_field: prediction
+  hidden_gold: evals/oracles/gold/cifar10_test_labels.json
+  scale: 100
+  expected: 93.37
+  tolerance: 0.10
+  chance_level: 10

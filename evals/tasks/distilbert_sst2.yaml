@@ -1,0 +1,46 @@
+name: distilbert_sst2
+hook: distilbert
+
+workspace:
+  slug: distilbert_sst2_multi_rag
+
+dataset:
+  format: cache
+  expected_samples: 872
+
+task:
+  description: |
+    Reproduce the published accuracy (in percent) of the HuggingFace model
+    `distilbert-base-uncased-finetuned-sst-2-english` on the GLUE/SST-2
+    validation split (872 examples). A model card is provided, and both model
+    weights and dataset are pre-cached. The environment is CPU-only and offline.
+    Load the model by name with its tokenizer and evaluate the complete split.
+
+output:
+  file: predictions.json
+  format: json
+  structure: values
+  fields:
+    prediction:
+      type: integer
+      minimum: 0
+      maximum: 1
+
+execution:
+  generated_script: eval_sst2.py
+  command: >-
+    HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    python eval_sst2.py
+  timeout: 900
+  runtime: local
+  backend: local-offline-cpu
+  python: .venv-oracle/bin/python
+
+verification:
+  metric: accuracy
+  prediction_field: prediction
+  hidden_gold: evals/oracles/gold/sst2_val_labels.json
+  scale: 100
+  expected: 91.06
+  tolerance: 0.10
+  chance_level: 50

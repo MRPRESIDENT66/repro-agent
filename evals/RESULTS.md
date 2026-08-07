@@ -50,6 +50,42 @@ higher than ID scores. These pilots validate the mechanism and reveal a remainin
 workflow-reliability risk; they are not N=5 evidence and are excluded from all
 headline totals.
 
+A current-snapshot N=1 diagnostic then ran the LLM-routed `adaptive` pipeline on
+all four ablation tasks. It verified **3/4** tasks, with **2/3** accepted runs
+also completing without a workflow error. Mean cost was **¥0.2614** and mean
+evaluation count was **2.75**. Router selected both Navigator and semantic audit
+for every task, including DistilBERT, so this snapshot did not yet demonstrate
+the intended selective-collaboration cost saving.
+
+| Task | verified | no workflow error / verified | evals | cost | observed path/result |
+|---|---:|---:|---:|---:|---|
+| DistilBERT SST-2 | 1/1 | 1/1 | 1 | ¥0.0700 | Router → Navigator → Reproducer → Auditor; over-routed easy task |
+| detectors RN18 / CIFAR-100 | 1/1 | 0/1 | 1 | ¥0.0729 | Correct artifact verified; unnecessary post-success Repair synthesis failed |
+| mmpretrain RN18 / CIFAR-10 | 1/1 | 1/1 | 4 | ¥0.4298 | Three Repair rounds produced the correct 10,000 predictions |
+| OpenOOD EBO AUROC | 0/1 | — | 5 | ¥0.4729 | Exhausted budget on a macOS DataLoader lambda pickling failure; no artifact |
+
+These four runs are useful failure analysis, not evidence that `adaptive` beats
+`full`: they have N=1 and no same-snapshot `full` control. They show that the
+repair loop remains useful, while Router thresholds and post-success audit
+behavior still need calibration. A host-sandbox launch that made zero API calls
+and zero evaluations was rerun with network access and excluded as infrastructure
+failure.
+
+After that diagnostic, failure-driven hardening added spawn-safe code checks,
+fresh-context synthesis retries, public-only semantic diagnostics, neutral Router
+risk requirements, and selective OpenOOD provisioning. A fresh adaptive
+development validation then produced all **50,379** scores and verified
+**87.5822776%** against the private **87.58%** target (absolute difference
+**0.00228**, tolerance **0.05**) in five evaluations, with no workflow error, for
+**¥0.5324**. This confirms the repaired engineering path, but it is not held-out
+or N=5 evidence: the changes were developed from preceding OpenOOD failures, so
+the run remains excluded from headline totals.
+
+The current product runtime subsequently removed the three fixed modes and made
+adaptive orchestration the only path. The tables below remain historical
+ablation evidence and are reproducible from the freeze metadata plus the
+`legacy-pipelines-v1` code tag; they are not claims about the current default.
+
 <!-- GENERATED_N5_START -->
 ## E1: Six-Task Coverage N=5
 

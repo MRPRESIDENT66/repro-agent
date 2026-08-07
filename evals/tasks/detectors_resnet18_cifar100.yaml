@@ -1,0 +1,46 @@
+name: detectors_resnet18_cifar100
+hook: detectors
+
+workspace:
+  slug: detectors_resnet18_cifar100_multi_rag
+
+model:
+  source: evals/oracles/detectors_cards/resnet18_cifar100.md
+
+dataset:
+  format: cache
+  expected_samples: 10000
+
+task:
+  description: |
+    Reproduce the published top-1 accuracy (in percent) of pretrained
+    `resnet18_cifar100` on the CIFAR-100 test split (10,000 examples). A model
+    card is provided. Model weights and dataset are pre-cached. The environment
+    is CPU-only and offline. Load the model through timm with its trained weights
+    and expected preprocessing, then evaluate the complete test set.
+
+output:
+  file: predictions.json
+  format: json
+  structure: values
+  fields:
+    prediction: {type: integer, minimum: 0, maximum: 99}
+
+execution:
+  generated_script: eval_detectors.py
+  command: >-
+    HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+    python eval_detectors.py
+  timeout: 1200
+  runtime: local
+  backend: local-offline-cpu
+  python: .venv-oracle/bin/python
+
+verification:
+  metric: top1_accuracy
+  prediction_field: prediction
+  hidden_gold: evals/oracles/gold/cifar100_test_fine_labels.json
+  scale: 100
+  expected: 79.26
+  tolerance: 0.10
+  chance_level: 1

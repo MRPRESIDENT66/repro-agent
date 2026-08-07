@@ -12,6 +12,7 @@ from agent.runtime_probe import MAX_RUNTIME_PROBES
 from agent.types import OracleConfig
 
 HANDOFF_FILES = (
+    "route_plan.json",
     "navigator_report.md",
     "review_report.md",
     "reproducer_public_log.txt",

@@ -163,7 +163,7 @@ Sentence-Transformers held-out full-pipeline N=5。另有一批5次的holdout pi
 - `solo`：只有 Reproducer，一次执行。
 - `solo-repair`：Reproducer + Repair，根据真实执行错误修复，最多 5 次执行。
 - `full`：Navigator + Reproducer + Critic + Reviewer + Repair，最多 5 次执行。
-- `adaptive`：确定性 Router 先判断任务风险；简单任务直接交给 Reproducer，复杂任务才增加 Navigator，语义风险或重复失败时才增加 Auditor，Repair 仍按需执行。
+- `adaptive`：LLM Router 只调用一次，通过 `submit_route` 提交结构化路线、风险标记和强制审查项；规则负责大仓库/高语义风险兜底。简单任务可直接交给 Reproducer，复杂任务才增加 Navigator，语义风险或重复失败时才增加 Auditor，Repair 仍按需执行。
 
 前三种模式保留已有消融结果；`adaptive` 是新增实验条件，用来检验按需协作能否接近 `full` 的成功率，同时降低 token 成本和流程失败面。
 

@@ -30,15 +30,25 @@ This is the central result: repair feedback clearly helps; role specialization
 raises the verified ceiling on the hardest tasks, but extra coordination also
 introduces a measurable reliability and cost tax.
 
-### Adaptive Mode Implementation Smoke (N=1)
+### Adaptive Mode Pilots (Excluded From Aggregate Claims)
 
-The new `adaptive` condition is not included in the aggregate claims above until
-it has the same N=5 coverage. A DistilBERT smoke run verified **91.055% over all
-872 examples** with no workflow error. Router skipped Navigator and Critic; two
-repeated `missing_artifact` failures triggered Auditor only after the repetition,
-and the third evaluation passed. The run used 3 evaluations and cost ¥0.0666.
-This validates conditional routing and final private verification, but is not
-enough evidence to claim lower average cost or higher accuracy than `full`.
+The first one-run-per-task pilot used the deterministic Router implementation.
+DistilBERT, detectors RN18, and mmpretrain verified successfully; OpenOOD emitted
+all 50,379 scores but inverted their polarity, producing 12.42% rather than the
+private 87.58% target. Across the four runs, verified success was **3/4**, mean
+cost was **¥0.1271**, and all four workflows completed without an orchestration
+exception. This suggested lower cost than the `full` mean of ¥0.245, but exposed
+that simply invoking Auditor did not force it to prove a flagged semantic risk.
+
+A follow-up changed Router into a one-call Function Calling risk planner with
+deterministic safeguards and passed its focused checklist downstream. Two
+OpenOOD trials were run. The first ended before execution when Reproducer
+synthesis repeatedly returned prose instead of code (¥0.0387). The second
+verified **87.5823% over 50,379 scores** in three evaluations for ¥0.3439; Router
+itself cost ¥0.0038 and explicitly required proof that OOD submitted scores were
+higher than ID scores. These pilots validate the mechanism and reveal a remaining
+workflow-reliability risk; they are not N=5 evidence and are excluded from all
+headline totals.
 
 <!-- GENERATED_N5_START -->
 ## E1: Six-Task Coverage N=5

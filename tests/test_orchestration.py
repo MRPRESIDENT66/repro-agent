@@ -48,6 +48,32 @@ class _AutoLLM:
             return Reply("", [ToolCall("q", "search_repo", {"query": "how to evaluate here"})])
         submit = next((n for n in names if n.startswith("submit_")), None)
         if submit:
+            if submit == "submit_route":
+                context = str(messages[-1].get("content", "")).lower()
+                semantic = any(
+                    term in context
+                    for term in ("out-of-distribution", "auroc", "energy score")
+                )
+                return Reply(
+                    "",
+                    [
+                        ToolCall(
+                            "route",
+                            submit,
+                            {
+                                "use_navigator": semantic,
+                                "require_auditor": semantic,
+                                "reasons": ["semantic task" if semantic else "explicit task"],
+                                "risk_flags": ["score_direction"] if semantic else [],
+                                "audit_requirements": (
+                                    ["Prove which population receives larger scores."]
+                                    if semantic
+                                    else []
+                                ),
+                            },
+                        )
+                    ],
+                )
             if "review" in submit:
                 content = """Source-grounded audit of the complete evaluation path.
 - `model`: `repo/model.py:12` defines model construction and checkpoint loading.
@@ -341,9 +367,11 @@ def test_adaptive_simple_task_skips_optional_agents(tmp_path, monkeypatch):
     run_oracle(cfg, pipeline="adaptive")
 
     result = _result(cfg)
-    assert set(result["roles"]) == {"reproducer"}
+    assert set(result["roles"]) == {"router", "reproducer"}
+    assert result["roles"]["router"]["tool_counts"] == {"submit_route": 1}
     assert result["routing"]["use_navigator"] is False
     assert result["routing"]["require_semantic_audit"] is False
+    assert result["routing"]["llm_route_valid"] is True
 
 
 def test_adaptive_semantic_task_uses_navigator_and_auditor(tmp_path, monkeypatch):
@@ -356,8 +384,16 @@ def test_adaptive_semantic_task_uses_navigator_and_auditor(tmp_path, monkeypatch
     roles = _result(cfg)["roles"]
     assert "navigator" in roles
     assert "auditor_0" in roles
+    assert "router" in roles
     assert "critic" not in roles
     assert not any(name.startswith("repair_") for name in roles)
+    auditor_transcript = (
+        cfg.artifact_dir.parent
+        / f"{cfg.artifact_dir.name}__adaptive"
+        / "auditor_0_transcript.jsonl"
+    ).read_text()
+    assert "Mandatory audit requirements" in auditor_transcript
+    assert "which population receives larger scores" in auditor_transcript
 
 
 def test_adaptive_clear_failure_repairs_before_auditing(tmp_path, monkeypatch):
@@ -369,6 +405,28 @@ def test_adaptive_clear_failure_repairs_before_auditing(tmp_path, monkeypatch):
     roles = _result(cfg)["roles"]
     assert "repair_1" in roles
     assert not any(name.startswith("auditor_") for name in roles)
+
+
+def test_adaptive_router_uses_rule_fallback_on_invalid_llm_output(tmp_path, monkeypatch):
+    cfg = _make_config(tmp_path, outcomes=[True])
+    calls = {"count": 0}
+
+    def factory(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return ScriptedLLM([Reply("plain text instead of submit_route")])
+        return _AutoLLM()
+
+    monkeypatch.setattr(pipeline, "ChatLLM", factory)
+    monkeypatch.setattr(pipeline, "search_repo", lambda *a, **k: "Most relevant files:\n")
+
+    run_oracle(cfg, pipeline="adaptive")
+
+    result = _result(cfg)
+    assert result["verdict"]["match"] is True
+    assert result["routing"]["llm_route_valid"] is False
+    assert result["roles"]["router"]["fallback_used"] is True
+    assert result["routing"]["use_navigator"] is False
 
 
 def test_repair_loop_never_calls_private_recompute(tmp_path, monkeypatch):

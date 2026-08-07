@@ -164,9 +164,6 @@ class ReproductionPipeline:
             self.artifact_dir = self.artifact_dir.parent / artifact_name
 
         self.session = provision_workspace(config, self.artifact_dir)
-        self.route_decision: RouteDecision | None = (
-            route_task(config, self.workdir) if policy.adaptive else None
-        )
         self.role_deps = RoleDeps(
             llm_factory=ChatLLM,
             search_fn=search_repo,
@@ -175,6 +172,7 @@ class ReproductionPipeline:
 
         self.roles: dict[str, dict] = {}
         self.rag: dict[str, dict] = {}
+        self.route_decision: RouteDecision | None = None
         self.workflow_error: str | None = None
         self.failure_classes: list[dict[str, str | None]] = []
         # Kept outside LangGraph State so an exception after execution (for
@@ -257,6 +255,20 @@ class ReproductionPipeline:
 
     # --- stages -----------------------------------------------------------
 
+    def _routing_context(self) -> str:
+        if not self.policy.adaptive or self.route_decision is None:
+            return ""
+        return "\n\n" + self.route_decision.downstream_context()
+
+    def _node_route(self, _state: _RunState) -> dict[str, Any]:
+        self.route_decision, self.roles["router"] = route_task(
+            self.config,
+            self.workdir,
+            self.artifact_dir,
+            llm_factory=self.role_deps.llm_factory,
+        )
+        return {}
+
     def _node_navigate(self, _state: _RunState) -> dict[str, Any]:
         self.roles["navigator"], self.rag["navigator"] = run_rag_role(
             name="navigator",
@@ -264,7 +276,7 @@ class ReproductionPipeline:
             artifact_dir=self.artifact_dir,
             session=self.session,
             instruction=self.prompts.navigator,
-            context=self.task_context,
+            context=self.task_context + self._routing_context(),
             output_path=self.workdir / "navigator_report.md",
             submit_name="submit_handoff",
             submit_description="Submit the source-grounded Navigator handoff.",
@@ -279,15 +291,16 @@ class ReproductionPipeline:
 
     def _node_reproduce(self, _state: _RunState) -> dict[str, Any]:
         navigator_path = _state.get("navigator_report_path")
+        public_context = self.task_context + self._routing_context()
         if navigator_path:
             builder_context = (
                 "# Public task and result protocol\n\n"
-                + self.task_context
+                + public_context
                 + "\n\n# Navigator handoff\n\n"
                 + require_handoff(self.workdir / navigator_path, "navigator")
             )
         else:
-            builder_context = self.task_context
+            builder_context = public_context
 
         self.roles["reproducer"], self.rag["reproducer"] = run_rag_role(
             name="reproducer",
@@ -377,7 +390,11 @@ class ReproductionPipeline:
         role_prefix: str,
     ) -> bool:
         diagnostics = self.contract_diagnostics(self.session)
-        context_parts = ["# Public task and result protocol\n\n" + self.task_context]
+        context_parts = [
+            "# Public task and result protocol\n\n"
+            + self.task_context
+            + self._routing_context()
+        ]
         navigator_report = self.workdir / "navigator_report.md"
         if navigator_report.is_file():
             context_parts.append(
@@ -453,7 +470,9 @@ class ReproductionPipeline:
             }
         )
         parts = [
-            "# Public task and result protocol\n\n" + self.task_context,
+            "# Public task and result protocol\n\n"
+            + self.task_context
+            + self._routing_context(),
             "# Failure classification\n\n"
             f"- kind: {failure.kind}\n"
             f"- rationale: {failure.rationale}\n"
@@ -613,7 +632,7 @@ class ReproductionPipeline:
             graph.add_edge("reproduce", "critique")
             graph.add_edge("critique", "execute")
         elif self.policy.adaptive:
-            graph.add_node("route", lambda _state: {})
+            graph.add_node("route", self._node_route)
             graph.add_node("navigate", self._node_navigate)
             graph.set_entry_point("route")
             graph.add_conditional_edges(

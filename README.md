@@ -60,11 +60,14 @@ in [Declarative Oracle Manifests](docs/task-manifests.md).
 
 ## Pipeline
 
-The original fixed modes remain available. The new `adaptive` mode uses a cheap,
-deterministic Router: explicit tasks go straight to Reproducer, while large or
+The original fixed modes remain available. The new `adaptive` mode uses a
+one-call LLM Router with deterministic safeguards. It submits a structured route,
+risk flags, and mandatory downstream audit checks through `submit_route` without
+repository tools. Explicit tasks can go straight to Reproducer, while large or
 semantically risky tasks add Navigator; Auditor is invoked only for semantic
-risk, unknown/repeated failures, or a final high-risk source audit. Hidden gold
-is never consulted by routing or repair.
+risk, unknown/repeated failures, or a final high-risk source audit. Invalid Router
+output falls back to the rule plan. Hidden gold is never consulted by routing or
+repair.
 
 ```text
 public task + repo + output contract

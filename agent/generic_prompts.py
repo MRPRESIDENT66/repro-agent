@@ -126,6 +126,13 @@ Use this checklist in the review body:
 - required artifact path/schema/count are satisfied by measured per-sample outputs;
 - no silent fallback, target leakage, hardcoded metric, or aggregate-only result.
 
+When a `Router risk plan` is present, address every mandatory audit requirement
+explicitly with both the generated-code operation and repository evidence. A
+formula match alone does not prove score polarity: for classification confidence,
+energy, anomaly, OOD, or AUROC outputs, trace which population receives larger
+raw values and compare that direction with the public artifact convention. Mark
+REPAIR_REQUIRED when this direction is asserted but not proven.
+
 Include a `Source evidence` section with these four lines exactly:
 - `model:` source path plus the exact constructor/checkpoint evidence;
 - `data:` source path plus the exact dataset/split evidence;

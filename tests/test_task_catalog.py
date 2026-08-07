@@ -10,6 +10,7 @@ from evals.hooks import binding_for
 from evals.manifest import ManifestRuntime, OracleHooks, load_manifest
 
 TASKS = {
+    "clip_vitb32_cifar10",
     "sentence_transformers_stsb",
     "distilbert_sst2",
     "detectors_resnet18_cifar100",

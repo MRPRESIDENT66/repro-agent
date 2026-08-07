@@ -1,0 +1,66 @@
+name: clip_vitb32_cifar10
+
+workspace:
+  slug: clip_vitb32_cifar10
+
+repository:
+  path: repos/clip-heldout
+  commit: d05afc436d78f1c48dc0dbf8e5980a9d471f35f6
+
+assets:
+  - source: repos/clip-heldout
+    mount_as: .
+    exclude: [.git, __pycache__, "*.pyc"]
+  - source: checkpoints/clip/ViT-B-32.pt
+    mount_as: ViT-B-32.pt
+    mode: symlink
+  - source: repos/mmpretrain_assets/cifar10
+    mount_as: data/cifar10
+    mode: symlink
+
+dataset:
+  format: directory
+  expected_samples: 10000
+
+task:
+  description: |
+    Reproduce the official zero-shot top-1 accuracy (in percent) of OpenAI CLIP
+    ViT-B/32 on the complete CIFAR-10 test split. The pinned CLIP repository is
+    the workspace root, the official checkpoint is `ViT-B-32.pt`, and the
+    torchvision-compatible dataset is under `data/cifar10/`. Use the CIFAR-10
+    class names and all 18 prompt templates published in the CIFAR10 section of
+    `data/prompts.md`. For each class, encode its 18 templated texts, L2-normalize
+    every template embedding, average them, then L2-normalize the resulting
+    class prototype. Use the image preprocessing returned by the repository's
+    model loader. Do not train or modify the checkpoint. Preserve test-set
+    order. All assets are local; execute inference on Apple MPS.
+
+output:
+  file: predictions.json
+  format: json
+  structure: values
+  fields:
+    prediction: {type: integer, minimum: 0, maximum: 9}
+
+execution:
+  generated_script: eval_clip.py
+  command: REPRO_DEVICE=mps python eval_clip.py
+  timeout: 900
+  syntax_check: true
+  runtime: local
+  backend: host-mps
+  python: .venv-oracle/bin/python
+  environment:
+    PYTHONPATH: "{workdir}"
+    HOME: "{workdir}/.home"
+    PYTHONNOUSERSITE: "1"
+    REPRO_DEVICE: mps
+
+verification:
+  metric: top1_accuracy
+  prediction_field: prediction
+  hidden_gold: evals/oracles/gold/cifar10_test_labels.json
+  scale: 100
+  expected: 89.87
+  tolerance: 0.05
+  chance_level: 10

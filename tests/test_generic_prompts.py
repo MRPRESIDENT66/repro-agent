@@ -62,6 +62,9 @@ def test_generic_prompts_require_evidence_and_real_execution() -> None:
     assert "source evidence" in combined
     assert "transitive defaults" in combined
     assert "missing evidence is a request to investigate" in combined
+    assert "named preset" in combined
+    assert "exact subset" in combined
+    assert "concrete executable change" in combined
 
 
 def test_all_oracles_publish_a_generic_artifact_contract() -> None:

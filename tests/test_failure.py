@@ -66,6 +66,21 @@ def test_classifies_multiprocessing_pickling_before_missing_artifact():
     assert "num_workers=0" in failure.next_action
 
 
+def test_classifies_attribute_error_before_unrelated_pickle_warning():
+    failure = classify_failure(
+        session=_Session(
+            stderr=(
+                "warning: entry = pickle.load(f)\n"
+                "AttributeError: 'AutoAttack' object has no attribute 'apgd_dlr'"
+            )
+        ),
+        diagnostics=[],
+    )
+
+    assert failure.kind == "api_mismatch"
+    assert failure.probe_hint == "python_signature:<object named in traceback>"
+
+
 def test_classifies_timeout_before_missing_artifact_diagnostic():
     failure = classify_failure(
         session=_Session(timed_out=True),

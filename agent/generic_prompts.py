@@ -39,6 +39,11 @@ evaluation path over reimplementing it. If a key implementation choice lacks
 evidence, keep it in `Uncertainties`; do not silently turn it into code. Do not
 guess or mention a private target value.
 
+A named preset, version, or default is not evidence that it performs an exact
+publicly requested subset. When the task specifies an exact list, count, budget,
+or repeat count, trace the preset implementation or installed runtime behavior
+and record how the exact requested work will be selected.
+
 When you report a concrete constant — a normalization mean/std, an image size, a
 temperature, a class count, a file path — it MUST be a value you actually read
 from a specific file via search_repo or runtime_probe, quoted with that file's
@@ -80,6 +85,10 @@ Repository-agnostic procedure:
    preprocessing, checkpoint loading, or metric units.
    Use runtime_probe when source alone cannot settle a runtime import, signature,
    path, or CLI uncertainty.
+   When the task requests an exact subset, count, budget, or repeat count, do not
+   assume a named preset or version is equivalent. Inspect the implementation or
+   runtime object and explicitly configure the requested work when the API allows
+   it, without adding adjacent algorithms, passes, or repeats.
 4. Perform a real evaluation over the requested data and model resources.
 5. Produce the exact public result artifact described by the runtime context
    from measured outputs; never hardcode, echo, or relay a known number.
@@ -160,6 +169,11 @@ Missing evidence is a request to investigate, not proof that the current code is
 wrong. Change only semantics contradicted by source you actually retrieved in
 this repair round. If the query budget did not resolve another concern, preserve
 that working code and leave the concern for the next audited round.
+
+After a timeout, the submitted repair must make a concrete executable change.
+First compare named presets and defaults with any exact list, count, budget, or
+repeat count in the public task. Inspect the implementation or runtime object,
+then explicitly restrict unrequested work without reducing requested coverage.
 
 Preserve provisioned asset paths, offline constraints, and unrelated working
 behavior. Keep the final program complete and syntactically valid, perform a

@@ -91,6 +91,14 @@ def classify_failure(
             "then patch only the call site.",
             "python_signature:<object named in traceback>",
         )
+    if re.search(r"AttributeError: .*has no attribute", text):
+        return Failure(
+            "api_mismatch",
+            "The program accessed an attribute unavailable in the installed API.",
+            "Inspect the exact source definition or run a python_signature probe, "
+            "then patch only the attribute access or call site.",
+            "python_signature:<object named in traceback>",
+        )
     if re.search(r"FileNotFoundError|No such file or directory|Dataset not found", text):
         return Failure(
             "missing_path",
@@ -101,8 +109,8 @@ def classify_failure(
             "path_list:<nearest existing parent>",
         )
     if re.search(
-        r"pickle error|pickl(?:e|ing)|can't get local object|cannot pickle|"
-        r"attempting to start a worker process",
+        r"PicklingError|pickle error|can't get local object|cannot pickle|"
+        r"can't pickle|attempting to start a worker process",
         text,
         re.I,
     ):

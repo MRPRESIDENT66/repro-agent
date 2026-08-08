@@ -9,7 +9,7 @@ import pytest
 from agent.llm import Reply, ScriptedLLM, ToolCall
 from agent.contracts import (
     extract_python as _extract_python,
-    validate_audit as _validate_audit,
+    validate_review as _validate_review,
 )
 from agent.repair import apply_code_patch as _apply_code_patch
 from agent.roles import RoleDeps, missing_path_hints, run_rag_role
@@ -112,22 +112,22 @@ def test_public_contract_rejects_inverted_score_direction(tmp_path: Path) -> Non
 def test_pass_review_requires_source_evidence_for_semantic_pipeline() -> None:
     unsupported = "Plausible review without citations. " + ("x" * 310)
     with pytest.raises(ValueError, match="preprocessing"):
-        _validate_audit(unsupported + "\nAUDIT_STATUS: PASS")
+        _validate_review(unsupported + "\nREVIEW_STATUS: PASS")
 
-    grounded = """Source-grounded audit of the complete evaluation path.
+    grounded = """Source-grounded review of the complete evaluation path.
 - `model`: `repo/model.py:12` defines the constructor and checkpoint load.
 - `data`: `repo/data.py:30` defines the requested test split.
 - `preprocessing`: `repo/preprocess.py:8` defines ordered transforms and constants.
 - `metric`: `repo/metric.py:20` defines score direction and aggregation.
 The execution log confirms that the measured artifact follows those definitions.
-AUDIT_STATUS: PASS
+REVIEW_STATUS: PASS
 """
 
-    assert _validate_audit(grounded).endswith("AUDIT_STATUS: PASS\n")
+    assert _validate_review(grounded).endswith("REVIEW_STATUS: PASS\n")
 
 
 def test_pass_review_accepts_documentation_evidence_and_markdown_labels() -> None:
-    grounded = """Source-grounded audit of the complete evaluation path.
+    grounded = """Source-grounded review of the complete evaluation path.
 - Model: loaded with the requested runtime identifier.
 - Data: complete validation split loaded without shuffling.
 - `model:` `clip/clip.py:94` loads the requested checkpoint.
@@ -135,10 +135,10 @@ def test_pass_review_accepts_documentation_evidence_and_markdown_labels() -> Non
 - preprocessing: `clip/clip.py:79-86` defines the ordered image transform.
 - `metric`: `eval_clip.py:72` defines cosine similarity and top-1 argmax.
 The execution log confirms 10000 measured per-sample predictions.
-AUDIT_STATUS: PASS
+REVIEW_STATUS: PASS
 """
 
-    assert _validate_audit(grounded).endswith("AUDIT_STATUS: PASS\n")
+    assert _validate_review(grounded).endswith("REVIEW_STATUS: PASS\n")
 
 
 # ---------------------------------------------------------------------------
@@ -153,10 +153,10 @@ def test_dynamic_rag_query_is_generated_from_error_context(
     artifacts = tmp_path / "artifacts"
     (workspace / "config.yml").write_text("data_root: data/images_classic\n")
     query = "resolve FileNotFoundError benchmark data path"
-    report = "Grounded path audit. " + ("x" * 310) + "\nAUDIT_STATUS: REPAIR_REQUIRED"
+    report = "Grounded path review. " + ("x" * 310) + "\nREVIEW_STATUS: REPAIR_REQUIRED"
     role_llm = ScriptedLLM([
         Reply("", [ToolCall("q1", "search_repo", {"query": query})]),
-        Reply("", [ToolCall("s1", "submit_audit", {"content": report})]),
+        Reply("", [ToolCall("s1", "submit_review", {"content": report})]),
     ])
     llms = iter([role_llm, ScriptedLLM([]), ScriptedLLM([])])
     deps = RoleDeps(
@@ -169,16 +169,16 @@ def test_dynamic_rag_query_is_generated_from_error_context(
     )
 
     role, rag = run_rag_role(
-        name="auditor_test",
+        name="reviewer_test",
         workdir=workspace,
         artifact_dir=artifacts,
         session=Session(workspace),
         instruction="Query the concrete execution error, then submit the review.",
         context="Execution failed: FileNotFoundError for benchmark data.",
         output_path=workspace / "review.md",
-        submit_name="submit_audit",
+        submit_name="submit_review",
         submit_description="Submit review.",
-        validator=_validate_audit,
+        validator=_validate_review,
         trigger="execution_error",
         max_steps=3,
         deps=deps,
@@ -186,8 +186,8 @@ def test_dynamic_rag_query_is_generated_from_error_context(
 
     assert rag["dynamic"] is True
     assert rag["queries"] == [query]
-    assert role["tool_counts"] == {"search_repo": 1, "submit_audit": 1}
-    trace = (artifacts / "auditor_test_rag_trace.md").read_text()
+    assert role["tool_counts"] == {"search_repo": 1, "submit_review": 1}
+    trace = (artifacts / "reviewer_test_rag_trace.md").read_text()
     assert query in trace
     assert "data_root: data/images_classic" in trace
 
@@ -199,7 +199,16 @@ def test_restricted_runtime_probe_is_audited_and_not_an_eval_command(
     workspace.mkdir()
     artifacts = tmp_path / "artifacts"
     role_llm = ScriptedLLM([
-        Reply("", [ToolCall("p1", "runtime_probe", {"kind": "python_signature", "target": "json.dumps"})]),
+        Reply(
+            "",
+            [
+                ToolCall(
+                    "p1",
+                    "runtime_probe",
+                    {"kind": "python_signature", "target": "json.dumps"},
+                )
+            ],
+        ),
         Reply("", [ToolCall("q1", "search_repo", {"query": "find official evaluation entry"})]),
         Reply("", [ToolCall("s1", "submit_handoff", {"content": "grounded"})]),
     ])

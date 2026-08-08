@@ -14,7 +14,8 @@ from dataclasses import dataclass
 class RolePrompts:
     navigator: str
     reproducer: str
-    auditor: str
+    critic: str
+    reviewer: str
     repair: str
 
 
@@ -100,14 +101,26 @@ Repository-agnostic procedure:
 The environment and assets are already provisioned as described by the public
 task. Respect its offline, device, and resource constraints. Do not guess or
 mention a private target value.""",
-    auditor="""You are the post-execution Auditor for an unfamiliar
-ML repository. Audit the current implementation, public execution log, and
+    critic="""You are the execution-preflight Critic for an unfamiliar ML repository.
+Review the current evaluation program against the public task, Navigator handoff,
+Reviewer findings when present, and repository source. Use search_repo on the
+single highest-risk unverified implementation claim, and runtime_probe only for
+a concrete import, signature, installed-source, path, or CLI uncertainty.
+
+Submit a complete corrected executable program, not prose or result-file
+contents. Preserve working behavior unless source evidence proves it wrong.
+Before submission verify model/checkpoint identity, data split and order,
+preprocessing placement and constants, metric/score semantics, exact execution
+arguments, and artifact schema/count. Do not invent constants, silently reduce
+coverage, or mention a private target value.""",
+    reviewer="""You are the post-execution Reviewer for an unfamiliar
+ML repository. Review the current implementation, public execution log, and
 deterministic public-contract diagnostics. Use search_repo to investigate the
 concrete execution error or highest-risk semantic claim.
 Use runtime_probe only to resolve a concrete runtime import, signature, path, or
 CLI uncertainty exposed by the execution evidence.
 
-Use this checklist in the audit body:
+Use this checklist in the review body:
 - execution command ran and any failure is explained by the log;
 - requested model/data/split were actually used;
 - preprocessing/scaling placement matches source evidence;
@@ -115,7 +128,7 @@ Use this checklist in the audit body:
 - required artifact path/schema/count are satisfied by measured per-sample outputs;
 - no silent fallback, target leakage, hardcoded metric, or aggregate-only result.
 
-When a `Router risk plan` is present, address every mandatory audit requirement
+When a `Router risk plan` is present, address every mandatory review requirement
 explicitly with both the generated-code operation and repository evidence. A
 formula match alone does not prove score polarity: for classification confidence,
 energy, anomaly, OOD, or AUROC outputs, trace which population receives larger
@@ -134,15 +147,21 @@ statement such as "standard preprocessing" or "consistent with the repository"
 without the defining source path and values is an unresolved blocker, not
 evidence. Verify the default actually reached from the canonical evaluation
 entry, not a nearby training or example configuration. End with
-`AUDIT_STATUS: REPAIR_REQUIRED` when any required evidence
+`REVIEW_STATUS: REPAIR_REQUIRED` when any required evidence
 line is missing or cannot be verified.
 
 Treat deterministic public-contract failures as blocking. End with exactly
-`AUDIT_STATUS: PASS` only when no repair is needed; otherwise end with exactly
-`AUDIT_STATUS: REPAIR_REQUIRED`. Do not guess or mention a private target value.""",
+`REVIEW_STATUS: PASS` only when no repair is needed; otherwise end with exactly
+`REVIEW_STATUS: REPAIR_REQUIRED`. After a successful execution with a valid
+public artifact, request Repair only for a concrete contradiction between the
+generated code and source or runtime evidence. Missing evidence or a possible
+version-dependent API difference is not itself a defect. For claims about an
+installed package's attributes, presets, or defaults, inspect that installed
+object with `python_source`; source from another version is insufficient.
+Do not guess or mention a private target value.""",
     repair="""You are Repair Agent {round_index} for an unfamiliar ML repository.
 Fix the concrete failure shown by the current implementation, execution log,
-Auditor report when present, and deterministic public-contract diagnostics.
+Reviewer report when present, and deterministic public-contract diagnostics.
 
 Use search_repo to inspect the error source or disputed semantic claim before
 editing. Copy an exact working call pattern or verify the exact function
@@ -176,7 +195,7 @@ swap in a neighboring config or a remembered "standard" transform.
 Missing evidence is a request to investigate, not proof that the current code is
 wrong. Change only semantics contradicted by source you actually retrieved in
 this repair round. If the query budget did not resolve another concern, preserve
-that working code and leave the concern for the next audited round.
+that working code and leave the concern for the next reviewed round.
 
 After a timeout, the submitted repair must make a concrete executable change.
 First compare named presets and defaults with any exact list, count, budget, or

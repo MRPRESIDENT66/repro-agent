@@ -46,7 +46,7 @@ output:
 execution:
   generated_script: eval_mmpretrain.py
   command: python eval_mmpretrain.py
-  timeout: 1800
+  timeout: 600
   runtime: docker
   backend: docker-offline-cpu
   go_offline: true

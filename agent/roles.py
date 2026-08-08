@@ -254,7 +254,6 @@ class _RoleTools:
         self.runtime_probe_recommended = (
             self.allow_runtime_probe
             and self.name.startswith("repair_")
-            and self.trigger == "execution_error_and_auditor_finding"
             and self.suggested_probe is not None
         )
 
@@ -375,6 +374,15 @@ class _RoleTools:
         return self.submitted or len(self.queries) >= self.max_queries
 
 
+class RoleSynthesisError(RuntimeError):
+    """A role exhausted artifact synthesis while retaining auditable usage."""
+
+    def __init__(self, name: str, role: dict, rag: dict) -> None:
+        super().__init__(f"{name} failed to synthesize a valid artifact")
+        self.role = role
+        self.rag = rag
+
+
 def run_rag_role(
     *,
     name: str,
@@ -425,7 +433,7 @@ def run_rag_role(
     has_execution_feedback = trigger in {
         "execution_result",
         "repair_execution_result",
-        "execution_error_and_auditor_finding",
+        "execution_error_and_reviewer_finding",
     }
     if not has_execution_feedback:
         action_nudge = (
@@ -543,11 +551,6 @@ def run_rag_role(
         _save_messages(f"{name}_synthesis", synthesis_log, workdir, artifact_dir)
 
     _save_role_transcript(name, result, workdir, artifact_dir)
-    if not tools.queries:
-        raise RuntimeError(f"{name} submitted no runtime-generated RAG query")
-    if not tools.submitted:
-        raise RuntimeError(f"{name} failed to synthesize a valid artifact")
-
     role_usage = role_llm.usage.as_dict()
     synthesis_usage = synthesis_llm.usage.as_dict()
     combined_usage = {
@@ -564,7 +567,7 @@ def run_rag_role(
     )
     role = {
         "steps": result.steps + synthesis_steps,
-        "errors": 0,
+        "errors": 0 if tools.submitted else 1,
         "format_errors": result.format_errors,
         "artifact_submitted": tools.submitted,
         "usage": combined_usage,
@@ -586,4 +589,8 @@ def run_rag_role(
         "usage": rag_llm.usage.as_dict(),
         "trace": tools.trace_path.name,
     }
+    if not tools.queries:
+        raise RuntimeError(f"{name} submitted no runtime-generated RAG query")
+    if not tools.submitted:
+        raise RoleSynthesisError(name, role, rag)
     return role, rag

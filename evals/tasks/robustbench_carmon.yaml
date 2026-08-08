@@ -53,7 +53,7 @@ execution:
     --data_dir robustbench_data
     --n_examples 50
     --epsilon 0.031372549
-  timeout: 2700
+  timeout: 720
   runtime: local
   backend: local-offline-cpu
   python: .venv/bin/python

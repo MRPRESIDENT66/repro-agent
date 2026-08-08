@@ -719,7 +719,7 @@ def make_oracle_config(
         runtime.profile.generated_script,
         manifest.output_file,
         "navigator_report.md",
-        "audit_report.md",
+        "review_report.md",
         "reproducer_public_log.txt",
     }
     return OracleConfig(

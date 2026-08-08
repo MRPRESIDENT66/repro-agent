@@ -64,7 +64,7 @@ execution:
   command: >-
     python eval_ebo.py
     --root results/cifar10_resnet18_32x32_base_e100_lr0.1_default
-  timeout: 1800
+  timeout: 300
   runtime: docker
   backend: docker
   go_offline: true

@@ -33,7 +33,7 @@ def classify_failure(
 
     if workflow_error:
         missing_runtime_file = re.search(
-            r"handoff missing|navigator_report|audit_report|"
+            r"handoff missing|navigator_report|review_report|"
             r"eval_.*\.py.*No such file",
             text,
         )
@@ -56,7 +56,7 @@ def classify_failure(
             "timeout",
             "The evaluation exceeded the runtime budget before producing a "
             "complete result.",
-            "Compare the executable work with the public task and Router audit "
+            "Compare the executable work with the public task and Router review "
             "requirements first. Remove unrequested algorithms, attacks, repeats, "
             "or dataset passes; then optimize batching/device/cache usage without "
             "reducing requested sample coverage or changing the metric.",
@@ -145,7 +145,7 @@ def classify_failure(
             "semantic_mismatch",
             "The verifier recomputed a metric from the artifact, but the measured "
             "semantics are wrong.",
-            "Audit model/data/preprocessing/score direction/aggregation against "
+            "Review model/data/preprocessing/score direction/aggregation against "
             "repository evidence, then patch the semantic mismatch.",
         )
     return Failure(

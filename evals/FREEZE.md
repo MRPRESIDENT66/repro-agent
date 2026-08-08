@@ -13,8 +13,8 @@ agent commit, run date, model endpoint/version, and Docker image digest.
 | Sampling | `temperature=0` (provider-side nondeterminism may remain) |
 | Execution budget | One initial execution plus at most four repair executions |
 | Execution backend | Recorded per run; OpenOOD supports `docker` (CPU, offline) and `mps` (host Apple GPU, weaker isolation) |
-| Current local base commit | `65dde088dcafda1f80325df1c6a885f51f2d9b80` |
-| Formal-run diff SHA-256 | `c3e9bc0e014505236c4dac466c85bbaf8bfd614af3806720edbd23cea9d9c7b1` |
+| Original N=5 base commit | `65dde088dcafda1f80325df1c6a885f51f2d9b80` |
+| Original N=5 diff SHA-256 | `c3e9bc0e014505236c4dac466c85bbaf8bfd614af3806720edbd23cea9d9c7b1` |
 | Main formal manifest | `logs/n5/manifest_20260807T015201Z.json` |
 | Coverage manifests | `20260807T052105Z`, `20260807T060206Z`, `20260807T061133Z` |
 
@@ -27,7 +27,29 @@ still exposes `solo`, `solo-repair`, `full`, and `adaptive`. It is a convenient
 code archive, not a replacement for the formal base-commit + diff-hash identity
 above.
 
-## Current Adaptive N=5 Batch
+## Current Progressive Adaptive Development Batch
+
+| Field | Value |
+|---|---|
+| Run date | `2026-08-08` |
+| Local base commit | `a9b4627c226b258e7ef7f527889eeddf07fe3934` |
+| Runtime diff SHA-256 | `a894d9f1e11a50d0d1f7d976946fecd02773af9989ef2e57f7fa248dd8d6416c` |
+| Pipeline / repeats | progressive `adaptive`, five development tasks, N=5 each |
+| Result | 18/25 verifier passes; 17/25 complete workflow passes |
+| Mean evaluations / cost | 2.32 / ¥0.2975 per run |
+| OpenOOD backend | host MPS; weaker isolation than Docker |
+| Other backends | task manifests' recorded local or Docker execution profiles |
+
+Counted attempt IDs are listed in `evals/RESULTS.md`. The worktree was not clean,
+so this batch is identified by the base commit plus the runtime-only diff hash.
+README and evaluation-document edits are intentionally excluded from that hash.
+Development smokes, attempts run before the detectors public-interface fix, and
+interrupted attempts without a result were not selected into the N=5 cells.
+Later source cleanup unified Reviewer naming, removed unused graph state, and
+deduplicated execution bookkeeping. It is not part of this formal-run hash; it
+has deterministic regression coverage, but the N=5 batch was not rerun after it.
+
+## Adaptive v5 N=5 Batch
 
 | Field | Value |
 |---|---|

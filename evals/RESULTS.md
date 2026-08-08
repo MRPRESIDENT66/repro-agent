@@ -1,6 +1,6 @@
 # Repro-Agent Evaluation Results
 
-Fresh blind-reproduction experiments run on 2026-08-07. Every cell contains five
+Blind-reproduction experiments run on 2026-08-07 and 2026-08-08. Every formal cell contains five
 independent DeepSeek V4 Flash runs with thinking disabled, temperature 0, fixed
 generic prompts, one initial execution plus at most four repairs, and the same
 task verifier. The agent never receives the hidden target or verifier gold.
@@ -17,9 +17,51 @@ Costs are estimates from configured token rates, not provider billing records.
 `mean evals` is audited from each run's replayable `commands.sh`; this recovers
 executions followed by a Reviewer synthesis exception.
 
-## Current Adaptive Runtime N=5
+## Current Progressive Adaptive N=5
 
-The current adaptive-only runtime was frozen at `e537abd`
+The current development snapshot uses one adaptive runtime: Router selects a
+short, assisted, or full starting path, and real failures progressively add
+Navigator, Reviewer, Critic, and patch-first Repair. Each task below was run five
+times. `workflow pass` is an absolute count requiring both verifier acceptance
+and no orchestration exception.
+
+| Task | observed path | verified | workflow pass | mean evals | mean cost |
+|---|---|---:|---:|---:|---:|
+| DistilBERT SST-2 | short | 5/5 | 5/5 | 1.00 | ¥0.0120 |
+| detectors RN18 / CIFAR-100 | assisted | 5/5 | 5/5 | 2.00 | ¥0.1273 |
+| mmpretrain RN18 / CIFAR-10 | full | 3/5 | 3/5 | 2.60 | ¥0.3349 |
+| OpenOOD EBO AUROC | full | 1/5 | 1/5 | 3.20 | ¥0.5347 |
+| RobustBench Carmon2019 | full | 4/5 | 3/5 | 2.80 | ¥0.4784 |
+| **Total / mean** | - | **18/25 (72%)** | **17/25 (68%)** | **2.32** | **¥0.2975** |
+
+The path selection behaves as intended: DistilBERT stayed short, detectors
+recovered through the assisted path, and all semantic-risk tasks started full.
+The aggregate is nevertheless not a high-reliability result. OpenOOD passed only
+one run: two complete artifacts were just outside tolerance, one Repair failed
+structured synthesis, and one exhausted the budget with score polarity reversed
+(`12.4177` instead of `87.5823`). mmpretrain also lost two runs to data-pipeline
+semantics and Repair synthesis. The strongest remaining bottlenecks are therefore
+semantic grounding and reliable role submission, not Router selection.
+
+Counted attempts:
+
+- DistilBERT: `adaptive_progressive_n5_s1` through `s5`.
+- detectors: `adaptive_progressive_final_n5_s1` through `s5`.
+- mmpretrain: `adaptive_progressive_final_n5_s1` and `s2`, then
+  `adaptive_progressive_t600_n5_s3` through `s5`.
+- OpenOOD: `adaptive_progressive_final_n5_s1` through `s5`, using host MPS.
+- RobustBench: `adaptive_escalation_n1`, `adaptive_escalation_n5_s2`, and
+  `adaptive_escalation_t720_s3` through `s5`.
+
+Development smokes, pre-fix detectors attempts, and interrupted no-result runs
+are excluded. The mmpretrain and RobustBench replacement attempts were named
+after reducing execution ceilings to 600 and 720 seconds; all earlier counted
+runs had already completed below the new ceilings. OpenOOD uses host MPS for
+practical runtime and therefore has weaker execution isolation than Docker.
+
+## Previous Adaptive Freeze N=5
+
+The previous adaptive-only runtime was frozen at `e537abd`
 (`adaptive-n5-v5-freeze`) and run five times on each of four development tasks.
 These runs use the current code, but are not held-out evidence because the tasks
 informed earlier development. OpenOOD used the host MPS backend; the other runs
@@ -40,6 +82,36 @@ fixed `full` result of 17/20: difficult tasks regressed, mainly through incorrec
 semantics, exhausted repair budgets, and structured artifact synthesis failures.
 Earlier `adaptive_v3`, `adaptive_v4`, and smoke attempts were used to debug the
 runtime and are excluded from this table.
+
+## Progressive Escalation RobustBench N=5
+
+The current development snapshot was rerun on the hardest previous adaptive
+task after adding progressive escalation and full semantic-risk review. It
+verified **4/5** runs; **3/4** accepted runs also completed without a workflow
+error.
+
+| attempt | verified | workflow-clean | evals | cost | outcome |
+|---|---:|---:|---:|---:|---|
+| s1 | yes | yes | 4 | ¥0.6264 | three repairs, then 52% over 50 examples |
+| s2 | yes | yes | 1 | ¥0.2251 | correct on first execution |
+| s3 | no | no | 3 | ¥0.4148 | extra attacks hit the 12-minute execution limit; final Repair synthesis failed |
+| s4 | yes | no | 3 | ¥0.5476 | correct 52% artifact over 50 examples; unnecessary post-success Repair synthesis failed |
+| s5 | yes | yes | 3 | ¥0.5782 | two API repairs, then 52% over 50 examples |
+| **Total / mean** | **4/5 (80%)** | **3/4 (75%)** | **2.80** | **¥0.4784** | **¥2.3921 total** |
+
+RobustBench's per-execution timeout was reduced from 45 to **12 minutes** during
+this batch. Successful attack executions took about 4-6 minutes; the shorter
+limit therefore preserves observed successes while stopping a script that
+silently expanded into additional attacks. The first two runs were configured
+with the old ceiling but completed below 12 minutes. One already-running,
+no-result attempt was manually stopped when the timeout policy changed and was
+replaced as s3; it is not counted.
+
+Compared with the previous adaptive freeze's **1/5**, the redesign materially
+improves this difficult task. It still does not beat the historical fixed
+`full` result of **5/5**, and the s4 failure shows that post-execution Reviewer
+judgment and structured Repair submission remain reliability bottlenecks. This
+is development-task evidence, not held-out generalization evidence.
 
 ## Aggregate Finding
 

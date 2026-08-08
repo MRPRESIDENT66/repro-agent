@@ -39,7 +39,7 @@ def validate_report(content: str) -> str:
     return content + "\n"
 
 
-def _audit_evidence_values(body: str, category: str) -> list[str]:
+def _evidence_values(body: str, category: str) -> list[str]:
     """Return matching evidence values, ignoring harmless Markdown styling."""
     item = re.compile(
         r"^\s*-\s*(?:`(?P<code>[^`]+)`|\*\*(?P<bold>[^*]+)\*\*|"
@@ -60,20 +60,23 @@ def _audit_evidence_values(body: str, category: str) -> list[str]:
     return values
 
 
-def validate_audit(content: str) -> str:
+def _validate_evidence_report(content: str, *, label: str) -> str:
     content = validate_report(content)
-    matches = re.findall(r"AUDIT_STATUS:\s*(PASS|REPAIR_REQUIRED)", content)
+    marker = f"{label}_STATUS"
+    matches = re.findall(rf"{marker}:\s*(PASS|REPAIR_REQUIRED)", content)
     if not matches:
-        raise ValueError("audit must end with AUDIT_STATUS: PASS or REPAIR_REQUIRED")
+        raise ValueError(
+            f"{label.lower()} must end with {marker}: PASS or REPAIR_REQUIRED"
+        )
     body = re.sub(
-        r"[*`]*AUDIT_STATUS:\s*(?:PASS|REPAIR_REQUIRED)[*`]*\s*$",
+        rf"[*`]*{marker}:\s*(?:PASS|REPAIR_REQUIRED)[*`]*\s*$",
         "",
         content.rstrip(),
     ).rstrip()
     if matches[-1] == "PASS":
         missing = []
         for category in ("model", "data", "preprocessing", "metric"):
-            values = _audit_evidence_values(body, category)
+            values = _evidence_values(body, category)
             source_path = re.compile(
                 r"`[^`\n]+\.(?:py|ya?ml|json|toml|cfg|ini|sh|md|rst|txt|ipynb)"
                 r"(?::\d+(?:-\d+)?)?`"
@@ -82,9 +85,15 @@ def validate_audit(content: str) -> str:
                 missing.append(category)
         if missing:
             raise ValueError(
-                "PASS audit lacks source-path evidence for: " + ", ".join(missing)
+                f"PASS {label.lower()} lacks source-path evidence for: "
+                + ", ".join(missing)
             )
-    return f"{body}\n\nAUDIT_STATUS: {matches[-1]}\n"
+    return f"{body}\n\n{marker}: {matches[-1]}\n"
+
+
+def validate_review(content: str) -> str:
+    """Validate the adaptive execution Reviewer's report format."""
+    return _validate_evidence_report(content, label="REVIEW")
 
 
 def make_generic_code_validator(config: OracleConfig) -> Callable[[str], str]:

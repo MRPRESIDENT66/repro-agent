@@ -20,7 +20,7 @@ SUBMIT_ROUTE_TOOL = {
             "type": "object",
             "properties": {
                 "use_navigator": {"type": "boolean"},
-                "require_auditor": {"type": "boolean"},
+                "require_semantic_review": {"type": "boolean"},
                 "reasons": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -31,7 +31,7 @@ SUBMIT_ROUTE_TOOL = {
                     "items": {"type": "string"},
                     "maxItems": 4,
                 },
-                "audit_requirements": {
+                "review_requirements": {
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 4,
@@ -39,10 +39,10 @@ SUBMIT_ROUTE_TOOL = {
             },
             "required": [
                 "use_navigator",
-                "require_auditor",
+                "require_semantic_review",
                 "reasons",
                 "risk_flags",
-                "audit_requirements",
+                "review_requirements",
             ],
         },
     },
@@ -51,26 +51,33 @@ SUBMIT_ROUTE_TOOL = {
 ROUTER_PROMPT = """You are the one-step risk Router for a blind ML reproduction task.
 You cannot inspect the repository and must not solve or code the task. Call
 submit_route exactly once. Decide whether source navigation and a final semantic
-audit are needed, then produce only the 3-4 highest-priority risks and checks that
+review are needed, then produce only the 3-4 highest-priority risks and checks that
 downstream agents can verify from repository evidence.
 
 Flag risks such as model/data identity, preprocessing, score polarity, label
 mapping, grouped aggregation, metric units, checkpoint coverage, and optional
-dependency imports. Audit requirements must be concrete falsifiable checks, not
+dependency imports. Review requirements must be concrete falsifiable checks, not
 generic advice. For OOD/AUROC tasks, explicitly distinguish repository confidence
 direction from the public output convention and require proof of which group
 should receive larger submitted scores. Do not prescribe raw versus negated
-scores or assert a sign before observing repository and public-artifact evidence."""
+scores or assert a sign before observing repository and public-artifact evidence.
+
+Use the short path for ordinary single-model classification when the public task
+already provides a model card, cached model/data, exact split, output schema, and
+standard accuracy. Zero Python files is expected for such a prepared task and is
+not a reason to add Navigator or semantic review. Reserve semantic review for
+meaningful ambiguity such as score direction, grouped aggregation, adversarial
+attack configuration, similarity metrics, or conflicting repository evidence."""
 
 
 @dataclass(frozen=True)
 class RouteDecision:
     use_navigator: bool
-    require_semantic_audit: bool
+    require_semantic_review: bool
     repository_python_files: int
     reasons: tuple[str, ...]
     risk_flags: tuple[str, ...]
-    audit_requirements: tuple[str, ...]
+    review_requirements: tuple[str, ...]
     llm_route_valid: bool
 
     def as_dict(self) -> dict:
@@ -79,13 +86,13 @@ class RouteDecision:
     def downstream_context(self) -> str:
         risks = "\n".join(f"- {item}" for item in self.risk_flags) or "- none"
         checks = (
-            "\n".join(f"- {item}" for item in self.audit_requirements)
+            "\n".join(f"- {item}" for item in self.review_requirements)
             or "- verify the public task and output contract"
         )
         return (
             "# Router risk plan\n\n"
             f"Risk flags:\n{risks}\n\n"
-            f"Mandatory audit requirements:\n{checks}\n\n"
+            f"Mandatory review requirements:\n{checks}\n\n"
             "Treat each requirement as unresolved until repository evidence proves it."
         )
 
@@ -152,6 +159,12 @@ def _rule_plan(config: OracleConfig, workdir: Path) -> dict:
     public_text = f"{config.name}\n{config.task}\n{config.public_result_protocol}".lower()
     matched = [term for term in _SEMANTIC_RISK_TERMS if term in public_text]
     python_files = sum(1 for _ in workdir.rglob("*.py"))
+    prepared_classification = (
+        "model card" in public_text
+        and python_files < 50
+        and not matched
+        and any(term in public_text for term in ("accuracy", "top-1"))
+    )
     risks: list[str] = []
     requirements: list[str] = []
 
@@ -182,7 +195,8 @@ def _rule_plan(config: OracleConfig, workdir: Path) -> dict:
         "risks": tuple(dict.fromkeys(risks)),
         "requirements": tuple(dict.fromkeys(requirements)),
         "force_navigator": python_files >= 700 or bool(matched),
-        "force_auditor": python_files >= 700 or bool(matched),
+        "force_review": python_files >= 700 or bool(matched),
+        "force_short": prepared_classification,
     }
 
 
@@ -249,11 +263,11 @@ def route_task(
         arguments = reply.tool_calls[0].arguments
         if not isinstance(arguments.get("use_navigator"), bool):
             raise ValueError("use_navigator must be boolean")
-        if not isinstance(arguments.get("require_auditor"), bool):
-            raise ValueError("require_auditor must be boolean")
+        if not isinstance(arguments.get("require_semantic_review"), bool):
+            raise ValueError("require_semantic_review must be boolean")
         llm_reasons = _strings(arguments.get("reasons"), 3)
         llm_risks = _strings(arguments.get("risk_flags"), 4)
-        llm_requirements = _strings(arguments.get("audit_requirements"), 4)
+        llm_requirements = _strings(arguments.get("review_requirements"), 4)
         valid = True
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
@@ -266,6 +280,8 @@ def route_task(
         reasons.append(f"rule override: large repository ({rules['python_files']} Python files)")
     if rules["matched"]:
         reasons.append("rule override: semantic risk " + ", ".join(rules["matched"][:4]))
+    if rules["force_short"]:
+        reasons.append("rule override: prepared single-model classification task")
     if not reasons:
         reasons.append("rule fallback: small, explicit public task")
 
@@ -274,14 +290,22 @@ def route_task(
         score_direction_risk="score_direction" in rules["risks"],
     )
     decision = RouteDecision(
-        use_navigator=bool(arguments.get("use_navigator", False)) or rules["force_navigator"],
-        require_semantic_audit=(
-            bool(arguments.get("require_auditor", False)) or rules["force_auditor"]
+        use_navigator=rules["force_navigator"]
+        or (
+            bool(arguments.get("use_navigator", False))
+            and not rules["force_short"]
+        ),
+        require_semantic_review=(
+            rules["force_review"]
+            or (
+                bool(arguments.get("require_semantic_review", False))
+                and not rules["force_short"]
+            )
         ),
         repository_python_files=rules["python_files"],
         reasons=tuple(dict.fromkeys(reasons)),
         risk_flags=tuple(dict.fromkeys(rules["risks"] + llm_risks))[:6],
-        audit_requirements=tuple(
+        review_requirements=tuple(
             dict.fromkeys(rules["requirements"] + llm_requirements)
         )[:5],
         llm_route_valid=valid,

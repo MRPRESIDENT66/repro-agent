@@ -14,7 +14,7 @@ from agent.types import OracleConfig
 HANDOFF_FILES = (
     "route_plan.json",
     "navigator_report.md",
-    "audit_report.md",
+    "review_report.md",
     "reproducer_public_log.txt",
 )
 RETRIEVAL_RANKER = "exact_path_symbol_plus_bm25_llm"
@@ -37,7 +37,9 @@ def build_run_record(
     total_commands: int,
     probe_transcript: list,
     failure_classes: list,
+    workflow_warnings: list[str] | None = None,
     routing: dict | None = None,
+    collaboration_level: str | None = None,
 ) -> dict:
     """Build the data written to ``result.json``."""
     total_cost = round(
@@ -60,6 +62,7 @@ def build_run_record(
         "retrieval_ranker": RETRIEVAL_RANKER,
         "repair_mode": "patch_first_full_file_fallback",
         "workflow_error": workflow_error,
+        "workflow_warnings": workflow_warnings or [],
         "total_rag_calls": sum(stage["calls"] for stage in rag.values()),
         "rag_requirement_met": rag_requirement,
         "handoff_requirement_met": handoff_requirement,
@@ -74,6 +77,7 @@ def build_run_record(
         "total_runtime_probes": len(probe_transcript),
         "failure_classes": failure_classes,
         "routing": routing,
+        "collaboration_level": collaboration_level,
     }
 
 

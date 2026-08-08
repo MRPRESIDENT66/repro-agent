@@ -11,11 +11,11 @@ run_xxx.py
   -> OracleConfig
   -> run_oracle()
   -> Router
-       -> 简单任务：Reproducer
-       -> 复杂任务：Navigator -> Reproducer
-  -> Execute -> Public Contract Check
-       -> 明确错误：Repair -> Execute
-       -> 语义风险：Auditor -> Repair 或结束
+       -> 低风险：Reproducer -> Execute
+       -> 陌生任务：Navigator -> Reproducer -> Execute
+       -> 语义风险：Navigator -> Reproducer -> Critic -> Execute -> Reviewer
+  -> 第一次失败：补充 Navigator -> Reviewer -> Repair -> Execute
+  -> 重复失败：升级 full -> Critic -> Execute -> Reviewer -> Repair
   -> verify_run()：最后使用私有 gold 判卷一次
 ```
 
@@ -43,9 +43,10 @@ submit_xxx        提交路线、handoff、代码、审查或 patch
 
 ## State 和磁盘
 
-LangGraph State 是普通字典，保存轮次、失败类型、是否通过公开 contract、
-以及报告路径。完整 `eval.py`、执行日志、Navigator handoff 和 Auditor 报告
-保存在 workdir，避免把大文本在每个节点之间重复复制。
+LangGraph State 是普通字典，保存 `short / assisted / full` 协作级别、轮次、
+失败类型、是否通过公开 contract，以及报告路径。完整 `eval.py`、执行日志、
+Navigator handoff 和 Reviewer 报告保存在 workdir，避免把大文本在每个节点
+之间重复复制。
 
 ## 第一次先忽略
 
@@ -55,5 +56,5 @@ LangGraph State 是普通字典，保存轮次、失败类型、是否通过公�
 - 各 ML 仓库的 checkpoint 下载过程；
 - `ScriptedLLM` 测试替身。
 
-先能口述“manifest 出题 -> Router 按需分工 -> 真实执行 -> 失败修复 -> 私有
-verifier 判卷”，再深入每个模块。
+先能口述“manifest 出题 -> Router 选择起点 -> 真实执行 -> 失败逐级增加角色
+-> 私有 verifier 判卷”，再深入每个模块。

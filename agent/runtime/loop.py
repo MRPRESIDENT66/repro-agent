@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Callable
 
-from agent.llm import LLM, Message, Reply
+from agent.runtime.llm import LLM, Message, Reply
 
 
 def _assistant_message(reply: Reply) -> Message:

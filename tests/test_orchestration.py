@@ -14,24 +14,24 @@ from pathlib import Path
 import pytest
 
 from agent import pipeline
-from agent.contracts import (
+from agent.validation.contracts import (
     generic_task_context as _generic_task_context,
     make_generic_code_validator as _make_generic_code_validator,
     public_artifact_names,
 )
-from agent.diagnostics import (
+from agent.validation.diagnostics import (
     make_generic_contract_diagnostics as _make_generic_contract_diagnostics,
 )
-from agent.generic_prompts import GENERIC_PROMPTS
-from agent.llm import Reply, ScriptedLLM, ToolCall, Usage
+from agent.orchestration.prompts import GENERIC_PROMPTS
+from agent.runtime.llm import Reply, ScriptedLLM, ToolCall, Usage
 from agent.pipeline import ReproductionPipeline, run_oracle
 from agent.types import OracleConfig
-from agent.repair import (
+from agent.orchestration.repair import (
     failed_import_packages as _failed_import_packages,
     make_generic_repair_validator as _make_generic_repair_validator,
 )
-from agent.roles import RoleSynthesisError, atomic_write_text
-from agent.runtime_probe import MAX_RUNTIME_PROBES
+from agent.orchestration.roles import RoleSynthesisError, atomic_write_text
+from agent.runtime.runtime_probe import MAX_RUNTIME_PROBES
 from exec.session import RunResult, Session
 
 

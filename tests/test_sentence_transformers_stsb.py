@@ -5,13 +5,15 @@ from dataclasses import replace
 
 import pytest
 
-from agent.contracts import generic_task_context, make_generic_code_validator
+from agent.validation.contracts import generic_task_context, make_generic_code_validator
 from evals import manifest as framework
 from evals.manifest import (
     ManifestRuntime,
     OracleHooks,
     load_manifest,
 )
+from evals.manifest import runtime as manifest_runtime
+from evals.manifest.schema import _validate_manifest
 from evals.metrics import accuracy, auroc, pearson, spearman
 from evals.oracles import sentence_transformers_stsb as oracle
 
@@ -102,7 +104,11 @@ def test_generic_provisioning_copies_public_assets_and_runs_hook(
     model.mkdir()
     (model / "model.safetensors").write_text("model")
     (tmp_path / "gold.json").write_text(json.dumps([0.0, 1.0, 2.0]))
-    monkeypatch.setattr(framework, "_repository_head", lambda _path: "test-commit")
+    monkeypatch.setattr(
+        manifest_runtime,
+        "_repository_head",
+        lambda _path: "test-commit",
+    )
 
     def provision_hook(_manifest, workdir):
         (workdir / "hook.txt").write_text("ran")
@@ -156,7 +162,7 @@ def test_manifest_rejects_workspace_path_escape() -> None:
     manifest = replace(load_manifest(oracle.MANIFEST), output_file="../gold.json")
 
     with pytest.raises(ValueError, match="inside the workspace"):
-        framework._validate_manifest(manifest)
+        _validate_manifest(manifest)
 
 
 def test_cli_output_path_is_valid_without_hardcoded_filename() -> None:

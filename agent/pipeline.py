@@ -20,26 +20,26 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from agent.artifacts import build_run_record, emit_artifacts
-from agent.contracts import (
+from agent.validation.artifacts import build_run_record, emit_artifacts
+from agent.validation.contracts import (
     generic_task_context,
     make_generic_code_validator,
     public_artifact_names,
     validate_report,
     validate_review,
 )
-from agent.diagnostics import make_generic_contract_diagnostics
-from agent.failure import classify_failure
-from agent.generic_prompts import GENERIC_PROMPTS
-from agent.llm import ChatLLM
-from agent.repair import (
+from agent.validation.diagnostics import make_generic_contract_diagnostics
+from agent.orchestration.failure import classify_failure
+from agent.orchestration.prompts import GENERIC_PROMPTS
+from agent.runtime.llm import ChatLLM
+from agent.orchestration.repair import (
     make_generic_repair_validator,
     make_patch_validator,
     patch_submission_adapter,
     patch_tool,
 )
-from agent.router import RouteDecision, route_task
-from agent.roles import (
+from agent.orchestration.router import RouteDecision, route_task
+from agent.orchestration.roles import (
     MAX_REPAIR_ROUNDS,
     RoleDeps,
     RoleSynthesisError,

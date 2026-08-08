@@ -1,5 +1,5 @@
-from agent.llm import Reply, ScriptedLLM, ToolCall
-from agent.roles import RoleDeps, run_rag_role
+from agent.runtime.llm import Reply, ScriptedLLM, ToolCall
+from agent.orchestration.roles import RoleDeps, run_rag_role
 from exec.session import Session
 
 

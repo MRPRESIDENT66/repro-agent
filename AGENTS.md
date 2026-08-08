@@ -6,13 +6,13 @@ This repo is a blind multi-agent runtime for ML result reproduction. Agents insp
 
 - `README.md` — short project overview, pipeline, verifier, run commands.
 - `evals/RESULTS.md` — summarized experiments, ablations, failure analysis.
-- `evals/catalog.py`, `evals/manifest.py`, `evals/tasks/` — the manifest-first task catalog.
+- `evals/catalog.py`, `evals/manifest/`, `evals/tasks/` — the manifest-first task catalog.
 - `evals/assets.py`, `evals/execution.py`, `evals/metrics.py`, `evals/grouped_scores.py` — reusable manifest capabilities.
 - `evals/hooks/` — small Oracle-side extensions for exceptional tasks.
 - `agent/pipeline.py` — orchestration state machine, role handoffs, execution/repair loop.
-- `agent/contracts.py` — public task context and generic code/report/review validators.
-- `agent/failure.py` — failure classification and runtime-probe suggestions.
-- `agent/generic_prompts.py` — task-agnostic role prompts.
+- `agent/orchestration/` — Router, roles, prompts, failure classification, and Repair.
+- `agent/runtime/` — LLM client, Function Calling loop, and restricted probes.
+- `agent/validation/` — public contracts, diagnostics, and run artifacts.
 - `retrieval/` — repo-navigation search and snippet extraction.
 - `verify/` — fail-closed metric recomputation.
 - `tests/` — regression tests for prompts, orchestration, verifier, failure logic.

@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from agent.llm import LLM
+from agent.runtime.llm import LLM
 from retrieval.corpus import Doc, load_corpus
 from retrieval.ladder import _purpose, _tok, bm25_search
 

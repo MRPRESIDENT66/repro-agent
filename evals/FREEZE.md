@@ -45,9 +45,17 @@ so this batch is identified by the base commit plus the runtime-only diff hash.
 README and evaluation-document edits are intentionally excluded from that hash.
 Development smokes, attempts run before the detectors public-interface fix, and
 interrupted attempts without a result were not selected into the N=5 cells.
-Later source cleanup unified Reviewer naming, removed unused graph state, and
-deduplicated execution bookkeeping. It is not part of this formal-run hash; it
-has deterministic regression coverage, but the N=5 batch was not rerun after it.
+Later source cleanup unified Reviewer naming, removed unused graph state,
+deduplicated execution bookkeeping, and grouped the Agent and manifest modules by
+responsibility. It is not part of this formal-run hash, and the N=5 batch was not
+rerun after it.
+
+The post-refactor release smoke `post_refactor_v1_smoke` ran DistilBERT SST-2
+end to end on 2026-08-08. Router selected the short path; one evaluation produced
+all 872 predictions, the verifier recomputed **91.0550%**, and the workflow
+completed without error for a configured cost of **¥0.0131**. An initial
+sandbox-blocked launch made zero API calls and zero evaluations; the same attempt
+was immediately rerun with network access and its empty artifacts were replaced.
 
 ## Adaptive v5 N=5 Batch
 

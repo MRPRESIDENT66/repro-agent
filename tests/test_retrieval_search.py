@@ -1,4 +1,4 @@
-from agent.llm import ScriptedLLM
+from agent.runtime.llm import ScriptedLLM
 from retrieval.search import relevant_snippet, search_repo
 
 

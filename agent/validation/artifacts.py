@@ -7,8 +7,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from agent.roles import MAX_REPAIR_ROUNDS
-from agent.runtime_probe import MAX_RUNTIME_PROBES
+from agent.orchestration.roles import MAX_REPAIR_ROUNDS
+from agent.runtime.runtime_probe import MAX_RUNTIME_PROBES
 from agent.types import OracleConfig
 
 HANDOFF_FILES = (

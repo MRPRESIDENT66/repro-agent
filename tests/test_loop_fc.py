@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent.llm import Reply, ScriptedLLM, ToolCall, Usage
-from agent.loop import run_agent
+from agent.runtime.llm import Reply, ScriptedLLM, ToolCall, Usage
+from agent.runtime.loop import run_agent
 
 TOOLS = [
     {

@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from agent.llm import Reply, ScriptedLLM, ToolCall
-from agent.contracts import (
+from agent.runtime.llm import Reply, ScriptedLLM, ToolCall
+from agent.validation.contracts import (
     extract_python as _extract_python,
     validate_review as _validate_review,
 )
-from agent.repair import apply_code_patch as _apply_code_patch
-from agent.roles import RoleDeps, missing_path_hints, run_rag_role
-from agent.runtime_probe import runtime_probe_command as _runtime_probe_command
+from agent.orchestration.repair import apply_code_patch as _apply_code_patch
+from agent.orchestration.roles import RoleDeps, missing_path_hints, run_rag_role
+from agent.runtime.runtime_probe import runtime_probe_command as _runtime_probe_command
 from evals.catalog import make_config as make_task_config, manifest_path
 from evals.manifest import load_manifest
 from exec.session import Session

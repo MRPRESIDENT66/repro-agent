@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
-from agent.llm import ChatLLM
+from agent.runtime.llm import ChatLLM
 from agent.types import OracleConfig
 
 

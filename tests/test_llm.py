@@ -3,8 +3,8 @@ from __future__ import annotations
 import sys
 from types import SimpleNamespace
 
-import agent.llm as llm_module
-from agent.loop import _assistant_message
+import agent.runtime.llm as llm_module
+from agent.runtime.loop import _assistant_message
 
 
 def test_deepseek_v4_disables_thinking_and_preserves_reasoning(monkeypatch) -> None:

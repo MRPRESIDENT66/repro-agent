@@ -10,9 +10,9 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 
-from agent.llm import ChatLLM
-from agent.loop import AgentResult, run_agent
-from agent.runtime_probe import (
+from agent.runtime.llm import ChatLLM
+from agent.runtime.loop import AgentResult, run_agent
+from agent.runtime.runtime_probe import (
     MAX_RUNTIME_PROBES,
     MAX_RUNTIME_PROBES_PER_ROLE,
     RUNTIME_PROBE_TOOL,

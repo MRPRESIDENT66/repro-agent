@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent.contracts import public_artifact_names
+from agent.validation.contracts import public_artifact_names
 from agent.types import OracleConfig
 
 

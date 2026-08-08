@@ -1,4 +1,4 @@
-from agent.failure import classify_failure
+from agent.orchestration.failure import classify_failure
 from exec.session import RunResult
 
 

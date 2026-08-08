@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from agent.contracts import generic_task_context
+from agent.validation.contracts import generic_task_context
 from evals.catalog import TASK_DIR, make_config, manifest_path
 from evals.hooks import binding_for
 from evals.manifest import ManifestRuntime, OracleHooks, load_manifest

@@ -49,7 +49,7 @@ def search_repo(query: str, repo_path: str, k: int = 5) -> str:
     Requires an OpenAI-compatible LLM via the usual ``LLM_API_KEY`` /
     ``LLM_BASE_URL`` / ``LLM_MODEL`` environment variables.
     """
-    from agent.llm import ChatLLM
+    from agent.runtime.llm import ChatLLM
     from retrieval.search import search_repo as _search_repo
 
     return _search_repo(query, repo_path, ChatLLM(), k=k)
@@ -70,7 +70,7 @@ def runtime_probe(kind: str, target: str) -> str:
 
     Returns the probe's captured output.
     """
-    from agent.runtime_probe import runtime_probe_command
+    from agent.runtime.runtime_probe import runtime_probe_command
     from exec.session import Session
 
     command = runtime_probe_command(kind, target)

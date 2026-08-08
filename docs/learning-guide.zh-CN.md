@@ -24,10 +24,10 @@ run_xxx.py
 1. `evals/tasks/distilbert_sst2.yaml`：最简单的标量预测任务。
 2. `evals/tasks/openood_ebo.yaml`：不用 hook 声明复杂资源、双后端和分组指标。
 3. `evals/catalog.py`：任务名怎样映射到 manifest 和 hook。
-4. `evals/manifest.py`：怎样生成 `OracleConfig`。
+4. `evals/manifest/`：怎样解析任务、准备 workspace 并生成 `OracleConfig`。
 5. `agent/pipeline.py`：只看 `_node_*`、`_decide()`、`_build_graph()`。
-6. `agent/roles.py`：LLM 可以调用哪些工具。
-7. `agent/repair.py`：patch-first 怎样应用补丁。
+6. `agent/orchestration/roles.py`：LLM 可以调用哪些工具。
+7. `agent/orchestration/repair.py`：patch-first 怎样应用补丁。
 8. `verify/check.py`：为什么最终判卷与 Agent 隔离。
 
 ## 三类 LLM 工具

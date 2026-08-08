@@ -51,6 +51,17 @@ def classify_failure(
             "script and handoffs exist.",
         )
 
+    if session.transcript and session.transcript[-1].timed_out:
+        return Failure(
+            "timeout",
+            "The evaluation exceeded the runtime budget before producing a "
+            "complete result.",
+            "Compare the executable work with the public task and Router audit "
+            "requirements first. Remove unrequested algorithms, attacks, repeats, "
+            "or dataset passes; then optimize batching/device/cache usage without "
+            "reducing requested sample coverage or changing the metric.",
+        )
+
     if re.search(r"SyntaxError|IndentationError|py_compile", text):
         return Failure(
             "syntax_error",
@@ -128,13 +139,6 @@ def classify_failure(
             "semantics are wrong.",
             "Audit model/data/preprocessing/score direction/aggregation against "
             "repository evidence, then patch the semantic mismatch.",
-        )
-    if re.search(r"timed out|Timeout", text):
-        return Failure(
-            "timeout",
-            "The evaluation exceeded the runtime budget.",
-            "Patch batching/device/cache usage without reducing requested sample "
-            "coverage or changing the metric.",
         )
     return Failure(
         "unknown_failure",

@@ -248,6 +248,31 @@ def test_python_signature_probe_resolves_class_attributes(tmp_path: Path) -> Non
     assert _extract_python(script.read_text()) == "class A:\n    x = 1\n"
 
 
+def test_python_source_probe_reads_bounded_installed_definition(tmp_path: Path) -> None:
+    command = _runtime_probe_command("python_source", "json.dumps")
+    command = command.replace("python -c", f"{sys.executable} -c", 1)
+    session = Session(tmp_path)
+    run = session.probe(command, timeout=10)
+    session.close()
+
+    assert run.ok
+    assert "OBJECT json.dumps" in run.stdout
+    assert "DEFINITION_LINES" in run.stdout
+    assert "def dumps" in run.stdout
+
+
+def test_python_source_probe_lists_class_methods(tmp_path: Path) -> None:
+    command = _runtime_probe_command("python_source", "json.JSONEncoder")
+    command = command.replace("python -c", f"{sys.executable} -c", 1)
+    session = Session(tmp_path)
+    run = session.probe(command, timeout=10)
+    session.close()
+
+    assert run.ok
+    assert "METHODS" in run.stdout
+    assert "encode" in run.stdout
+
+
 # ---------------------------------------------------------------------------
 # Patch-first repair and validation
 # ---------------------------------------------------------------------------

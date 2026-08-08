@@ -78,7 +78,7 @@ def test_classifies_attribute_error_before_unrelated_pickle_warning():
     )
 
     assert failure.kind == "api_mismatch"
-    assert failure.probe_hint == "python_signature:<object named in traceback>"
+    assert failure.probe_hint == "python_source:<object named in traceback>"
 
 
 def test_classifies_timeout_before_missing_artifact_diagnostic():

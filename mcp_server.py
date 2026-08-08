@@ -64,8 +64,8 @@ def runtime_probe(kind: str, target: str) -> str:
     is in a directory, what does a CLI's ``--help`` say.
 
     Args:
-        kind: one of ``import_smoke``, ``python_signature``, ``path_list``,
-            ``cli_help``.
+        kind: one of ``import_smoke``, ``python_signature``, ``python_source``,
+            ``path_list``, ``cli_help``.
         target: the module/symbol/path/command to probe (e.g. ``json.dumps``).
 
     Returns the probe's captured output.

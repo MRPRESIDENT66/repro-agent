@@ -42,7 +42,11 @@ guess or mention a private target value.
 A named preset, version, or default is not evidence that it performs an exact
 publicly requested subset. When the task specifies an exact list, count, budget,
 or repeat count, trace the preset implementation or installed runtime behavior
-and record how the exact requested work will be selected.
+with a `python_source` runtime probe and record how the exact requested work will
+be selected.
+When a class probe lists its methods, spend the next probe on the method that
+applies or configures the preset; do not infer hidden attributes from the class
+name or stop at the generic execution method.
 
 When you report a concrete constant — a normalization mean/std, an image size, a
 temperature, a class count, a file path — it MUST be a value you actually read
@@ -84,11 +88,11 @@ Repository-agnostic procedure:
 3. Inspect source or CLI help instead of guessing signatures, paths, fields,
    preprocessing, checkpoint loading, or metric units.
    Use runtime_probe when source alone cannot settle a runtime import, signature,
-   path, or CLI uncertainty.
+   installed source definition, path, or CLI uncertainty.
    When the task requests an exact subset, count, budget, or repeat count, do not
    assume a named preset or version is equivalent. Inspect the implementation or
-   runtime object and explicitly configure the requested work when the API allows
-   it, without adding adjacent algorithms, passes, or repeats.
+   runtime object with `python_source` and explicitly configure the requested work
+   when the API allows it, without adding adjacent algorithms, passes, or repeats.
 4. Perform a real evaluation over the requested data and model resources.
 5. Produce the exact public result artifact described by the runtime context
    from measured outputs; never hardcode, echo, or relay a known number.
@@ -147,6 +151,10 @@ path. If repeated attempts fail in the same subsystem, replace the guessed
 approach with a repository-demonstrated entry point or call site.
 Use runtime_probe for the concrete import, signature, path, or CLI uncertainty
 when repository source is insufficient; do not use it to run the full evaluation.
+Use `python_source` when the failure concerns an installed object's attributes,
+preset membership, or default behavior that a signature cannot prove.
+For a class, use its reported method list to inspect the constructor or the
+specific method that applies the preset before inventing an attribute mapping.
 
 Make the smallest repository-grounded correction that addresses the classified
 failure and current blocker. Treat the command shown in the latest execution log
@@ -172,7 +180,7 @@ that working code and leave the concern for the next audited round.
 
 After a timeout, the submitted repair must make a concrete executable change.
 First compare named presets and defaults with any exact list, count, budget, or
-repeat count in the public task. Inspect the implementation or runtime object,
+repeat count in the public task. Inspect the implementation with `python_source`,
 then explicitly restrict unrequested work without reducing requested coverage.
 
 Preserve provisioned asset paths, offline constraints, and unrelated working

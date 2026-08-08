@@ -65,6 +65,7 @@ def test_generic_prompts_require_evidence_and_real_execution() -> None:
     assert "named preset" in combined
     assert "exact subset" in combined
     assert "concrete executable change" in combined
+    assert "python_source" in combined
 
 
 def test_all_oracles_publish_a_generic_artifact_contract() -> None:

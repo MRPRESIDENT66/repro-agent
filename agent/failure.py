@@ -87,17 +87,17 @@ def classify_failure(
         return Failure(
             "api_mismatch",
             "The program called an API with the wrong signature.",
-            "Inspect the exact source definition or run a python_signature probe, "
-            "then patch only the call site.",
+            "Inspect the exact source definition with python_signature or "
+            "python_source, then patch only the call site.",
             "python_signature:<object named in traceback>",
         )
     if re.search(r"AttributeError: .*has no attribute", text):
         return Failure(
             "api_mismatch",
             "The program accessed an attribute unavailable in the installed API.",
-            "Inspect the exact source definition or run a python_signature probe, "
-            "then patch only the attribute access or call site.",
-            "python_signature:<object named in traceback>",
+            "Inspect the installed definition with python_source, then patch only "
+            "the attribute access or call site.",
+            "python_source:<object named in traceback>",
         )
     if re.search(r"FileNotFoundError|No such file or directory|Dataset not found", text):
         return Failure(

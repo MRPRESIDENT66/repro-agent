@@ -1,4 +1,4 @@
-"""Restricted runtime probes for import, signature, path, and CLI diagnostics."""
+"""Restricted runtime probes for imports, Python APIs, paths, and CLIs."""
 
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ RUNTIME_PROBE_TOOL = {
         "name": "runtime_probe",
         "description": (
             "Run one restricted diagnostic in the provisioned runtime. "
-            "Use it to check an import, inspect a Python signature, list a local "
-            "path, or request CLI help. It cannot run arbitrary shell commands or "
-            "the full evaluation."
+            "Use it to check an import, inspect a Python signature or bounded "
+            "source definition, list a local path, or request CLI help. It cannot "
+            "run arbitrary shell commands or the full evaluation."
         ),
         "parameters": {
             "type": "object",
@@ -29,6 +29,7 @@ RUNTIME_PROBE_TOOL = {
                     "enum": [
                         "import_smoke",
                         "python_signature",
+                        "python_source",
                         "path_list",
                         "cli_help",
                     ],
@@ -56,7 +57,7 @@ def runtime_probe_command(kind: str, target: str) -> str:
     if len(target) > 240:
         raise ValueError("runtime probe target is too long")
 
-    if kind in {"import_smoke", "python_signature"}:
+    if kind in {"import_smoke", "python_signature", "python_source"}:
         if not _DOTTED_NAME.fullmatch(target):
             raise ValueError("Python probe target must be a dotted identifier")
         if kind == "import_smoke":
@@ -87,8 +88,20 @@ if obj is None:
 for attr in attrs:
     obj = getattr(obj, attr)
 print("OBJECT", {target!r})
-print("SIGNATURE", inspect.signature(obj))
 print("SOURCE", inspect.getsourcefile(obj))
+"""
+            if kind == "python_signature":
+                code += 'print("SIGNATURE", inspect.signature(obj))\n'
+            else:
+                code += """source = inspect.getsource(obj)
+lines = source.splitlines()
+if inspect.isclass(obj):
+    methods = [name for name, value in inspect.getmembers(obj, inspect.isfunction)]
+    print("METHODS", ", ".join(methods))
+print("DEFINITION_LINES", len(lines))
+print("\\n".join(lines[:240])[:12000])
+if len(lines) > 240 or len(source) > 12000:
+    print("... source output capped")
 """
         return f"python -c {shlex.quote(code)}"
 
@@ -126,6 +139,6 @@ def runtime_probe_observation(run: Any, clip) -> str:
     )
     return (
         f"Restricted runtime probe ({status}).\n"
-        f"stdout:\n{clip(run.stdout, 4000)}\n"
+        f"stdout:\n{clip(run.stdout, 8000)}\n"
         f"stderr:\n{clip(run.stderr, 4000)}"
     )

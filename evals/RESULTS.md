@@ -17,6 +17,30 @@ Costs are estimates from configured token rates, not provider billing records.
 `mean evals` is audited from each run's replayable `commands.sh`; this recovers
 executions followed by a Reviewer synthesis exception.
 
+## Current Adaptive Runtime N=5
+
+The current adaptive-only runtime was frozen at `e537abd`
+(`adaptive-n5-v5-freeze`) and run five times on each of four development tasks.
+These runs use the current code, but are not held-out evidence because the tasks
+informed earlier development. OpenOOD used the host MPS backend; the other runs
+used their recorded local or Docker profiles.
+
+| Task | verified | no workflow error / verified | mean evals | mean cost |
+|---|---:|---:|---:|---:|
+| DistilBERT SST-2 | 5/5 | 5/5 | 1.00 | ¥0.030 |
+| mmpretrain RN18 / CIFAR-10 | 3/5 | 2/3 | 2.60 | ¥0.229 |
+| OpenOOD EBO AUROC | 3/5 | 1/3 | 3.60 | ¥0.372 |
+| RobustBench Carmon2019 | 1/5 | 1/1 | 3.00 | ¥0.332 |
+| **Total** | **12/20 (60%)** | **9/12 (75%)** | **2.55** | **¥0.241** |
+
+The result supports selective orchestration on the easy task: Router skipped
+Navigator in all five DistilBERT runs, which all passed in one evaluation at low
+cost. It does **not** show that adaptive is better overall than the historical
+fixed `full` result of 17/20: difficult tasks regressed, mainly through incorrect
+semantics, exhausted repair budgets, and structured artifact synthesis failures.
+Earlier `adaptive_v3`, `adaptive_v4`, and smoke attempts were used to debug the
+runtime and are excluded from this table.
+
 ## Aggregate Finding
 
 Across the four-task ablation (20 runs per condition), execution-grounded repair

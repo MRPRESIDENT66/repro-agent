@@ -6,8 +6,9 @@ Repro-Agent 是一个面向机器学习代码仓库的**盲测自适应多智能
 
 当前产品代码只有一条 `adaptive` 流程。历史 `solo / solo-repair / full` 仅作为消融实验，说明为什么需要执行反馈、角色分工和按需编排，不再作为运行选项。
 
-| 历史实验依据 | 结果 |
+| 实验依据 | 结果 |
 |---|---:|
+| 当前 adaptive：4 项开发任务 | **12/20** verifier 通过；通过样本中 **9/12** 无流程异常 |
 | `solo` → `solo-repair` → `full` | **7/20 → 14/20 → 17/20** verifier 通过 |
 | OpenOOD：`solo` → `full` | **0/5 → 4/5** verifier 通过 |
 | 6 项任务 full coverage | **27/30** verifier 通过 |
@@ -75,7 +76,7 @@ Repair 只能看到执行日志、公开格式检查和公开语义约束。`exp
 ## Agent 工具
 
 - `search_repo`：BM25 + 路径/符号信号 + snippet + 可选 LLM rerank。
-- `runtime_probe`：受限检查 import、函数签名、路径和 CLI help。
+- `runtime_probe`：受限检查 import、函数签名、路径、CLI help 和定长源码片段。
 - `submit_handoff / submit_code / submit_audit / submit_patch`：角色提交结构化工作结果。
 - Session / Docker：执行生成脚本并记录完整命令、stdout、stderr 和耗时。
 

@@ -27,6 +27,21 @@ still exposes `solo`, `solo-repair`, `full`, and `adaptive`. It is a convenient
 code archive, not a replacement for the formal base-commit + diff-hash identity
 above.
 
+## Current Adaptive N=5 Batch
+
+| Field | Value |
+|---|---|
+| Frozen runtime | `e537abd` (`adaptive-n5-v5-freeze`) |
+| Pipeline / repeats | `adaptive`, four development tasks, N=5 each |
+| Attempt IDs | `adaptive_v5_n5_s1` through `adaptive_v5_n5_s5` |
+| Result | 12/20 verifier passes; 9/12 accepted runs without workflow error |
+| Mean evaluations / cost | 2.55 / ¥0.241 per run |
+| OpenOOD backend | host MPS; weaker isolation than Docker |
+| Excluded development attempts | `adaptive_v3*`, `adaptive_v4*`, and smoke attempts |
+
+This batch measures the current product path, but the four tasks are development
+tasks and must not be presented as held-out generalization evidence.
+
 ## Post-Freeze Held-Out Task
 
 | Field | Value |

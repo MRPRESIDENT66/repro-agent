@@ -6,8 +6,9 @@ Repro-Agent is a **blind, adaptive multi-agent runtime for reproducing ML reposi
 
 The current runtime has one production path: `adaptive`. Historical `solo`, `solo-repair`, and `full` modes remain only as ablation evidence for execution feedback, role specialization, and selective orchestration.
 
-| Historical evidence | Result |
+| Experiment evidence | Result |
 |---|---:|
+| Current adaptive runtime, four development tasks | **12/20** verifier passes; **9/12** accepted runs workflow-clean |
 | `solo` → `solo-repair` → `full` | **7/20 → 14/20 → 17/20** verifier passes |
 | OpenOOD, `solo` → `full` | **0/5 → 4/5** verifier passes |
 | Six-task full coverage | **27/30** verifier passes |
@@ -64,7 +65,7 @@ The agent must write recomputable per-sample output such as `predictions.json`. 
 Agents use native OpenAI-compatible Function Calling:
 
 - `search_repo`: BM25, path/symbol signals, snippets, and optional LLM reranking;
-- `runtime_probe`: restricted import, signature, path, and CLI inspection;
+- `runtime_probe`: restricted import, signature, path, CLI, and bounded installed-source inspection;
 - role submission tools for handoffs, code, audits, and patches;
 - local or Docker sessions with replayable command and probe transcripts.
 

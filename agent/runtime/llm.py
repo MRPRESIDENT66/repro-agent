@@ -15,15 +15,19 @@ plain strings or :class:`Reply` objects carrying tool calls.
 from __future__ import annotations
 
 import json
+import random
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from agent.config import (
     LLM_API_KEY,
     LLM_BASE_URL,
+    LLM_MAX_RETRIES,
     LLM_MODEL,
     LLM_THINKING,
+    LLM_TIMEOUT_SECONDS,
     PRICE_INPUT_HIT,
     PRICE_INPUT_MISS,
     PRICE_OUTPUT,
@@ -112,6 +116,25 @@ class LLM(Protocol):
     def chat(self, messages: list[Message], tools: list[dict] | None = None) -> Reply: ...
 
 
+class LLMUnavailableError(RuntimeError):
+    """A transient provider failure persisted after the configured retries."""
+
+
+def _is_retryable_error(exc: Exception) -> bool:
+    """Return whether an OpenAI-compatible provider error is worth retrying."""
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return True
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429 or (isinstance(status_code, int) and status_code >= 500):
+        return True
+    return type(exc).__name__ in {
+        "APITimeoutError",
+        "APIConnectionError",
+        "RateLimitError",
+        "InternalServerError",
+    }
+
+
 class ChatLLM:
     """OpenAI-compatible chat LLM (DeepSeek by default; works with any such API)."""
 
@@ -121,6 +144,8 @@ class ChatLLM:
         self._client = OpenAI(
             api_key=LLM_API_KEY,
             base_url=LLM_BASE_URL,
+            timeout=LLM_TIMEOUT_SECONDS,
+            max_retries=0,
         )
         self._model = model
         self._temperature = temperature
@@ -141,7 +166,7 @@ class ChatLLM:
             # not to emit parallel tool calls; the loop still fail-closes to
             # one executed call if a provider ignores this flag.
             kwargs["parallel_tool_calls"] = False
-        response = self._client.chat.completions.create(**kwargs)
+        response = self._request_with_retry(kwargs)
         with self._usage_lock:
             self.usage.add_raw(response.usage)
 
@@ -161,6 +186,23 @@ class ChatLLM:
             getattr(u, "completion_tokens", 0) or 0,
             getattr(msg, "reasoning_content", "") or "",
         )
+
+    def _request_with_retry(self, kwargs: dict[str, Any]) -> Any:
+        """Retry temporary provider failures with bounded exponential backoff."""
+        for attempt in range(LLM_MAX_RETRIES + 1):
+            try:
+                return self._client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                if not _is_retryable_error(exc):
+                    raise
+                if attempt == LLM_MAX_RETRIES:
+                    attempts = attempt + 1
+                    raise LLMUnavailableError(
+                        f"LLM request failed after {attempts} attempts: {exc}"
+                    ) from exc
+                # A small jitter keeps concurrent agents from retrying in lockstep.
+                delay = 2**attempt + random.uniform(0.0, 0.25)
+                time.sleep(delay)
 
     def complete(self, messages: list[Message]) -> str:
         return self.chat(messages).content

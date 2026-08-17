@@ -68,3 +68,59 @@ def test_non_deepseek_model_does_not_receive_thinking_parameter(monkeypatch) -> 
     llm_module.ChatLLM(model="qwen-max").chat([{"role": "user", "content": "start"}])
 
     assert "extra_body" not in captured
+
+
+def test_chat_retries_transient_provider_errors_with_exponential_backoff(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="done", tool_calls=[]))],
+        usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+    )
+
+    class RateLimitError(Exception):
+        status_code = 429
+
+    class Completions:
+        def create(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise RateLimitError("slow down")
+            return response
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **kwargs: client))
+    monkeypatch.setattr(llm_module, "LLM_MAX_RETRIES", 3)
+    monkeypatch.setattr(llm_module.random, "uniform", lambda _a, _b: 0.0)
+    monkeypatch.setattr(llm_module.time, "sleep", sleeps.append)
+
+    reply = llm_module.ChatLLM().chat([{"role": "user", "content": "start"}])
+
+    assert reply.content == "done"
+    assert calls == 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_chat_does_not_retry_non_transient_provider_errors(monkeypatch) -> None:
+    calls = 0
+
+    class AuthenticationError(Exception):
+        status_code = 401
+
+    class Completions:
+        def create(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise AuthenticationError("bad key")
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **kwargs: client))
+
+    try:
+        llm_module.ChatLLM().chat([{"role": "user", "content": "start"}])
+    except AuthenticationError:
+        pass
+    else:
+        raise AssertionError("authentication errors must not be retried")
+    assert calls == 1

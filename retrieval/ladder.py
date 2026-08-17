@@ -16,18 +16,18 @@ def _tok(text: str) -> list[str]:
     return _TOKEN.findall(text.lower())
 
 
-def bm25_search(query: str, docs: list[Doc], k: int = 5) -> list[str]:
+def bm25_search(query: str, docs: list[Doc], k: int = 5) -> list[Doc]:
     from rank_bm25 import BM25Okapi
 
     corpus_toks = [_tok(doc.text) for doc in docs]
     bm25 = BM25Okapi(corpus_toks)
     scores = bm25.get_scores(_tok(query))
     order = sorted(range(len(scores)), key=lambda index: scores[index], reverse=True)[:k]
-    return [docs[index].path for index in order]
+    return [docs[index] for index in order]
 
 
 def _purpose(doc: Doc) -> str:
-    for line in doc.text.splitlines()[1:]:
+    for line in doc.text.splitlines()[2:]:
         stripped = line.strip()
         if stripped and not stripped.startswith(("#", "import", "from", '"""', "'''")):
             return stripped[:120]

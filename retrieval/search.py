@@ -15,10 +15,10 @@ from retrieval.corpus import Doc, load_corpus
 from retrieval.ladder import _purpose, _tok, bm25_search
 
 
-def _rank_candidates(query: str, docs: list[Doc], k: int = 25) -> list[str]:
-    """Combine BM25 recall with strong exact-path and exact-symbol signals."""
+def _rank_candidates(query: str, docs: list[Doc], k: int = 25) -> list[Doc]:
+    """Rank code chunks, then retain the best-matching chunk for each file."""
     bm25 = bm25_search(query, docs, k=min(max(k * 2, 25), len(docs)))
-    bm25_rank = {path: rank for rank, path in enumerate(bm25)}
+    bm25_rank = {doc.key: rank for rank, doc in enumerate(bm25)}
     q_lower = query.lower().replace("\\", "/")
     q_tokens = set(_tok(query))
     # Generic query-noise words only — never a specific repo/project name. A name
@@ -29,22 +29,32 @@ def _rank_candidates(query: str, docs: list[Doc], k: int = 25) -> list[str]:
         for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{3,}", query)
         if token.lower() not in {"error", "file", "line", "python", "code", "function"}
     }
-    scored: list[tuple[float, str]] = []
+    best_by_path: dict[str, tuple[float, Doc]] = {}
     for doc in docs:
         path_lower = doc.path.lower()
         basename = Path(doc.path).name.lower()
         path_tokens = set(_tok(doc.path))
-        score = 1 / (1 + bm25_rank.get(doc.path, len(docs)))
+        score = 1 / (1 + bm25_rank.get(doc.key, len(docs)))
         if path_lower in q_lower:
             score += 100
         if len(basename) >= 5 and basename in q_lower:
             score += 30
         score += 5 * len(q_tokens & path_tokens)
         score += 2 * sum(identifier in doc.text for identifier in identifiers)
-        if score > 0:
-            scored.append((score, doc.path))
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    return [path for _, path in scored[:k]]
+        current = best_by_path.get(doc.path)
+        if current is None or (
+            score,
+            -doc.start_line,
+        ) > (
+            current[0],
+            -current[1].start_line,
+        ):
+            best_by_path[doc.path] = (score, doc)
+    ranked = sorted(
+        best_by_path.values(),
+        key=lambda item: (-item[0], item[1].path, item[1].start_line),
+    )
+    return [doc for _, doc in ranked[:k]]
 
 
 def relevant_snippet(path: str | Path, query: str, max_chars: int = 3200) -> str:
@@ -107,8 +117,11 @@ def search_repo(
         return "(no files indexed under the working directory)"
     ranking_query = query if not context else f"{query}\n{context}"
     candidates = _rank_candidates(ranking_query, docs)
-    by_path = {d.path: d for d in docs}
-    listing = "\n".join(f"{i}. {p}  —  {_purpose(by_path[p])}" for i, p in enumerate(candidates))
+    by_path = {doc.path: doc for doc in candidates}
+    listing = "\n".join(
+        f"{index}. {doc.path}  —  {_purpose(doc)}"
+        for index, doc in enumerate(candidates, 1)
+    )
     evidence = f"\n\nCurrent error evidence:\n{context[:1800]}" if context else ""
     prompt = (
         f"Navigating a repo to: {query}{evidence}\n\nCandidate files:\n{listing}\n\n"
@@ -120,8 +133,11 @@ def search_repo(
     picked = [ln.strip().strip("`-* ") for ln in llm.complete([{"role": "user", "content": prompt}]).splitlines()]
     # Keep the strongest deterministic match even if the reranker overlooks an
     # exact traceback path, then let the LLM choose the remaining files.
-    out = candidates[:1] + [p for p in picked if p in by_path and p not in candidates[:1]]
-    for p in candidates:  # backfill from BM25 order if the LLM returned too few
+    out = [candidates[0].path] + [
+        path for path in picked if path in by_path and path != candidates[0].path
+    ]
+    for doc in candidates:  # backfill from BM25 order if the LLM returned too few
+        p = doc.path
         if p not in out:
             out.append(p)
     out = out[:k]

@@ -1,4 +1,5 @@
 from agent.runtime.llm import ScriptedLLM
+from retrieval.corpus import load_corpus
 from retrieval.search import relevant_snippet, search_repo
 
 
@@ -63,3 +64,35 @@ def test_relevant_snippet_centers_late_symbol(tmp_path) -> None:
 
     assert "data_aux_preprocessor" in snippet
     assert "# Lines " in snippet
+
+
+def test_load_corpus_splits_late_python_function_into_its_own_chunk(tmp_path) -> None:
+    source = tmp_path / "large.py"
+    source.write_text(
+        "\n".join(
+            ["padding = 0"] * 200
+            + ["def critical_magic_function():", "    return 42"]
+        )
+    )
+
+    docs = load_corpus(tmp_path)
+    chunk = next(doc for doc in docs if "def critical_magic_function" in doc.text)
+
+    assert chunk.path == "large.py"
+    assert chunk.start_line == 201
+    assert chunk.end_line == 202
+
+
+def test_search_repo_finds_function_beyond_file_head(tmp_path) -> None:
+    (tmp_path / "large.py").write_text(
+        "\n".join(
+            ["padding = 0"] * 220
+            + ["def critical_magic_function():", "    return 42"]
+        )
+    )
+    (tmp_path / "decoy.py").write_text("def unrelated_helper():\n    return 0\n")
+    llm = ScriptedLLM(["decoy.py"])
+
+    result = search_repo("find critical_magic_function", tmp_path, llm)
+
+    assert result.splitlines()[1].lstrip().startswith("large.py")

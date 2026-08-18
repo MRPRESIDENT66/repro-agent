@@ -63,8 +63,7 @@ class _AutoLLM:
                             "route",
                             submit,
                             {
-                                "use_navigator": semantic,
-                                "require_semantic_review": semantic,
+                                "route": "full" if semantic else "short",
                                 "reasons": ["semantic task" if semantic else "explicit task"],
                                 "risk_flags": ["score_direction"] if semantic else [],
                                 "review_requirements": (
@@ -370,8 +369,7 @@ def test_adaptive_simple_task_skips_optional_agents(tmp_path, monkeypatch):
     result = _result(cfg)
     assert set(result["roles"]) == {"router", "reproducer"}
     assert result["roles"]["router"]["tool_counts"] == {"submit_route": 1}
-    assert result["routing"]["use_navigator"] is False
-    assert result["routing"]["require_semantic_review"] is False
+    assert result["routing"]["route"] == "short"
     assert result["routing"]["llm_route_valid"] is True
     assert result["collaboration_level"] == "short"
 
@@ -415,8 +413,7 @@ def test_adaptive_router_drops_prescriptive_score_sign_requirements(
                                 "route",
                                 "submit_route",
                                 {
-                                    "use_navigator": True,
-                                    "require_semantic_review": True,
+                                    "route": "full",
                                     "reasons": ["score direction risk"],
                                     "risk_flags": ["score_direction"],
                                     "review_requirements": [
@@ -465,8 +462,7 @@ def test_adaptive_router_keeps_prepared_classification_on_short_path(
                                 "route",
                                 "submit_route",
                                 {
-                                    "use_navigator": True,
-                                    "require_semantic_review": True,
+                                    "route": "full",
                                     "reasons": ["zero Python files"],
                                     "risk_flags": ["label mapping"],
                                     "review_requirements": ["Check the label mapping."],
@@ -544,7 +540,7 @@ def test_adaptive_router_uses_rule_fallback_on_invalid_llm_output(tmp_path, monk
     assert result["verdict"]["match"] is True
     assert result["routing"]["llm_route_valid"] is False
     assert result["roles"]["router"]["fallback_used"] is True
-    assert result["routing"]["use_navigator"] is False
+    assert result["routing"]["route"] == "short"
 
 
 def test_repair_loop_never_calls_private_recompute(tmp_path, monkeypatch):

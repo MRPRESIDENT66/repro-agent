@@ -38,13 +38,13 @@ Critic 审查高风险代码；Reviewer 分析真实执行结果；Repair 提交
 本次渐进式 `adaptive` 快照在 5 个开发任务上各独立运行 5 次。“流程完整通过”要求
 Verifier 接受结果，并且整个 Agent 流程没有编排异常。
 
-| 仓库 / 任务 | 实际路径 | Verifier 通过 | 流程完整通过 | 平均评测次数 | 平均成本 |
-|---|---|---:|---:|---:|---:|
-| DistilBERT / SST-2 | short | **5/5** | **5/5** | 1.0 | ¥0.0120 |
-| detectors ResNet-18 / CIFAR-100 | assisted | **5/5** | **5/5** | 2.0 | ¥0.1273 |
-| mmpretrain ResNet-18 / CIFAR-10 | full | **3/5** | **3/5** | 2.6 | ¥0.3349 |
-| OpenOOD EBO / Near-OOD AUROC | full | **1/5** | **1/5** | 3.2 | ¥0.5347 |
-| RobustBench Carmon2019 | full | **4/5** | **3/5** | 2.8 | ¥0.4784 |
+| 仓库 / 任务 | 实际路径 |    Verifier 通过 |     流程完整通过 | 平均评测次数 | 平均成本 |
+|---|---|-----------------:|-----------------:|---:|---:|
+| DistilBERT / SST-2 | short |          **5/5** |          **5/5** | 1.0 | ¥0.0120 |
+| detectors ResNet-18 / CIFAR-100 | assisted |          **5/5** |          **5/5** | 2.0 | ¥0.1273 |
+| mmpretrain ResNet-18 / CIFAR-10 | full |          **3/5** |          **3/5** | 2.6 | ¥0.3349 |
+| OpenOOD EBO / Near-OOD AUROC | full |          **2/5** |          **2/5** | 3.2 | ¥0.5347 |
+| RobustBench Carmon2019 | full |          **4/5** |          **3/5** | 2.8 | ¥0.4784 |
 | **总计 / 平均** | - | **18/25（72%）** | **17/25（68%）** | **2.32** | **¥0.2975** |
 
 Router 能让简单任务保持低成本，也能升级部分可修复失败；当前主要不足是 OpenOOD

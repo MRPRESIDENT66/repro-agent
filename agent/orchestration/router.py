@@ -19,8 +19,14 @@ SUBMIT_ROUTE_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "use_navigator": {"type": "boolean"},
-                "require_semantic_review": {"type": "boolean"},
+                "route": {
+                    "type": "string",
+                    "enum": ["short", "assisted", "full"],
+                    "description": (
+                        "short = Reproducer only; assisted = Navigator then "
+                        "Reproducer; full = Navigator, Reproducer, Critic, and Reviewer."
+                    ),
+                },
                 "reasons": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -38,8 +44,7 @@ SUBMIT_ROUTE_TOOL = {
                 },
             },
             "required": [
-                "use_navigator",
-                "require_semantic_review",
+                "route",
                 "reasons",
                 "risk_flags",
                 "review_requirements",
@@ -50,9 +55,11 @@ SUBMIT_ROUTE_TOOL = {
 
 ROUTER_PROMPT = """You are the one-step risk Router for a blind ML reproduction task.
 You cannot inspect the repository and must not solve or code the task. Call
-submit_route exactly once. Decide whether source navigation and a final semantic
-review are needed, then produce only the 3-4 highest-priority risks and checks that
-downstream agents can verify from repository evidence.
+submit_route exactly once. Select exactly one initial route: `short` for a direct
+Reproducer path, `assisted` when source navigation is needed first, or `full` when
+source navigation plus pre-execution Critic and post-execution Reviewer checks are
+needed. Then produce only the 3-4 highest-priority risks and checks that downstream
+agents can verify from repository evidence.
 
 Flag risks such as model/data identity, preprocessing, score polarity, label
 mapping, grouped aggregation, metric units, checkpoint coverage, and optional
@@ -72,13 +79,22 @@ attack configuration, similarity metrics, or conflicting repository evidence."""
 
 @dataclass(frozen=True)
 class RouteDecision:
-    use_navigator: bool
-    require_semantic_review: bool
+    route: str
     repository_python_files: int
     reasons: tuple[str, ...]
     risk_flags: tuple[str, ...]
     review_requirements: tuple[str, ...]
     llm_route_valid: bool
+
+    @property
+    def use_navigator(self) -> bool:
+        """Internal graph compatibility for routes that begin with research."""
+        return self.route in {"assisted", "full"}
+
+    @property
+    def require_semantic_review(self) -> bool:
+        """Internal graph compatibility for the complete collaboration route."""
+        return self.route == "full"
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -261,16 +277,16 @@ def route_task(
         if len(reply.tool_calls) != 1 or reply.tool_calls[0].name != "submit_route":
             raise ValueError("Router must call submit_route exactly once")
         arguments = reply.tool_calls[0].arguments
-        if not isinstance(arguments.get("use_navigator"), bool):
-            raise ValueError("use_navigator must be boolean")
-        if not isinstance(arguments.get("require_semantic_review"), bool):
-            raise ValueError("require_semantic_review must be boolean")
+        llm_route = arguments.get("route")
+        if llm_route not in {"short", "assisted", "full"}:
+            raise ValueError("route must be short, assisted, or full")
         llm_reasons = _strings(arguments.get("reasons"), 3)
         llm_risks = _strings(arguments.get("risk_flags"), 4)
         llm_requirements = _strings(arguments.get("review_requirements"), 4)
         valid = True
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
+        llm_route = "short"
         llm_reasons = ()
         llm_risks = ()
         llm_requirements = ()
@@ -289,19 +305,17 @@ def route_task(
         llm_requirements,
         score_direction_risk="score_direction" in rules["risks"],
     )
+    if rules["force_short"]:
+        route = "short"
+    elif rules["force_review"]:
+        route = "full"
+    elif rules["force_navigator"] and llm_route == "short":
+        route = "assisted"
+    else:
+        route = llm_route
+
     decision = RouteDecision(
-        use_navigator=rules["force_navigator"]
-        or (
-            bool(arguments.get("use_navigator", False))
-            and not rules["force_short"]
-        ),
-        require_semantic_review=(
-            rules["force_review"]
-            or (
-                bool(arguments.get("require_semantic_review", False))
-                and not rules["force_short"]
-            )
-        ),
+        route=route,
         repository_python_files=rules["python_files"],
         reasons=tuple(dict.fromkeys(reasons)),
         risk_flags=tuple(dict.fromkeys(rules["risks"] + llm_risks))[:6],

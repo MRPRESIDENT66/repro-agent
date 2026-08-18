@@ -42,13 +42,13 @@ The reported progressive `adaptive` snapshot was run five times on each of five
 development tasks. `Workflow pass` requires both verifier acceptance and no
 orchestration error.
 
-| Repository / task | Selected path | Verifier pass | Workflow pass | Mean evaluations | Mean cost |
-|---|---|---:|---:|---:|---:|
-| DistilBERT / SST-2 | short | **5/5** | **5/5** | 1.0 | ¥0.0120 |
-| detectors ResNet-18 / CIFAR-100 | assisted | **5/5** | **5/5** | 2.0 | ¥0.1273 |
-| mmpretrain ResNet-18 / CIFAR-10 | full | **3/5** | **3/5** | 2.6 | ¥0.3349 |
-| OpenOOD EBO / Near-OOD AUROC | full | **1/5** | **1/5** | 3.2 | ¥0.5347 |
-| RobustBench Carmon2019 | full | **4/5** | **3/5** | 2.8 | ¥0.4784 |
+| Repository / task | Selected path |   Verifier pass |   Workflow pass | Mean evaluations | Mean cost |
+|---|---|----------------:|----------------:|---:|---:|
+| DistilBERT / SST-2 | short |         **5/5** |         **5/5** | 1.0 | ¥0.0120 |
+| detectors ResNet-18 / CIFAR-100 | assisted |         **5/5** |         **5/5** | 2.0 | ¥0.1273 |
+| mmpretrain ResNet-18 / CIFAR-10 | full |         **3/5** |         **3/5** | 2.6 | ¥0.3349 |
+| OpenOOD EBO / Near-OOD AUROC | full |         **2/5** |         **2/5** | 3.2 | ¥0.5347 |
+| RobustBench Carmon2019 | full |         **4/5** |         **3/5** | 2.8 | ¥0.4784 |
 | **Total / mean** | - | **18/25 (72%)** | **17/25 (68%)** | **2.32** | **¥0.2975** |
 
 The Router keeps the easy task cheap and escalates recoverable failures, but
